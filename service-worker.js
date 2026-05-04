@@ -18,8 +18,6 @@ const PRECACHE_URLS = [
 
 // Install — precache core assets; new worker can take over when client sends SKIP_WAITING
 self.addEventListener('install', function (event) {
-  self.skipWaiting(); // allow new worker to install immediately
-
   event.waitUntil(
     caches.open(CACHE_NAME).then(function (cache) {
       return cache.addAll(PRECACHE_URLS);
