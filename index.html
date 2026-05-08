@@ -10024,31 +10024,31 @@ function geodePlanPageDebtWhyLead(step) {
 /** One strategy-voice line (Plan display-only; wording only). */
 function geodePlanStrategyVoiceLine() {
   var sk = geodePlanStrategyKey();
-  if (sk === 'debt') return 'This keeps interest from quietly eating into your progress.';
+  if (sk === 'debt') return 'This style focuses where interest pressure is highest \u2014 that\u2019s usually where reducing a balance matters most.';
   if (sk === 'growth') {
-    if (geodeHasInvestmentMetaContext(S)) return 'This leans into long-term growth with a clear investing cadence — consistent beats clever.';
-    return 'This leans into long-term growth while keeping things balanced.';
+    if (geodeHasInvestmentMetaContext(S)) return 'This style leans into long-term growth. Regular contributions tend to matter more than perfect timing.';
+    return 'This style leans toward growth while keeping the other priorities in view.';
   }
-  return 'Steady progress across all areas — nothing rushed, nothing ignored.';
+  return 'This style spreads the plan across areas rather than front-loading any single one.';
 }
 
 function geodePlanPageStrategyToneLine(kind) {
   var sk = geodePlanStrategyKey();
   if (kind === 'debt') return geodePlanStrategyVoiceLine();
   if (kind === 'buffer') {
-    if (sk === 'debt') return 'Buffer first — surprises are less likely to turn into fresh interest.';
-    if (sk === 'growth') return 'A cushion keeps long-term plans steadier when income varies.';
-    return 'Cash in reserve — quiet insurance against unexpected costs.';
+    if (sk === 'debt') return 'A buffer reduces the chance an unexpected cost turns into fresh borrowing.';
+    if (sk === 'growth') return 'A cushion tends to make long-term plans more resilient when income varies.';
+    return 'Cash set aside creates room between you and the next unexpected cost.';
   }
   if (kind === 'invest') {
-    if (sk === 'growth') return 'Consistency builds momentum — compounding prefers repetition over timing.';
-    if (sk === 'debt') return 'Keep new investing modest until the costliest balances are lower.';
-    return 'Small, steady contributions beat waiting for perfect timing.';
+    if (sk === 'growth') return 'Regular contributions tend to matter more than waiting for the right moment.';
+    if (sk === 'debt') return 'With higher-cost debt in the picture, your plan scales investment back until that pressure reduces.';
+    return 'Regular contributions, even modest ones, tend to compound more than waiting.';
   }
   if (kind === 'goal') {
-    if (sk === 'debt') return 'Small goal contributions still count when interest costs are high.';
-    if (sk === 'growth') return 'Goals and growth both reward showing up monthly.';
-    return 'Consistent contributions beat waiting for perfect conditions.';
+    if (sk === 'debt') return 'Even smaller goal contributions keep progress moving when interest costs are high.';
+    if (sk === 'growth') return 'Both goals and growth tend to benefit from regular attention rather than larger occasional pushes.';
+    return 'Regular goal contributions tend to add up more than waiting for the perfect moment.';
   }
   return geodePlanStrategyVoiceLine();
 }
@@ -10612,7 +10612,7 @@ function geodePlanPageStatusSectionHtml() {
       escHtmlLite('Based on your income, spending, and goals') +
       '</div>' +
       '<details style="margin-top:10px;font-size:10px;color:rgba(189,183,220,0.88);line-height:1.45"><summary style="cursor:pointer;color:rgba(196,171,255,0.95);font-weight:700;list-style:none;outline:none">Why?</summary><div style="margin-top:8px">' +
-      escHtmlLite('Your monthly cash flow is currently negative — the plan will prioritise stabilising this.') +
+      escHtmlLite('Based on what\u2019s entered, more is going out than coming in. The plan focuses on that first.') +
       '</div></details>' +
       '</div>'
     );
@@ -10639,23 +10639,23 @@ function geodePlanPageStatusSectionHtml() {
   if (totalS <= 0) {
     headline = 'Little to allocate this month';
     col = '#34d5a0';
-    why = 'No large spare-cash slices right now — priorities below show the order when cash appears.';
+    why = 'No large spare-cash amounts to allocate right now \u2014 the order below shows where things go when cash appears.';
   } else if (p1p && p1p.phase === 'done') {
     headline = 'Top priority met';
     col = '#34d5a0';
-    why = 'Priority 1 is complete — continue with the rest of the stack.';
+    why = 'Your top priority is met this month \u2014 the rest of the stack stays in order if there\u2019s more to allocate.';
   } else if (ratio >= 0.72) {
     headline = 'Mostly on track';
     col = '#34d5a0';
-    why = 'About ' + fm(totalA) + ' of ' + fm(totalS) + ' suggested is logged (paid this month).';
+    why = 'About ' + fm(totalA) + ' of ' + fm(totalS) + ' suggested is logged this month.';
   } else if (ratio >= 0.38 || (p1p && p1p.phase === 'partial' && p1p.ratio >= 0.4)) {
     headline = 'In progress';
     col = '#f5c234';
-    why = fm(totalA) + ' of ' + fm(totalS) + ' suggested logged — finish remaining slices to match.';
+    why = fm(totalA) + ' of ' + fm(totalS) + ' suggested logged so far this month.';
   } else {
     headline = 'Room to catch up';
     col = '#f5c234';
-    why = 'Mark contributions paid when you make them so status matches reality.';
+    why = 'Logging contributions as paid helps keep the plan status accurate.';
   }
 
   var whyDetails = why
@@ -10686,15 +10686,15 @@ function geodePlanPageStyleSectionHtml() {
     return Math.round(Number(n) * 100);
   }
   var sliceLine =
-    'On leftover cash (order stays fixed): debt overpay ~' +
+    'The priority order stays fixed. Style affects how leftover cash is split: debt overpay ~' +
     pct(cfg.debtRatio) +
-    '%, buffer cap ~' +
+    '%, buffer ~' +
     pct(cfg.emergencyCapRatio) +
     '%, goals ~' +
     pct(cfg.goalRatio) +
     '%, invest ~' +
     pct(cfg.investRatio) +
-    '% — amounts shift with style, not the sequence.';
+    '%. Changing style shifts the amounts, not the sequence.';
   var toneLine = geodePlanStrategyVoiceLine();
   return (
     '<div style="margin:0 0 14px;padding:14px;border-radius:14px;background:var(--bg-surface);border:1px solid var(--bd)">' +
@@ -10733,8 +10733,8 @@ function geodeOverBudgetPlanBlockHtml(left) {
   h += '<div style="font-size:22px;font-weight:800;color:#f07070;line-height:1.1;margin-bottom:6px">' +
     escHtmlLite('\u2212' + fm(over)) + '</div>';
   h += '<div style="font-size:12px;color:rgba(237,234,255,0.85);line-height:1.5">' +
-    escHtmlLite('Your scheduled payments and expenses exceed your income by ' + fm(over) + ' this month. ' +
-    'Goals and debt steps will appear once you\u2019re back in balance.') + '</div>';
+    escHtmlLite('Based on what\u2019s entered, scheduled payments and expenses exceed income by ' + fm(over) + ' this month. ' +
+    'Goals and debt steps will show once the picture is back in balance.') + '</div>';
   h += '</div>';
 
   // Spending breakdown — show top categories by monthly total
@@ -10786,8 +10786,8 @@ function geodeOverBudgetPlanBlockHtml(left) {
       if (topAmt > over * 0.3) {
         h += '<div style="margin-top:8px;font-size:11px;color:var(--tx-3);line-height:1.5;' +
           'padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.025);border:1px solid var(--bd)">' +
-          escHtmlLite(topLabel + ' is your biggest category at ' + fm(topAmt) + '/month. ' +
-          'Reducing it by ' + fm(Math.min(over, topAmt * 0.25)) + ' would make a meaningful difference.') +
+          escHtmlLite(topLabel + ' is your largest category at ' + fm(topAmt) + '/month. ' +
+          'Even ' + fm(Math.min(over, topAmt * 0.25)) + ' less here would close a meaningful part of the gap.') +
           '</div>';
       }
       h += '</div>';
@@ -13819,12 +13819,12 @@ function rPlan() {
       var _bT = Number(S.emergencyBuffer||0);
       var _bS = Number(S.bufferSaved||0);
       var _bSh = _bT>0 && _bS<_bT*0.9;
-      if (_iCtx==='IRREGULAR') { _sL='Variable income \u2014 buffer comes before goals so a slow month never breaks your plan.'; }
-      else if (_lft<0) { _sL='Your outgoings exceed income this month. The priority is finding what to reduce.'; }
-      else if (_hD&&_bSh) { _sL='Buffer first, then debt \u2014 a safety net means you never need to borrow to cover an emergency.'; }
-      else if (_hD) { _sL='High-interest debt costs you money every month. Clearing it first is the highest-return action available.'; }
-      else if (_bSh) { _sL='No high-interest debt \u2014 building your buffer is the next move before committing to goals.'; }
-      else if (S.goals&&S.goals.length>0) { _sL='Debt clear, buffer healthy \u2014 spare cash is going to your goals in priority order.'; }
+      if (_iCtx==='IRREGULAR') { _sL='With variable income in the picture, your plan puts buffer ahead of goals \u2014 so a slower month doesn\u2019t create a knock-on problem.'; }
+      else if (_lft<0) { _sL='Your current entries show more going out than coming in. The plan looks for pressure points first \u2014 you\u2019ll know best what\u2019s realistic to adjust.'; }
+      else if (_hD&&_bSh) { _sL='With debt and a buffer gap showing, your plan prioritises the buffer first. A cushion makes an unexpected cost less likely to mean new borrowing.'; }
+      else if (_hD) { _sL='Based on what\u2019s entered, this debt appears first because its interest is creating the most monthly drag. If something else is pressing right now, you can adjust around it.'; }
+      else if (_bSh) { _sL='With no high-interest debt showing, your plan points toward a buffer next. That gives more room before committing to longer-term goals.'; }
+      else if (S.goals&&S.goals.length>0) { _sL='With debt and buffer pressure lower, your plan has more room for goals. You can still reorder them if one matters more this month.'; }
       if (_sL) { h+='<div style="font-size:11px;color:var(--tx-3);line-height:1.55;margin-bottom:16px;padding:10px 14px;border-radius:10px;background:rgba(255,255,255,0.025);border-left:2px solid var(--gem)">'+escHtmlLite(_sL)+'</div>'; }
     } catch(_eSt) {}
 
