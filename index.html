@@ -542,6 +542,8 @@ var S = {
   quickSetupDismissed: false,
   /** Reality Check: user-entered actual balance for the current month. { amount, ym, date } */
   realityCheck: null,
+  /** Stage 5: goal ids the user has acknowledged as reached. { [goalId]: true } */
+  completedGoalAcknowledged: {},
   theme: 'dark',
   beyondApiKey: ''
 };
@@ -686,6 +688,7 @@ function load() {
   });
   while (S.followthroughOutcomeHistory.length > 24) S.followthroughOutcomeHistory.shift();
   if (!S.adaptiveDisplayModeByFamily || typeof S.adaptiveDisplayModeByFamily !== 'object') S.adaptiveDisplayModeByFamily = {};
+  if (!S.completedGoalAcknowledged || typeof S.completedGoalAcknowledged !== 'object' || Array.isArray(S.completedGoalAcknowledged)) S.completedGoalAcknowledged = {};
   // explainMode removed (explanations are always shown contextually)
   if (typeof S.quickSetupDismissed !== 'boolean') S.quickSetupDismissed = coercePersistedBoolean(S.quickSetupDismissed);
   if (typeof S.lastSeenAt !== 'number' || !isFinite(S.lastSeenAt) || S.lastSeenAt < 0) S.lastSeenAt = 0;
@@ -13513,6 +13516,53 @@ function geodeGetDailyIndex(key, len) {
   }
 }
 
+/** Stage 5: first completed, unacknowledged goal; null if none. */
+function geodeFindUnacknowledgedCompletedGoal() {
+  var goals = S.goals || [];
+  var ack = (S.completedGoalAcknowledged && typeof S.completedGoalAcknowledged === 'object') ? S.completedGoalAcknowledged : {};
+  for (var i = 0; i < goals.length; i++) {
+    var g = goals[i];
+    if (!g || !g.id) continue;
+    var tgt = toNum(g.amount);
+    if (tgt <= 0) continue;
+    if (geodeGoalEffectiveSaved(g) < tgt) continue;
+    if (ack[String(g.id)]) continue;
+    return g;
+  }
+  return null;
+}
+/** Stage 5: acknowledge goal and re-render Home. Reads id from window._geodeUnackedGoalId. */
+function geodeAcknowledgeCompletedGoal() {
+  var gid = '';
+  try { gid = String(window._geodeUnackedGoalId || ''); } catch (_e) {}
+  if (!gid) return;
+  if (!S.completedGoalAcknowledged || typeof S.completedGoalAcknowledged !== 'object') S.completedGoalAcknowledged = {};
+  S.completedGoalAcknowledged[gid] = true;
+  save();
+  rHome();
+}
+/** Stage 5: Home card for the first unacknowledged completed goal. */
+function geodeHomeGoalCompletionCardHtml() {
+  var g = geodeFindUnacknowledgedCompletedGoal();
+  if (!g) return '';
+  try {
+    if (geodeHasOverdue(S) || calcMonthlyLeftover(S) < 0) return '';
+  } catch (_eGcUrgent) {}
+  try { window._geodeUnackedGoalId = String(g.id); } catch (_e) {}
+  var nm = escHtmlLite(String(g.name || 'Your goal'));
+  var h = '<div style="margin-bottom:12px;padding:16px;border-radius:14px;' +
+    'background:rgba(52,213,160,0.06);border:1px solid rgba(52,213,160,0.22);border-left:3px solid #34d5a0">';
+  h += '<div style="font-size:9px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;' +
+    'color:#34d5a0;margin-bottom:8px">Goal reached</div>';
+  h += '<div style="font-size:15px;font-weight:700;color:var(--tx-1);margin-bottom:8px">' + nm + '</div>';
+  h += '<div style="font-size:12px;color:rgba(237,234,255,0.85);line-height:1.55;margin-bottom:12px">' +
+    escHtmlLite('That is worth recognising. You can now decide whether to keep this money free, redirect it to another goal, or strengthen your buffer.') +
+    '</div>';
+  h += '<button type="button" class="btn btn-s" style="width:100%;font-size:12px;padding:10px" ' +
+    'onclick="geodeAcknowledgeCompletedGoal()">\u2713\u00a0I\u2019ve seen this</button>';
+  h += '</div>';
+  return h;
+}
 function rHome() {
   var isNewDay = geodeIsNewDay();
   var streak = geodeUpdateOnTrackStreak(S);
@@ -13724,6 +13774,7 @@ function rHome() {
         '</div>';
     }
   } catch (_eSw) {}
+  h += geodeHomeGoalCompletionCardHtml();
   h += geodeHomeMainActionHtml(_homeSubRenewCardVisible);
   h += renderInsights();
   // Reality check balance removed — use bank sync in v2
