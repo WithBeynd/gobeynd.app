@@ -14884,7 +14884,11 @@ function saveDebt(id) {
   closeModal();
   render();
 }
-function delDebt(id){S.debts=S.debts.filter(function(d){return d.id!==id;});save();render();}
+function delDebt(id){
+  geodeConfirm('Remove this debt from Beynd? This does not affect what you owe \u2014 it only removes Beynd\u2019s record of it.', function() {
+    S.debts=S.debts.filter(function(d){return d.id!==id;});save();render();
+  });
+}
 
 function geodeLastLinkedContributionAmount(kind, id) {
   if (!S || !Array.isArray(S.payments) || !S.payments.length) return null;
@@ -17078,7 +17082,11 @@ function saveInv(id){
   closeModal();
   render();
 }
-function delInv(id){S.investments=S.investments.filter(function(e){return e.id!==id;});save();render();}
+function delInv(id){
+  geodeConfirm('Remove this investment from Beynd? This does not move or sell anything \u2014 it only removes Beynd\u2019s record of it.', function() {
+    S.investments=S.investments.filter(function(e){return e.id!==id;});save();render();
+  });
+}
 
 // ── PROFILE ───────────────────────────────────────
 
