@@ -11414,7 +11414,7 @@ function geodePlanNextStepAfterP1(plan) {
 }
 
 /**
- * Home ribbon title: [Verb] + [Target] — [Reason] (aligned with Main / Also; display-only).
+ * Home ribbon title: decision-coaching language aligned with Stage 3A voice (display-only).
  */
 function geodeHomePlanStepRibbonTitle(step, prog) {
   var lb = String(step && step.label || '');
@@ -11422,16 +11422,16 @@ function geodeHomePlanStepRibbonTitle(step, prog) {
   if (lb.indexOf('Reduce high') === 0) {
     var nm = lb.replace(/^Reduce high[\u2011\u2010\-]interest /, '').trim();
     if (ph === 'done') return 'Next plan step';
-    return nm ? 'Reduce high-interest: ' + nm : 'Reduce high-interest debt';
+    return nm ? nm + ' is costing the most in interest' : 'This debt is costing the most in interest';
   }
   if (lb === 'Build your emergency fund') {
     if (ph === 'done') return 'Next plan step';
-    return 'Build your buffer';
+    return 'Your buffer may be the next layer of stability';
   }
   if (lb.indexOf('Restart progress on ') === 0) {
     var r1 = lb.slice('Restart progress on '.length).trim();
     if (ph === 'done') return 'Next plan step';
-    return r1 ? 'Restart ' + r1 : 'Catch up on your goal';
+    return r1 ? 'Restart progress on ' + r1 : 'Catch up on your goal';
   }
   if (lb.indexOf('Catch up on ') === 0) {
     var r2 = lb.slice('Catch up on '.length).trim();
@@ -11441,9 +11441,9 @@ function geodeHomePlanStepRibbonTitle(step, prog) {
   if (lb === 'Invest what remains') {
     var st = geodeInvestmentContributionState(S);
     if (ph === 'done') return 'Next plan step';
-    if (st === 'NONE') return 'Invest what remains';
-    if (st === 'NOT_STARTED') return 'Invest what remains';
-    return 'Invest what remains';
+    if (st === 'NONE') return 'After higher priorities, this is where spare cash goes to work';
+    if (st === 'NOT_STARTED') return 'After higher priorities, this is where spare cash goes to work';
+    return 'After higher priorities, this is where spare cash goes to work';
   }
   return String(step.label || '').trim();
 }
