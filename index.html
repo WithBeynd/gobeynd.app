@@ -10515,6 +10515,16 @@ function geodePlanPageGoalPriorityBodyHtml(step, prog) {
       '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:6px"><span style="color:var(--tx-3)">Target</span><span style="font-weight:500">' +
       escHtmlLite(fm(toNum(g.amount))) +
       '</span></div>';
+    var _selReason = '';
+    if ((S.goals || []).length > 1) {
+      _selReason = g.isPrimary ? 'marked as your primary focus' : 'appears most behind pace';
+    }
+    if (_selReason) {
+      h +=
+        '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:6px">' +
+        '<span style="color:var(--tx-3)">Why this goal</span>' +
+        '<span style="font-weight:500">' + escHtmlLite(_selReason) + '</span></div>';
+    }
     h += '</div></div>';
   }
 
