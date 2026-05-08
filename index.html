@@ -21,6 +21,7 @@
   --radius:16px;
 }
 body.light{
+  color-scheme:light;
   --bg-base:#f0eef8;--bg-surface:#f8f7fc;--bg-raised:#e8e4f4;--bg-card:#ffffff;
   --bd:rgba(80,70,140,0.12);--bd-em:rgba(80,70,140,0.22);
   --tx-1:#18122e;--tx-2:rgba(30,20,70,0.72);--tx-3:#5a4e90;--tx-4:rgba(30,20,70,0.28);
@@ -64,6 +65,8 @@ body.light .prog{background:rgba(80,70,140,0.10) !important;}
 body.light .geode-explain{color:rgba(24,18,46,0.65) !important;}
 body.light .sh{color:var(--tx-3) !important;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html{color-scheme:dark;background:var(--bg-base)}
+html:has(body.light){color-scheme:light;background:#f0eef8}
 html,body{height:100%;background:var(--bg-base);overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;color:var(--tx-1);-webkit-font-smoothing:antialiased;transition:background .2s,color .2s}
 #app{position:fixed;inset:0;max-width:430px;margin:0 auto;display:flex;flex-direction:column}
 
@@ -7587,6 +7590,24 @@ function computeAdaptiveDisplayModeForFamily(fam) {
   return applyAdaptiveStepwiseMode(last, raw);
 }
 
+/** Read-only display tier for Home (follow-through E.3). Reads stored tier when valid; falls back to computed. Never mutates S. */
+function getAdaptiveDisplayModeForFamily(family) {
+  if (!family || (family !== 'debt' && family !== 'goal' && family !== 'invest' && family !== 'buffer')) {
+    return 'full';
+  }
+  try {
+    var stored = S.adaptiveDisplayModeByFamily &&
+      typeof S.adaptiveDisplayModeByFamily === 'object' &&
+      S.adaptiveDisplayModeByFamily[family];
+    if (stored === 'full' || stored === 'lighter' || stored === 'encouragement_only') {
+      return stored;
+    }
+    return computeAdaptiveDisplayModeForFamily(family);
+  } catch (_e) {
+    return 'full';
+  }
+}
+
 function roundAdaptiveStarterAmount(original) {
   var n = Math.max(0, Number(original) || 0);
   if (n <= 0) return 0;
@@ -11441,23 +11462,23 @@ function geodePlanStepDisplayTitle(step, prog) {
     var nm = lb.replace(/^Reduce high[\u2011\u2010\-]interest /, '').trim();
     if (prog && prog.phase === 'done') {
       return sk === 'growth'
-        ? 'Debt step logged — growth is next'
+        ? 'Debt step logged \u2014 growth is next'
         : sk === 'debt'
-          ? 'This month\u2019s debt extra is logged'
+          ? 'This month\u2019s extra debt payment is logged'
           : 'Debt plan step logged this month';
     }
     if (prog && prog.phase === 'partial') {
-      return nm ? 'Reduce high-interest: ' + nm : 'Reduce high-interest debt';
+      return nm ? nm + ' is costing the most in interest' : 'Your highest-interest debt is the one to watch';
     }
-    return nm ? 'Reduce high-interest: ' + nm : 'Reduce high-interest debt';
+    return nm ? nm + ' is costing the most in interest' : 'Your highest-interest debt is the one to watch';
   }
   if (lb === 'Build your emergency fund') {
     if (prog && prog.phase === 'done')
       return sk === 'growth'
-        ? 'Buffer step logged — growth stays next'
+        ? 'Buffer step logged \u2014 growth stays next'
         : 'Buffer plan step logged this month';
-    if (prog && prog.phase === 'partial') return 'Build your buffer';
-    return sk === 'debt' ? 'Build your buffer first' : 'Build your buffer';
+    if (prog && prog.phase === 'partial') return 'Your buffer is a layer of stability worth building';
+    return sk === 'debt' ? 'Your buffer may be the next layer of stability' : 'Your buffer may be the next layer of stability';
   }
   if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
     var rest = lb.indexOf('Restart') === 0 ? lb.slice('Restart progress on '.length).trim() : lb.slice('Catch up on '.length).trim();
@@ -11489,13 +11510,13 @@ function geodeMainActionSubForStep(step, prog, mainKind) {
     return geodeHomeInsightShortLine(fm(prog.applied) + ' logged \u00b7 ' + fm(prog.remaining) + ' left', 88);
   }
   if (lb.indexOf('Reduce high') === 0) {
-    return 'Highest APR first — biggest interest save.';
+    return 'Extra payments here reduce interest faster than anywhere else in your plan.';
   }
   if (lb === 'Build your emergency fund') {
-    return 'Part of your monthly plan order.';
+    return 'Your plan points here before longer-term goals.';
   }
   if (lb === 'Invest what remains') {
-    return 'After higher steps, this is for growth.';
+    return 'After higher priorities, this is where spare cash goes to work.';
   }
   if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
     return '';
@@ -11596,7 +11617,7 @@ function geodeMainActionFromPriorityStep(state, p1, prog) {
     return {
       title: bufTitle,
       amount: payAmt,
-      cta: 'Schedule buffer',
+      cta: 'Plan a buffer contribution',
       sub: bufSub,
       run: function () {
         msub = 'payments';
@@ -12111,6 +12132,91 @@ function geodeGetAdaptiveReduction(name, defaultReduction) {
   }
 }
 
+function geodePlanStepFamilyFromLabel(step) {
+  if (!step) return null;
+  var lb = String(step.label || '');
+  if (lb.indexOf('Reduce high') === 0) return 'debt';
+  if (lb === 'Build your emergency fund') return 'buffer';
+  if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) return 'goal';
+  if (lb === 'Invest what remains') return 'invest';
+  return null;
+}
+
+/** Same plan priority step Main Action would use (priority 2 when P1 done); null when not on that path. */
+function geodeActivePriorityStepForHome(state) {
+  state = state || S;
+  try {
+    if (geodeIsEmptyState()) return null;
+    if (geodeGetIncomeContext(state) === 'NONE') return null;
+    if (geodeHasOverdue(state)) return null;
+    if (state.planCommitted) {
+      var _rpH = (state.reductionPlan && typeof state.reductionPlan === 'object') ? state.reductionPlan : {};
+      var _anyH = false;
+      for (var _kh in _rpH) {
+        if (Object.prototype.hasOwnProperty.call(_rpH, _kh) && _rpH[_kh] && _rpH[_kh].applied) {
+          _anyH = true;
+          break;
+        }
+      }
+      if (_anyH) return null;
+    }
+    var _mu = false;
+    try {
+      if ((state.debts || []).length > 0) _mu = true;
+      else if ((state.goals || []).length > 0) _mu = true;
+      else if ((state.investments || []).length > 0) _mu = true;
+      else if ((state.payments || []).length > 0) _mu = true;
+    } catch (_eMu) {}
+    if (!geodeHasMeaningfulMonthlyExpenses(state) && !_mu) return null;
+    var plan = getMonthPlan();
+    var steps = (plan && plan.steps) ? plan.steps : [];
+    var p1 = plan && (plan.priority1 || steps[0]);
+    if (!p1 || !steps.length || toNum(p1.amount) <= 0) return null;
+    var prog = geodePlanStepProgress(state, p1);
+    var step = p1;
+    if (prog.phase === 'done') {
+      var p2h = geodePlanNextStepAfterP1(plan);
+      if (p2h && toNum(p2h.amount) > 0) {
+        step = p2h;
+        prog = geodePlanStepProgress(state, p2h);
+      }
+    }
+    return { step: step, prog: prog };
+  } catch (_eAps) {
+    return null;
+  }
+}
+
+/** Display-only: soften Main Action copy by adaptive tier (does not change amounts or runs). */
+function geodeApplyAdaptiveTierToMainActionDisplay(tier, title, sub, fam) {
+  var t = tier || 'full';
+  var tit = String(title || '');
+  var su = String(sub || '').trim();
+  if (t === 'full') return { title: tit, sub: su };
+  if (t === 'lighter') {
+    if (!su) {
+      return {
+        title: tit,
+        sub: 'Your plan points here \u2014 the amount can flex with what feels right this month.'
+      };
+    }
+    if (su.length > 118) return { title: tit, sub: su };
+    if (/flex|your own pace|when it fits|take it at|feels right/i.test(su)) return { title: tit, sub: su };
+    return { title: tit, sub: su + ' The amount can flex if this month is tighter.' };
+  }
+  var gentle = {
+    debt: 'When you\u2019re ready, even a smaller payment here keeps things moving.',
+    goal: 'Progress on this goal doesn\u2019t have to be all-or-nothing \u2014 it stays in your plan.',
+    invest: 'This step can wait for a calmer week \u2014 the plan keeps the lane open for you.',
+    buffer: 'Even a modest buffer step is worth doing \u2014 build toward the full amount over time.'
+  };
+  var g = gentle[fam] || 'This stays in your plan \u2014 step in when it feels right.';
+  if (su.toLowerCase().indexOf('logged') >= 0) {
+    return { title: tit, sub: su + ' ' + g };
+  }
+  return { title: tit, sub: g };
+}
+
 /** Pass true when Home renders the yellow renewal card — subscription anticipation footer is skipped so the same line does not appear twice. */
 function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   var a = geodeGetMainAction(S) || null;
@@ -12136,18 +12242,22 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
       var msgsR;
       if (ctxR.lastStreak >= 7) {
         msgsR = [
-          'You\u2019ve done this before \u2014 it comes back quickly',
-          'You\u2019re returning to a good rhythm',
-          'Back into a familiar pattern'
+          'You\u2019ve done this before \u2014 the rhythm comes back faster each time',
+          'Returning to a familiar pattern',
+          'You know how to do this \u2014 it comes back quickly'
         ];
       } else if (ctxR.pressure === 'tight') {
         msgsR = [
-          'Back on track \u2014 stay steady',
-          'That helps keep things stable',
-          'Holding things together well'
+          'You\u2019re rebuilding momentum. Keep it light if the month feels tight.',
+          'Small steps count here too',
+          'Steady is enough right now'
         ];
       } else {
-        msgsR = ['Back on track \u2014 keep going', 'Settling back into it', 'Picking things up again'];
+        msgsR = [
+          'You\u2019re rebuilding momentum. Keep this light if the month feels tight.',
+          'Settling back in \u2014 the plan can flex around you',
+          'Picking things back up, at your own pace'
+        ];
       }
       var idxR = geodeGetDailyIndex('geode_recovery_msg', msgsR.length);
       streakRecoveryHtml =
@@ -12160,25 +12270,25 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
       var msgsI;
       if (ctxI.streak >= 10) {
         msgsI = [
-          'This is becoming second nature',
-          'You\u2019re consistently in control',
-          'A strong rhythm is in place'
+          'A consistent pattern is forming',
+          ctxI.streak + ' days of staying on track \u2014 that\u2019s meaningful',
+          'This kind of consistency tends to build on itself'
         ];
       } else if (ctxI.streak >= 5) {
         msgsI = [
-          'You\u2019ve been consistent for ' + ctxI.streak + ' days',
-          'That\u2019s ' + ctxI.streak + ' days in a row',
-          'You\u2019re building momentum'
+          ctxI.streak + ' days in a row \u2014 the plan is holding',
+          'Consistent for ' + ctxI.streak + ' days. That adds up.',
+          'A steady rhythm, ' + ctxI.streak + ' days running'
         ];
       } else {
         msgsI = [
-          'You\u2019re building consistency',
-          'This is starting to stick',
-          'A steady pattern is forming'
+          'A pattern is starting to take shape',
+          'The plan is holding so far',
+          'You\u2019re finding a rhythm'
         ];
       }
       if (ctxI.pressure === 'tight') {
-        msgsI.push('Even in a tighter month, you\u2019re staying consistent');
+        msgsI.push('Staying consistent in a tighter month is worth noticing');
       }
       var idxI = geodeGetDailyIndex('geode_identity_msg', msgsI.length);
       identityStreakHtml =
@@ -12317,6 +12427,17 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
       }
     }
   } catch (_eSub) {}
+  var _ftFam = null;
+  try {
+    var _apsFt = geodeActivePriorityStepForHome(S);
+    _ftFam = _apsFt && _apsFt.step ? geodePlanStepFamilyFromLabel(_apsFt.step) : null;
+  } catch (_eFt0) {}
+  var _ftTier = getAdaptiveDisplayModeForFamily(_ftFam);
+  try {
+    var _ftAdj = geodeApplyAdaptiveTierToMainActionDisplay(_ftTier, title, sub, _ftFam);
+    title = _ftAdj.title;
+    sub = _ftAdj.sub;
+  } catch (_eFt1) {}
   var cta = String(ctaOverride || a.cta || '').trim();
   var amt = a.amount;
   var showAmt = typeof amt === 'number' && isFinite(amt) && amt > 0;
