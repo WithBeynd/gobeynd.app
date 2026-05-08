@@ -821,7 +821,7 @@ function geodeCheckReminder() {
     else if (subsDue.length) {
       var _rItems = geodeListSubscriptionReminderItems(S);
       var _rCp = _rItems.length ? geodeSubscriptionReminderCopy(_rItems) : null;
-      if (_rCp) msgs.push(_rCp.line + ' \u2014 worth reviewing.');
+      if (_rCp) msgs.push(_rCp.line);
     }
     else if (S.reminderPrefs.weeklyCheckin) msgs.push('Time for your weekly plan check-in.');
     if (!msgs.length) return;
@@ -3880,6 +3880,16 @@ function openModal(html) {
   setTimeout(function () {
     try { bg.classList.add('on'); } catch (e2) {}
   }, 0);
+}
+
+/** Subscription review queue only: swap panel HTML without tearing down `#modal` (avoids re-running enter animation). */
+function geodeReplaceMoPanelHtml(html) {
+  var bg = document.getElementById('modal');
+  if (!bg || !bg.classList || !bg.classList.contains('mo-bg')) return false;
+  var mo = bg.firstElementChild;
+  if (!mo || !mo.classList || !mo.classList.contains('mo')) return false;
+  mo.innerHTML = html;
+  return true;
 }
 function closeModal() {
   if (window._geodeQS) {
@@ -8446,10 +8456,10 @@ function renderInsights() {
         '<div style="font-size:12px;font-weight:700;color:' +
         stOd.color +
         ';margin-bottom:4px;line-height:1.3">' +
-        escHtmlLite('Overdue') +
+        escHtmlLite('Keep the picture honest') +
         '</div>' +
         '<div style="font-size:11px;color:rgba(255,255,255,0.72);line-height:1.45">' +
-        escHtmlLite('Focus on clearing overdue items first') +
+        escHtmlLite('Small updates now keep your guidance accurate.') +
         '</div></div></div></div></div>'
       );
     } catch (_eOdIn) {
@@ -8725,9 +8735,9 @@ function geodeAnticipationKindForPayment(p) {
   return 'obligation';
 }
 
-/** Display only: subscription reminders only at 7d, 3d, or 0–1d (decision points). */
+/** Display only: discrete renewal nudge days only (T-7, T-3, T-1, T). */
 function geodeSubscriptionReminderDiffOk(diff) {
-  return diff === 7 || diff === 3 || diff <= 1;
+  return diff === 7 || diff === 3 || diff === 1 || diff === 0;
 }
 
 function geodeSubscriptionRenewTimePhrase(diff) {
@@ -8738,42 +8748,150 @@ function geodeSubscriptionRenewTimePhrase(diff) {
   return 'soon';
 }
 
+// Name hints for subscription-like spending (also used later in Subscription intelligence).
+var GEODE_SUB_PATTERNS = /\b(netflix|spotify|amazon prime|prime video|apple one|apple tv|apple music|google one|youtube premium|disney plus|disney\+|hulu|now tv|icloud|dropbox|adobe|microsoft 365|office 365|notion|slack|linkedin premium|peloton|headspace|calm|duolingo|audible|kindle unlimited|nintendo|xbox|playstation|ps plus|ps now|ea play|strava|myfitnesspal|ring|simplisafe|vodafone|ee monthly|o2|three|bt broadband|virgin media|sky broadband|sky sports|sky cinema|talktalk|plusnet|charity|standing order|donation|patreon|substack|gym|fitness|yoga|pilates|membership|direct debit|monthly fee|annual fee|subscription|insurance|phone plan|broadband)\b/i;
+
+/** Whole calendar days from local today (geodeTodayLocalISO) to due YYYY-MM-DD; time-of-day ignored. */
+function geodeSubscriptionReminderLocalDiffDays(isoDue) {
+  try {
+    var todayIso = geodeTodayLocalISO();
+    var dueIso = String(isoDue || '').slice(0, 10);
+    if (!todayIso || dueIso.length !== 10) return null;
+    var parts = function (iso) {
+      var y = parseInt(iso.slice(0, 4), 10);
+      var m = parseInt(iso.slice(5, 7), 10) - 1;
+      var da = parseInt(iso.slice(8, 10), 10);
+      if (isNaN(y) || isNaN(m) || isNaN(da)) return NaN;
+      return new Date(y, m, da).setHours(0, 0, 0, 0);
+    };
+    var t0 = parts(todayIso);
+    var t1 = parts(dueIso);
+    if (isNaN(t0) || isNaN(t1)) return null;
+    return Math.floor((t1 - t0) / 86400000);
+  } catch (_e) {
+    return null;
+  }
+}
+
+/** Spending only: timed renewal nudges — recurring/annual or explicit subs category (not name-pattern alone). */
+function geodeExpenseIsSubscriptionRenewalEligible(e) {
+  if (!e || !e.date) return false;
+  var iso = String(e.date).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  var rec = String(e.rec || '').toLowerCase();
+  if (rec === 'yes' || rec === 'annual') return true;
+  if (e.cat === 'subs') return true;
+  return false;
+}
+
+var GEODE_SUB_REVIEWED_DAY_LS = 'geode_sub_reviewed_day_v1';
+
+/** Day-scoped localStorage: which subscription (expense) ids the user confirmed via Keep it today; resets when local calendar day changes. */
+function geodeSubReviewedTodayLoad() {
+  var today = geodeTodayLocalISO();
+  var ids = [];
+  if (!today) return { day: '', ids: [] };
+  try {
+    var raw = localStorage.getItem(GEODE_SUB_REVIEWED_DAY_LS);
+    if (!raw) return { day: today, ids: [] };
+    var o = JSON.parse(raw);
+    if (!o || o.day !== today || !Array.isArray(o.ids)) return { day: today, ids: [] };
+    ids = o.ids.map(function (x) {
+      return String(x);
+    });
+  } catch (_e) {
+    return { day: today, ids: [] };
+  }
+  return { day: today, ids: ids };
+}
+
+function geodeSubReviewedTodaySave(day, ids) {
+  if (!day) return;
+  try {
+    localStorage.setItem(GEODE_SUB_REVIEWED_DAY_LS, JSON.stringify({ day: day, ids: ids || [] }));
+  } catch (_e) {}
+}
+
+function geodeSubIsReviewedToday(expenseId) {
+  var sid = String(expenseId == null ? '' : expenseId);
+  if (!sid) return false;
+  var pack = geodeSubReviewedTodayLoad();
+  return pack.ids.indexOf(sid) >= 0;
+}
+
+function geodeSubMarkReviewedToday(expenseId) {
+  var sid = String(expenseId == null ? '' : expenseId);
+  if (!sid) return;
+  var today = geodeTodayLocalISO();
+  if (!today) return;
+  var pack = geodeSubReviewedTodayLoad();
+  if (pack.ids.indexOf(sid) >= 0) return;
+  pack.ids.push(sid);
+  geodeSubReviewedTodaySave(today, pack.ids);
+}
+
 /**
- * Subscription-type payments (same classification as anticipation) due on a reminder day.
- * Sorted by due date ascending.
+ * Subscription-type expenses (Spending) on a discrete reminder day; one primary row returned.
+ * When present, `_geodeSubReminderExtraCount` on the returned array is how many other eligible rows were sorted after the primary.
+ * Rows marked reviewed for the current local day (Keep it) are excluded after the usual sort so primary reflects the next unreviewed item.
  */
 function geodeListSubscriptionReminderItems(state) {
   var out = [];
   try {
     state = state || S;
-    var list = (state && state.payments) || [];
-    var today = new Date();
+    var list = (state && state.expenses) || [];
     for (var i = 0; i < list.length; i++) {
-      var p = list[i];
-      if (!p || p.status === 'paid' || !p.date) continue;
-      if (geodeAnticipationKindForPayment(p) !== 'subscription') continue;
-      var d = new Date(String(p.date).slice(0, 10) + 'T12:00:00');
-      if (isNaN(d.getTime())) continue;
-      var diff = Math.floor((d - today) / (1000 * 60 * 60 * 24));
-      if (diff < 0 || !geodeSubscriptionReminderDiffOk(diff)) continue;
+      var ex = list[i];
+      if (!ex || !ex.date) continue;
+      if (!geodeExpenseIsSubscriptionRenewalEligible(ex)) continue;
+      var isoDate = String(ex.date).slice(0, 10);
+      var diff = geodeSubscriptionReminderLocalDiffDays(isoDate);
+      if (diff == null || diff < 0 || !geodeSubscriptionReminderDiffOk(diff)) continue;
+      var monthlySort = ex.rec === 'annual' ? toNum(ex.amount) / 12 : toNum(ex.amount);
       out.push({
-        id: p.id,
-        name: String(p.name || '').trim() || 'Subscription',
-        amount: toNum(p.amount),
-        date: p.date,
-        diff: diff
+        id: ex.id,
+        name: String(ex.name || '').trim() || 'Subscription',
+        amount: toNum(ex.amount),
+        date: ex.date,
+        diff: diff,
+        tieIdx: i,
+        _monthlySort: monthlySort,
+        idStr: String(ex.id || '')
       });
     }
     out.sort(function (a, b) {
-      return String(a.date).localeCompare(String(b.date));
+      var da = String(a.date).slice(0, 10);
+      var db = String(b.date).slice(0, 10);
+      if (da !== db) return da < db ? -1 : 1;
+      if ((b._monthlySort || 0) !== (a._monthlySort || 0)) return (b._monthlySort || 0) - (a._monthlySort || 0);
+      return String(a.idStr || '').localeCompare(String(b.idStr || ''));
     });
+    try {
+      out = out.filter(function (row) {
+        return !geodeSubIsReviewedToday(row.id);
+      });
+    } catch (_rf) {}
+    if (out.length) {
+      var primary = out[0];
+      var _rem = [
+        {
+          id: primary.id,
+          name: primary.name,
+          amount: primary.amount,
+          date: primary.date,
+          diff: primary.diff
+        }
+      ];
+      _rem._geodeSubReminderExtraCount = Math.max(0, out.length - 1);
+      return _rem;
+    }
   } catch (_e) {}
   return out;
 }
 
 /**
  * Grouped copy for subscription reminder surfaces (no HTML).
- * primaryId = earliest due payment (for tap-through).
+ * primaryId = chosen spending row (tap-through).
  */
 function geodeSubscriptionReminderCopy(items) {
   if (!items || !items.length) return null;
@@ -8782,11 +8900,23 @@ function geodeSubscriptionReminderCopy(items) {
   for (var i = 0; i < n; i++) diffs[items[i].diff] = true;
   var sameDiff = Object.keys(diffs).length === 1;
   var line;
-  if (n > 3) line = 'Multiple subscriptions renew soon';
+  if (n > 3) line = 'Several charges line up soon — worth a quick review?';
   else if (n === 1) {
-    line = items[0].name + ' renews ' + geodeSubscriptionRenewTimePhrase(items[0].diff);
+    var _d = items[0].diff;
+    var _nm = items[0].name;
+    if (_d === 7) line = _nm + ' renews in 7 days. Still earning its place?';
+    else if (_d === 3) line = _nm + ' renews in 3 days. Worth keeping?';
+    else if (_d === 1) line = _nm + ' renews tomorrow. Keep it?';
+    else if (_d === 0) line = _nm + ' renews today. Still want it?';
+    else {
+      var _phr = geodeSubscriptionRenewTimePhrase(_d);
+      if (_phr.length) _phr = _phr.charAt(0).toUpperCase() + _phr.slice(1);
+      line = 'Do you still want ' + _nm + '? ' + _phr + ' — still worth keeping?';
+    }
   } else {
-    line = n + ' subscriptions renew ' + (sameDiff ? geodeSubscriptionRenewTimePhrase(items[0].diff) : 'soon');
+    var _pMul = sameDiff ? geodeSubscriptionRenewTimePhrase(items[0].diff) : 'around the same window';
+    if (sameDiff && _pMul.length) _pMul = _pMul.charAt(0).toUpperCase() + _pMul.slice(1);
+    line = n + ' items line up ' + _pMul + ' — worth a quick review?';
   }
   return { line: line, primaryId: items[0].id, count: n, minDiff: items[0].diff };
 }
@@ -8794,25 +8924,39 @@ function geodeSubscriptionReminderCopy(items) {
 function geodeGetAnticipation(state) {
   try {
     state = state || S;
-    if (geodeHasOverdue(state)) return null;
-
-    var today = new Date();
-    var soon = 3; // days window
 
     var subItems = geodeListSubscriptionReminderItems(state);
     if (subItems.length) {
       var subCopy = geodeSubscriptionReminderCopy(subItems);
-      var subAmt = subItems.length === 1 ? toNum(subItems[0].amount) : 0;
+      var _seAmt = (state.expenses || []).filter(function (x) {
+        return x && x.id === subItems[0].id;
+      })[0];
+      var subAmt = _seAmt
+        ? _seAmt.rec === 'annual'
+          ? toNum(_seAmt.amount) / 12
+          : toNum(subItems[0].amount)
+        : toNum(subItems[0].amount);
+      var _sIso = String(subItems[0].date || '').slice(0, 10);
+      var _sy = parseInt(_sIso.slice(0, 4), 10);
+      var _sm = parseInt(_sIso.slice(5, 7), 10) - 1;
+      var _sd = parseInt(_sIso.slice(8, 10), 10);
+      var _sDate =
+        !isNaN(_sy) && !isNaN(_sm) && !isNaN(_sd) ? new Date(_sy, _sm, _sd) : new Date(String(subItems[0].date).slice(0, 10) + 'T12:00:00');
       return {
         id: subCopy.primaryId,
         name: subCopy.line,
         days: subCopy.minDiff,
-        date: new Date(String(subItems[0].date).slice(0, 10) + 'T12:00:00'),
+        date: _sDate,
         amount: subAmt,
         kind: 'subscription',
         subscriptionReminderLine: subCopy.line
       };
     }
+
+    if (geodeHasOverdue(state)) return null;
+
+    var today = new Date();
+    var soon = 3; // days window
 
     var list = (state && state.payments) || [];
     var next = null;
@@ -8910,6 +9054,14 @@ function geodeInterpretAnticipation(state, item) {
 
 function geodeHandleAnticipationClick(id) {
   try {
+    var expNudge = (S.expenses || []).filter(function (x) {
+      return x && x.id === id;
+    })[0];
+    if (expNudge && geodeExpenseIsSubscriptionRenewalEligible(expNudge)) {
+      openExpModal(id);
+      return;
+    }
+
     var p = (S.payments || []).filter(function (x) {
       return x.id === id;
     })[0];
@@ -8973,16 +9125,17 @@ function geodeCtx(state) {
     ? ftH.filter(function(f){return f.outcome==='followed';}).length / ftH.length
     : null;
 
-  // Subscription-type payments only, on reminder days (7 / 3 / 0–1); no month-level expense fallback
+  // Subscription-type spending only, on reminder days (7 / 3 / 0–1)
   var subsDue = [];
   try {
     var _sItems = geodeListSubscriptionReminderItems(state);
+    var _exList = state.expenses || [];
     for (var _si = 0; _si < _sItems.length; _si++) {
       var _it = _sItems[_si];
-      var _pMatch = payments.filter(function (x) {
+      var _eMatch = _exList.filter(function (x) {
         return x && x.id === _it.id;
       })[0];
-      if (_pMatch) subsDue.push(_pMatch);
+      if (_eMatch) subsDue.push(_eMatch);
     }
   } catch (_eSd) {
     subsDue = [];
@@ -11731,9 +11884,11 @@ function geodeGetMainAction(state) {
         _act1.title = _sCp.line;
         if (_sCp.count === 1 && _c.subsDue[0]) {
           var _one = _c.subsDue[0];
-          _act1.sub = fm(Number(_one.amount)) + '/mo, ' + fm(Number(_one.amount) * 12) + '/yr';
+          var _moE = _one.rec === 'annual' ? Number(_one.amount) / 12 : Number(_one.amount);
+          var _yrE = _one.rec === 'annual' ? Number(_one.amount) : _moE * 12;
+          _act1.sub = fm(_moE) + '/mo, ' + fm(_yrE) + '/yr';
         } else {
-          _act1.sub = 'Review renewals in Money.';
+          _act1.sub = 'Worth a quick look in Spending.';
         }
       }
     } else if (_c.isDebtPlan && _c.worstDebt) {
@@ -11956,7 +12111,8 @@ function geodeGetAdaptiveReduction(name, defaultReduction) {
   }
 }
 
-function geodeHomeMainActionHtml() {
+/** Pass true when Home renders the yellow renewal card — subscription anticipation footer is skipped so the same line does not appear twice. */
+function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   var a = geodeGetMainAction(S) || null;
   if (!a) return '';
   var cleared = false;
@@ -12076,7 +12232,7 @@ function geodeHomeMainActionHtml() {
   if (
     anticipation &&
     showMsg &&
-    !geodeHasOverdue(S) &&
+    (!geodeHasOverdue(S) || anticipation.kind === 'subscription') &&
     !completionFooterHtml &&
     !streakRecoveryHtml &&
     !identityStreakHtml &&
@@ -12084,31 +12240,33 @@ function geodeHomeMainActionHtml() {
     !_anticCompetingActive &&
     !_anticDelayExpanded
   ) {
-    var _antNm = escHtmlLite(anticipation.name);
-    var _idJs =
-      anticipation.id != null && anticipation.id !== '' ? JSON.stringify(anticipation.id) : '';
-    anticipationFooterHtml =
-      _idJs !== ''
-        ? '<div style="font-size:11px;color:var(--tx-3);margin-top:6px;cursor:pointer" ' +
-          'onclick="try{if(event&&event.stopPropagation)event.stopPropagation();geodeHandleAnticipationClick(' +
-          _idJs +
-          ')}catch(e){}">'
-        : '<div style="font-size:11px;color:var(--tx-3);margin-top:6px">';
     var _antKind = anticipation.kind || 'obligation';
-    if (_antKind === 'subscription') {
-      anticipationFooterHtml += escHtmlLite(
-        anticipation.subscriptionReminderLine || 'Subscription reminder'
-      );
-    } else if (_antKind === 'contribution') {
-      anticipationFooterHtml += 'Planned contribution coming up';
-    } else if (anticipation.days === 0) {
-      anticipationFooterHtml += _antNm + ' is due today';
-    } else if (anticipation.days === 1) {
-      anticipationFooterHtml += _antNm + ' is due tomorrow';
-    } else {
-      anticipationFooterHtml += _antNm + ' is due in ' + anticipation.days + ' days';
+    if (!(_geodeHomeSubRenewCardVisible && _antKind === 'subscription')) {
+      var _antNm = escHtmlLite(anticipation.name);
+      var _idJs =
+        anticipation.id != null && anticipation.id !== '' ? JSON.stringify(anticipation.id) : '';
+      anticipationFooterHtml =
+        _idJs !== ''
+          ? '<div style="font-size:11px;color:var(--tx-3);margin-top:6px;cursor:pointer" ' +
+            'onclick="try{if(event&&event.stopPropagation)event.stopPropagation();geodeHandleAnticipationClick(' +
+            _idJs +
+            ')}catch(e){}">'
+          : '<div style="font-size:11px;color:var(--tx-3);margin-top:6px">';
+      if (_antKind === 'subscription') {
+        anticipationFooterHtml += escHtmlLite(
+          anticipation.subscriptionReminderLine || 'Worth a quick look.'
+        );
+      } else if (_antKind === 'contribution') {
+        anticipationFooterHtml += 'Planned contribution coming up';
+      } else if (anticipation.days === 0) {
+        anticipationFooterHtml += _antNm + ' is due today';
+      } else if (anticipation.days === 1) {
+        anticipationFooterHtml += _antNm + ' is due tomorrow';
+      } else {
+        anticipationFooterHtml += _antNm + ' is due in ' + anticipation.days + ' days';
+      }
+      anticipationFooterHtml += '</div>';
     }
-    anticipationFooterHtml += '</div>';
   }
   try {
     window._geodeMainActionRun = typeof a.run === 'function' ? a.run : null;
@@ -13348,11 +13506,13 @@ function rHome() {
     }
   } catch (_eOb) {}
   h += geodeOverdueCardHtml();
-  // Subscription renewal: only at 7d / 3d / 0–1d decision points (payments with dates)
+  // Subscription nudge (Spending only; discrete days). Shown whenever eligible — not gated on other overdue items.
+  var _homeSubRenewCardVisible = false;
   var _subsDue = geodeSubsDueSoon(7);
   if (_subsDue.length > 0) {
+    _homeSubRenewCardVisible = true;
     var _sd = _subsDue[0];
-    var _sdKind = 'payment';
+    var _sdKind = 'expense';
     var _sCardItems = geodeListSubscriptionReminderItems(S);
     var _sCardCp = _sCardItems.length ? geodeSubscriptionReminderCopy(_sCardItems) : null;
     var _sdRenewLine = _sCardCp ? escHtmlLite(_sCardCp.line) : escHtmlLite(_sd.name || '');
@@ -13362,13 +13522,17 @@ function rHome() {
       "','" +
       _sdKind +
       '\')">';
-    h += '<div style="font-size:9px;font-weight:700;color:var(--warn);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:5px">Subscription renewal</div>';
+    h += '<div style="font-size:9px;font-weight:700;color:var(--warn);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:5px">Worth a quick look</div>';
     h += '<div style="font-size:13px;font-weight:600;color:var(--tx-1);margin-bottom:2px">' + _sdRenewLine + '</div>';
     if (_subsDue.length === 1) {
-      var _sdAnnual = toNum(_sd.amount) * 12;
+      var _sdExp = (S.expenses || []).filter(function (_x) {
+        return _x && _x.id === _sd.id;
+      })[0];
+      var _sdMo = _sdExp && _sdExp.rec === 'annual' ? toNum(_sdExp.amount) / 12 : toNum(_sd.amount);
+      var _sdAnnual = _sdExp && _sdExp.rec === 'annual' ? toNum(_sdExp.amount) : _sdMo * 12;
       h +=
         '<div style="font-size:11px;color:var(--tx-3)">' +
-        fm(toNum(_sd.amount)) +
+        fm(_sdMo) +
         '/month — ' +
         fm(_sdAnnual) +
         '/year. Tap to review or remove.</div>';
@@ -13376,17 +13540,31 @@ function rHome() {
       h +=
         '<div style="font-size:11px;color:var(--tx-3)">Tap to review the next renewal or remove.</div>';
     }
+    var _sCardMore = _sCardItems._geodeSubReminderExtraCount | 0;
+    if (_sCardMore > 0) {
+      var _sCardMoreLine =
+        '+' +
+        _sCardMore +
+        ' more subscription' +
+        (_sCardMore === 1 ? '' : 's') +
+        (_sCardMore === 1 ? ' needs' : ' need') +
+        ' a quick look too';
+      h +=
+        '<div style="font-size:10px;color:rgba(237,234,255,0.55);margin-top:8px;line-height:1.35;font-weight:500">' +
+        escHtmlLite(_sCardMoreLine) +
+        '</div>';
+    }
     h += '</div>';
   }
   try {
     var _sw = geodeConsecutiveActiveWeeks(S);
     if (_sw >= 2) {
       h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-bottom:10px">' +
-        escHtmlLite('On track for ' + _sw + ' week' + (_sw === 1 ? '' : 's') + ' in a row.') +
+        escHtmlLite('Checked in ' + _sw + ' week' + (_sw === 1 ? '' : 's') + ' in a row.') +
         '</div>';
     }
   } catch (_eSw) {}
-  h += geodeHomeMainActionHtml();
+  h += geodeHomeMainActionHtml(_homeSubRenewCardVisible);
   h += renderInsights();
   // Reality check balance removed — use bank sync in v2
   h +=
@@ -15244,7 +15422,7 @@ function openPayModal(id, prefill) {
 
 // ── SUBSCRIPTION INTELLIGENCE ─────────────────────────────────────────────────
 // Detects recurring charges, surfaces annual cost, enables cancellation review.
-var GEODE_SUB_PATTERNS = /\b(netflix|spotify|amazon prime|prime video|apple one|apple tv|apple music|google one|youtube premium|disney plus|disney\+|hulu|now tv|icloud|dropbox|adobe|microsoft 365|office 365|notion|slack|linkedin premium|peloton|headspace|calm|duolingo|audible|kindle unlimited|nintendo|xbox|playstation|ps plus|ps now|ea play|strava|myfitnesspal|ring|simplisafe|vodafone|ee monthly|o2|three|bt broadband|virgin media|sky broadband|sky sports|sky cinema|talktalk|plusnet|charity|standing order|donation|patreon|substack|gym|fitness|yoga|pilates|membership|direct debit|monthly fee|annual fee|subscription|insurance|phone plan|broadband)\b/i;
+// GEODE_SUB_PATTERNS is declared earlier with renewal nudge helpers.
 
 function geodeIsSubscription(name, rec) {
   if (!name) return false;
@@ -15270,25 +15448,60 @@ function geodeSubsDueSoon(_days) {
       amount: it.amount,
       date: it.date,
       diff: it.diff,
-      _kind: 'payment'
+      _kind: 'expense'
     };
   });
 }
 
-function geodeOpenSubReview(id, kind) {
+/** Modal-only renewal timing (calendar-day diff from local today); matches trigger windows T / T-1 / T-3 / T-7. */
+function geodeSubReviewRenewTimingLineHtml(diffDays) {
+  if (diffDays == null || diffDays < 0) return '';
+  var txt =
+    diffDays === 0
+      ? 'Renews today'
+      : diffDays === 1
+        ? 'Renews tomorrow'
+        : diffDays === 3
+          ? 'Renews in 3 days'
+          : diffDays === 7
+            ? 'Renews in 7 days'
+            : 'Renews in ' + diffDays + ' days';
+  return (
+    '<div style="font-size:11px;color:var(--warn);font-weight:600;margin-bottom:14px">' +
+    escHtmlLite(txt) +
+    '</div>'
+  );
+}
+
+function geodeOpenSubReview(id, kind, opts) {
   // kind: 'payment' or 'expense'
+  opts = opts || {};
   var item = kind === 'expense'
     ? (S.expenses||[]).filter(function(e){return e.id===id;})[0]
     : (S.payments||[]).filter(function(p){return p.id===id;})[0];
   if (!item) { toast('Item not found.', 'warn'); return; }
+  try {
+    window._geodeCurrentSubReviewId = id;
+    window._geodeCurrentSubReviewKind = kind;
+  } catch (_eSrv) {}
   var monthly = Number(item.amount)||0;
   var annual = monthly * 12;
+  if (kind === 'expense' && item.rec === 'annual') {
+    annual = Number(item.amount) || 0;
+    monthly = annual / 12;
+  }
   var name = item.name || 'Subscription';
   var daysLine = '';
-  if (kind === 'payment' && item.date) {
+  if (item.date) {
+    var _rd = geodeSubscriptionReminderLocalDiffDays(String(item.date).slice(0, 10));
+    if (_rd != null && _rd >= 0) {
+      daysLine = geodeSubReviewRenewTimingLineHtml(_rd);
+    }
+  }
+  if (!daysLine && kind === 'payment' && item.date) {
     var d = new Date(item.date);
     var days = Math.max(0, Math.round((d-new Date())/86400000));
-    daysLine = '<div style="font-size:11px;color:var(--warn);font-weight:600;margin-bottom:14px">Renews in ' + days + (days===1?' day':' days') + '</div>';
+    daysLine = geodeSubReviewRenewTimingLineHtml(days);
   }
   var h = '<div style="padding:4px 0 12px">';
   h += '<div style="font-size:18px;font-weight:800;color:var(--tx-1);margin-bottom:4px">' + escHtmlLite(name) + '</div>';
@@ -15299,12 +15512,68 @@ function geodeOpenSubReview(id, kind) {
   h += '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:6px 0">';
   h += '<span style="font-size:12px;color:var(--tx-2)">Annual cost</span><span style="font-size:15px;font-weight:700;color:var(--ok)">' + fm(annual) + '</span></div>';
   h += '</div>';
-  h += '<div style="font-size:11px;color:var(--tx-3);line-height:1.5;margin-bottom:16px">Beynd does not cancel subscriptions. If you decide to cancel, do it directly with the provider before the renewal date. Then remove it here to keep your plan accurate.</div>';
+  h += '<div style="font-size:11px;color:var(--tx-3);line-height:1.5;margin-bottom:16px">Beynd does not cancel services for you. If you cancel with the provider, remove the item here so your spending stays accurate.</div>';
   h += '<div style="display:flex;gap:8px">';
-  h += '<button type="button" class="btn btn-s" style="flex:1" onclick="closeModal()">Keep it</button>';
+  h +=
+    '<button type="button" class="btn btn-s" style="flex:1" onclick="geodeSubKeepIt()">Keep it</button>';
   h += '<button type="button" class="btn btn-p" style="flex:1" onclick="geodeRemoveSub(' + "'" + id + "','" + kind + "'" + ')">Remove from plan</button>';
   h += '</div></div>';
-  openModal('<div class="mo-hdr"><span class="mo-title">Review subscription</span><button type="button" class="mo-close" onclick="closeModal()">&#x2715;</button></div>' + h);
+  var _subMoInner =
+    '<div class="mo-hdr"><span class="mo-title">Quick check</span><button type="button" class="mo-close" onclick="closeModal()">&#x2715;</button></div>' +
+    h;
+  if (
+    opts.replaceSubscriptionModalInner &&
+    geodeReplaceMoPanelHtml(_subMoInner)
+  ) {
+    return;
+  }
+  openModal(_subMoInner);
+}
+
+/** Keep it: mark expense row reviewed for today when modal kind is expense (uses window._geodeCurrentSubReviewId / Kind set in geodeOpenSubReview). Does not mutate expense data. */
+function geodeSubKeepIt() {
+  var id = null;
+  var kind = '';
+  try {
+    id = window._geodeCurrentSubReviewId;
+    kind = String(window._geodeCurrentSubReviewKind || '');
+  } catch (_eG) {}
+  if (id == null || String(id) === '') {
+    try {
+      closeModal();
+    } catch (_eN) {}
+    try {
+      render();
+    } catch (_eN2) {}
+    return;
+  }
+  if (kind === 'expense') {
+    try {
+      geodeSubMarkReviewedToday(id);
+    } catch (_e0) {}
+  }
+  var next = [];
+  try {
+    next = geodeListSubscriptionReminderItems(S) || [];
+  } catch (_e1) {
+    next = [];
+  }
+  if (next.length > 0 && next[0].id != null && String(next[0].id) !== '') {
+    try {
+      geodeOpenSubReview(next[0].id, 'expense', { replaceSubscriptionModalInner: true });
+    } catch (_e2) {
+      try {
+        closeModal();
+      } catch (_e3) {}
+    }
+  } else {
+    try {
+      closeModal();
+    } catch (_e5) {}
+    try {
+      render();
+    } catch (_e6) {}
+  }
 }
 
 function geodeRemoveSub(id, kind) {
