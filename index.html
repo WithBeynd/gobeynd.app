@@ -2850,6 +2850,26 @@ function selectWorstHighAprDebt(debts, aprThreshold) {
   return worst;
 }
 
+/** Stage 8C: selects worst-APR debt at or above minApr (inclusive).
+ * For Debt-focused moderate-rate step only — does not affect selectWorstHighAprDebt. */
+function selectWorstDebtAboveApr(debts, minApr) {
+  var list = debts || [];
+  var thr = (minApr === undefined ? 5 : minApr);
+  var worst = null;
+  for (var i = 0; i < list.length; i++) {
+    var d = list[i];
+    if (!d) continue;
+    var apr = toNum(d.apr);
+    var bal = toNum(d.balance);
+    if (bal <= 0 || apr < thr) continue;
+    var mi = monthlyInterest(d.apr, bal);
+    if (!worst) { worst = d; continue; }
+    var wmi = monthlyInterest(worst.apr, worst.balance);
+    if (mi > wmi || (mi === wmi && bal > toNum(worst.balance))) worst = d;
+  }
+  return worst;
+}
+
 /** Stage J: highlight one debt card — reuses selectWorstHighAprDebt; falls back to max stored APR when needed. */
 function geodeDebtHighlightId(debts) {
   var list = debts || [];
@@ -9511,6 +9531,31 @@ function getMonthPlan() {
     }
   }
 
+  // Step 2.5: Moderate-interest debt — Debt-focused style only, when no high-interest step fired.
+  // APR >= 5% (inclusive). Appears before goals and investing to make Debt-focused style visibly meaningful.
+  // Balanced and Growth are unchanged — this block never executes for them.
+  if (S.planStrategy === 'debt' && !worstDebt && budget > 50) {
+    var moderateDebt = selectWorstDebtAboveApr(S.debts, 5);
+    if (moderateDebt) {
+      var modMi = mintCost(moderateDebt);
+      var modOverpay = Math.min(Math.round(budget * stratCfg.debtRatio), 300, toNum(moderateDebt.balance));
+      if (modOverpay > 0) modOverpay = Math.max(modOverpay, 50);
+      if (modOverpay > 0 && budget >= modOverpay) {
+        steps.push({
+          priority: 2,
+          urgency: 'medium',
+          icon: 'alert-circle',
+          label: 'Pay down ' + moderateDebt.name,
+          amount: modOverpay,
+          note: 'Reducing this balance saves about ' + fm(modMi) + '/month in interest',
+          why: 'At ' + toNum(moderateDebt.apr) + '% APR, this debt creates roughly ' + fm(modMi) + '/month of interest drag. In a debt-focused plan, this gets a slice before goals and new investing.',
+          color: '#f09060'
+        });
+        budget -= modOverpay;
+      }
+    }
+  }
+
   // Step 3: Top up goal — primary (focus) if set, else most off-track (before investing)
   var offSel = null;
   if (primaryGoal) offSel = primaryGoalIntelForPlan(primaryGoal);
@@ -9585,9 +9630,22 @@ function getMonthPlan() {
   });
   for (var i = 0; i < steps.length; i++) steps[i].priority = Math.min(3, Math.max(1, steps[i].priority || 3));
 
-  // One-line coach summary.
+  // One-line coach summary — copy depends on which debt step (if any) was generated.
+  var _sumHasHighDebt = false, _sumHasModDebt = false, _sumHasBuffer = false;
+  for (var _si = 0; _si < steps.length; _si++) {
+    var _sl = steps[_si].label || '';
+    if (_sl.indexOf('Reduce high') === 0) _sumHasHighDebt = true;
+    if (_sl.indexOf('Pay down ') === 0) _sumHasModDebt = true;
+    if (_sl === 'Build your emergency fund') _sumHasBuffer = true;
+  }
   var summary = steps.length
-    ? ('Recommended: allocate ' + fm(left) + ' this month — reduce high‑interest debt first, build your safety buffer next, then invest what remains for long‑term growth.')
+    ? (_sumHasHighDebt
+        ? 'Recommended: allocate ' + fm(left) + ' this month — reduce high‑interest debt first, build your safety buffer next, then invest what remains for long‑term growth.'
+        : _sumHasModDebt
+          ? (_sumHasBuffer
+              ? 'Recommended: allocate ' + fm(left) + ' this month — build your safety buffer first, address debt pressure, then invest what remains for long‑term growth.'
+              : 'Recommended: allocate ' + fm(left) + ' this month — address debt pressure, keep goals in view, then invest what remains for long‑term growth.')
+          : 'Recommended: allocate ' + fm(left) + ' this month — build your safety buffer, keep goals on track, then invest what remains for long‑term growth.')
     : ('Recommended: set aside a clear plan for this month’s cash.');
 
   var hasInvest = false;
@@ -10066,7 +10124,7 @@ function geodePlanPageDebtWhyLead(step) {
 /** One strategy-voice line (Plan display-only; wording only). */
 function geodePlanStrategyVoiceLine() {
   var sk = geodePlanStrategyKey();
-  if (sk === 'debt') return 'This style focuses where interest pressure is highest \u2014 that\u2019s usually where reducing a balance matters most.';
+  if (sk === 'debt') return 'Debt above 10% APR goes first. In debt-focused style, debt at 5% APR or above appears before goals and new investing \u2014 keeping the plan debt-aware without skipping the buffer.';
   if (sk === 'growth') {
     if (geodeHasInvestmentMetaContext(S)) return 'This style leans into long-term growth. Regular contributions tend to matter more than perfect timing.';
     return 'This style leans toward growth while keeping the other priorities in view.';
@@ -10084,7 +10142,7 @@ function geodePlanPageStrategyToneLine(kind) {
   }
   if (kind === 'invest') {
     if (sk === 'growth') return 'Regular contributions tend to matter more than waiting for the right moment.';
-    if (sk === 'debt') return 'With higher-cost debt in the picture, your plan scales investment back until that pressure reduces.';
+    if (sk === 'debt') return 'In a debt-focused plan, debt pressure gets a slice before new investing. Once that reduces, investing comes back into view.';
     return 'Regular contributions, even modest ones, tend to compound more than waiting.';
   }
   if (kind === 'goal') {
@@ -11030,7 +11088,7 @@ function geodePlanPageWhyOrderSectionHtml() {
   var k = S.planStrategy || 'balanced';
   var styleHint =
     k === 'debt'
-      ? 'Debt-focused style steers more spare cash to balances before growth.'
+      ? 'Debt-focused style brings APR 5%+ debt into view before goals and new investing, while debt above 10% still comes first.'
       : k === 'growth'
         ? 'Growth style steers more to goals and investing after basics.'
         : 'Balanced style spreads spare cash across all four areas.';
@@ -11372,6 +11430,12 @@ function geodePlanStepProgress(state, step) {
       var wantInv = '';
       if (lb.indexOf('Reduce high') === 0) {
         wantDebt = geodeDebtIdFromPlanStepLabel(state, step);
+      } else if (lb.indexOf('Pay down ') === 0) {
+        var pdnm = lb.slice('Pay down '.length).trim();
+        var pdl = (state && state.debts) || [];
+        for (var pdi = 0; pdi < pdl.length; pdi++) {
+          if (pdl[pdi] && String(pdl[pdi].name || '').trim() === pdnm) { wantDebt = pdl[pdi].id || ''; break; }
+        }
       } else if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
         var gnm = lb.indexOf('Restart') === 0 ? lb.slice('Restart progress on '.length).trim() : lb.slice('Catch up on '.length).trim();
         var gl = state.goals || [];
@@ -11394,7 +11458,7 @@ function geodePlanStepProgress(state, step) {
         var st = geodePaymentEffectiveStatus(p);
         if (st !== 'upcoming' && st !== 'overdue') continue;
         if (!paymentCountsForMonthlyOutflowDisplay(p)) continue; // display-only month inclusion (respects derived overdue)
-        if (lb.indexOf('Reduce high') === 0) {
+        if (lb.indexOf('Reduce high') === 0 || lb.indexOf('Pay down ') === 0) {
           if (wantDebt && String(p.debtId || '') === String(wantDebt)) return true;
         } else if (lb === 'Build your emergency fund') {
           if (geodePaymentNameLooksLikeBuffer(p.name)) return true;
@@ -11411,6 +11475,14 @@ function geodePlanStepProgress(state, step) {
   }
   if (lb.indexOf('Reduce high') === 0) {
     applied = geodeSumPaymentsForDebtThisMonth(state, geodeDebtIdFromPlanStepLabel(state, step));
+  } else if (lb.indexOf('Pay down ') === 0) {
+    var _pdnm = lb.slice('Pay down '.length).trim();
+    var _pdl = (state && state.debts) || [];
+    var _pdid = '';
+    for (var _pdj = 0; _pdj < _pdl.length; _pdj++) {
+      if (_pdl[_pdj] && String(_pdl[_pdj].name || '').trim() === _pdnm) { _pdid = _pdl[_pdj].id || ''; break; }
+    }
+    applied = geodeSumPaymentsForDebtThisMonth(state, _pdid);
   } else if (lb === 'Build your emergency fund') {
     applied = geodeSumBufferContributionsThisMonth(state);
   } else if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
@@ -11475,6 +11547,11 @@ function geodeHomePlanStepRibbonTitle(step, prog) {
     var nm = lb.replace(/^Reduce high[\u2011\u2010\-]interest /, '').trim();
     if (ph === 'done') return 'Next plan step';
     return nm ? nm + ' is costing the most in interest' : 'This debt is costing the most in interest';
+  }
+  if (lb.indexOf('Pay down ') === 0) {
+    var pdnm = lb.slice('Pay down '.length).trim();
+    if (ph === 'done') return 'Next plan step';
+    return pdnm ? pdnm + ' is creating interest drag' : 'This debt is creating interest drag';
   }
   if (lb === 'Build your emergency fund') {
     if (ph === 'done') return 'Next plan step';
