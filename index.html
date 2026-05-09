@@ -15,7 +15,7 @@
 :root{
   --bg-base:#05050f;--bg-surface:#0f0f1e;--bg-raised:#181830;--bg-card:#141428;
   --bd:rgba(255,255,255,0.07);--bd-em:rgba(255,255,255,0.12);
-  --tx-1:#edeaff;--tx-2:rgba(189,183,220,0.78);--tx-3:#706a90;--tx-4:rgba(255,255,255,0.22);
+  --tx-1:#edeaff;--tx-2:rgba(189,183,220,0.78);--tx-3:#9b93b8;--tx-4:rgba(255,255,255,0.22);
   --gem:#9b7fe8;--gem-l:#c4abff;--rose:#e87ca0;
   --ok:#34d5a0;--warn:#f5c234;--danger:#f07070;--info:#60a5fa;
   --radius:16px;
@@ -39,6 +39,7 @@ body.light #content{background:var(--bg-base);}
 body.light [style*="color:rgba(255,255,255"]{color:rgba(30,20,70,0.75) !important;}
 body.light [style*="color:#edeaff"]{color:var(--tx-1) !important;}
 body.light [style*="color:#706a90"]{color:var(--tx-3) !important;}
+body.light [style*="color:#9b93b8"]{color:var(--tx-3) !important;}
 body.light [style*="color:#c4abff"]{color:var(--gem) !important;}
 body.light [style*="border:1px solid rgba(255,255,255"]{border-color:rgba(80,70,140,0.12) !important;}
 body.light [style*="border-bottom:1px solid rgba(255,255,255"]{border-bottom-color:rgba(80,70,140,0.10) !important;}
@@ -120,7 +121,7 @@ body.light .pill.ac{color:#6a4cb8 !important;border-color:rgba(106,76,184,0.35) 
 
 /* CARDS */
 .card{background:var(--bg-card);border:1px solid var(--bd);border-radius:18px;padding:16px;margin-bottom:12px}
-.card-title{font-size:9px;font-weight:650;color:var(--tx-3);text-transform:uppercase;letter-spacing:1.7px;margin-bottom:8px}
+.card-title{font-size:10px;font-weight:650;color:var(--tx-3);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:8px}
 .big-num{font-size:38px;font-weight:700;line-height:1}
 .med-num{font-size:22px;font-weight:700}
 
@@ -135,7 +136,7 @@ body.light .pill.ac{color:#6a4cb8 !important;border-color:rgba(106,76,184,0.35) 
 
 /* FIELDS */
 .field{margin-bottom:12px}
-.field label{display:block;font-size:9px;font-weight:700;color:#706a90;text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
+.field label{display:block;font-size:9px;font-weight:700;color:#9b93b8;text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
 .fi{width:100%;background:var(--bg-raised);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 14px;color:#edeaff;font-size:15px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;outline:none;-webkit-appearance:none;appearance:none;resize:none}
 .fi:focus{border-color:#9b7fe8}
 textarea.fi{min-height:70px}
@@ -143,7 +144,7 @@ textarea.fi{min-height:70px}
 /* BUTTONS */
 .btn{width:100%;border:none;border-radius:13px;padding:14px;font-size:14px;font-weight:700;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,sans-serif;min-height:44px;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:transform 140ms ease,filter 140ms ease;will-change:transform}
 .btn-p{background:linear-gradient(135deg,#7c6af7,#b06af0);color:#fff}
-.btn-s{background:#181830;border:1px solid rgba(255,255,255,0.1);color:#706a90;margin-top:8px}
+.btn-s{background:#181830;border:1px solid rgba(255,255,255,0.1);color:#9b93b8;margin-top:8px}
 .btn-sm{background:rgba(155,127,232,0.1);border:none;border-radius:8px;padding:5px 10px;color:#c4abff;font-size:11px;cursor:pointer;font-family:-apple-system,sans-serif;min-height:28px;display:inline-flex;align-items:center;justify-content:center;transition:transform 140ms ease,filter 140ms ease;will-change:transform}
 .btn-del{background:rgba(240,112,112,0.1);border:none;border-radius:8px;padding:5px 10px;color:#f07070;font-size:11px;cursor:pointer;font-family:-apple-system,sans-serif;min-height:28px;display:inline-flex;align-items:center;justify-content:center;transition:transform 140ms ease,filter 140ms ease;will-change:transform}
 .btn-add{width:100%;background:rgba(52,213,160,0.1);border:1px solid rgba(52,213,160,0.2);border-radius:11px;padding:9px;color:#34d5a0;font-size:13px;font-weight:600;cursor:pointer;font-family:-apple-system,sans-serif;min-height:40px;display:inline-flex;align-items:center;justify-content:center;transition:transform 140ms ease,filter 140ms ease;will-change:transform}
@@ -9640,13 +9641,13 @@ function getMonthPlan() {
   }
   var summary = steps.length
     ? (_sumHasHighDebt
-        ? 'Recommended: allocate ' + fm(left) + ' this month — reduce high‑interest debt first, build your safety buffer next, then invest what remains for long‑term growth.'
+        ? 'One way to use this month\'s room: ' + fm(left) + ' available. Reduce high‑interest debt first, build your safety buffer next, then review what is left for longer-term goals.'
         : _sumHasModDebt
           ? (_sumHasBuffer
-              ? 'Recommended: allocate ' + fm(left) + ' this month — build your safety buffer first, address debt pressure, then invest what remains for long‑term growth.'
-              : 'Recommended: allocate ' + fm(left) + ' this month — address debt pressure, keep goals in view, then invest what remains for long‑term growth.')
-          : 'Recommended: allocate ' + fm(left) + ' this month — build your safety buffer, keep goals on track, then invest what remains for long‑term growth.')
-    : ('Recommended: set aside a clear plan for this month’s cash.');
+              ? 'One way to use this month\'s room: ' + fm(left) + ' available. Build your safety buffer first, address debt pressure, then review what is left for longer-term goals.'
+              : 'One way to use this month\'s room: ' + fm(left) + ' available. Address debt pressure, keep goals in view, then review what is left for longer-term goals.')
+          : 'One way to use this month\'s room: ' + fm(left) + ' available. Build your safety buffer, keep goals on track, then review what is left for longer-term goals.')
+    : ('One place to start: set aside a clear plan for this month’s cash.');
 
   var hasInvest = false;
   for (var i = 0; i < steps.length; i++) {
@@ -9995,7 +9996,7 @@ function renderMonthPlan() {
     h += '<div style="display:flex;align-items:center;gap:12px;' + (!isLast ? 'margin-bottom:13px;padding-bottom:13px;border-bottom:1px solid var(--bd)' : '') + '">';
     h += '<div style="width:36px;height:36px;border-radius:10px;background:' + s.color + '18;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:' + s.color + '"><span class="ic ic-plan-step">' + geodeSvg(s.icon) + '</span></div>';
     h += '<div style="flex:1;min-width:0">';
-    var pr = (s.priority===1?'Priority 1':s.priority===2?'Priority 2':'Priority 3');
+    var pr = 'Step ' + (i + 1);
     h += '<div style="display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;margin-bottom:1px">';
     h += '<span style="font-size:9px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:' + s.color + '">' + pr + '</span>';
     h += '<span style="font-size:13px;font-weight:600;color:var(--tx-1);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + s.label + '</span>';
@@ -10954,7 +10955,7 @@ function geodePlanPagePrioritiesStackHtml(plan) {
   h += '<div style="background:var(--bg-surface);border:1px solid var(--bd);border-radius:16px;padding:8px 14px 14px">';
   for (var i = 0; i < steps.length; i++) {
     var s = steps[i];
-    var pr = s.priority === 1 ? 'Priority 1' : s.priority === 2 ? 'Priority 2' : 'Priority 3';
+    var pr = 'Step ' + (i + 1);
     var prog = geodePlanStepProgress(S, s);
     var bufDisp = geodePlanBufferStepDisplay(s);
     var invDisp = geodePlanInvestStepDisplay(s);
@@ -16033,7 +16034,16 @@ function geodeDupExpResolve(choice) {
   var ctx = window._geodeDupExpCtx;
   closeModal();
   window._geodeDupExpCtx = null;
-  if (!ctx || choice === 'cancel') return;
+  if (!ctx) return;
+  if (choice === 'back') {
+    if (ctx.id) {
+      openExpModal(ctx.id);
+    } else {
+      openExpModal(null, { name: ctx.nm, amount: ctx.am, cat: ctx.cat, date: ctx.edRaw, rec: ctx.rec });
+    }
+    return;
+  }
+  if (choice === 'cancel') return;
   var rmPay = choice === 'move' ? ctx.dupPaymentId : null;
   if (choice === 'move' && rmPay) {
     S.payments = (S.payments || []).filter(function(p) {
@@ -16974,6 +16984,7 @@ function openExpModal(id, opts){
   }
   var defName = e ? e.name : opts.name || '';
   var defDate = e && e.date ? e.date : opts.date ? opts.date : geodeTodayLocalISO();
+  var defRec = e ? e.rec : (opts.rec === 'yes' || opts.rec === 'annual' ? opts.rec : 'no');
   h += '<input type="hidden" id="geode_exp_edit_id" value="' + (e ? String(e.id).replace(/"/g, '&quot;') : '') + '" />';
   h+=
     '<div class="field"><label>Name</label><input id="en" class="fi" list="geode-dl-exp-names" placeholder="'+namePh+'" value="'+String(defName).replace(/"/g, '&quot;')+'" oninput="try{geodeExpModalImpactRefresh()}catch(e){}" />' +
@@ -16992,11 +17003,11 @@ function openExpModal(id, opts){
     '" oninput="try{geodeExpModalImpactRefresh()}catch(e){}" /></div></div>';
   h+=
     '<div class="field" style="opacity:0.92"><label>Recurring?</label><select id="er" class="fi" onchange="try{geodeExpModalImpactRefresh()}catch(e){}"><option value="no"' +
-    (!e || e.rec !== 'yes' ? ' selected' : '') +
+    (defRec !== 'yes' && defRec !== 'annual' ? ' selected' : '') +
     '>One-time</option><option value="yes"' +
-    (e && e.rec === 'yes' ? ' selected' : '') +
+    (defRec === 'yes' ? ' selected' : '') +
     '>Monthly — repeats each month</option><option value="annual"' +
-    (e && e.rec === 'annual' ? ' selected' : '') +
+    (defRec === 'annual' ? ' selected' : '') +
     '>Annual — once a year</option></select></div>';
   h += '<div id="geode-exp-impact-host"></div>';
   h+='<button class="btn btn-p" onclick="saveExp(\''+(id||'')+'\')">Save</button>';
@@ -17048,9 +17059,9 @@ function saveExp(id){
       escHtmlLite(String(dupP.name || nm)) +
       '</strong> as a payment. Adding it as an expense will count it twice.</div>' +
       '<div style="display:flex;flex-direction:column;gap:8px">' +
-      '<button type="button" class="btn btn-p" onclick="geodeDupExpResolve(\'move\')">Move to Spending (recommended)</button>' +
+      '<button type="button" class="btn btn-p" onclick="geodeDupExpResolve(\'move\')">Move to Spending</button>' +
       '<button type="button" class="btn btn-s" onclick="geodeDupExpResolve(\'both\')">Keep both</button>' +
-      '<button type="button" class="btn btn-s" onclick="geodeDupExpResolve(\'cancel\')">Cancel</button>' +
+      '<button type="button" class="btn btn-s" onclick="geodeDupExpResolve(\'back\')">Go back and keep editing</button>' +
       '</div>';
     openModal(_mhE);
     return;
