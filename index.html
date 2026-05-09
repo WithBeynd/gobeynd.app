@@ -128,7 +128,7 @@ body.light .pill.ac{color:#6a4cb8 !important;border-color:rgba(106,76,184,0.35) 
 /* GRID */
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
 .tile{background:#101020;border:1px solid rgba(255,255,255,0.05);border-radius:16px;padding:13px;cursor:pointer}
-.tile-lb{font-size:10px;color:rgba(189,183,220,0.62);text-transform:uppercase;letter-spacing:1.0px;margin-bottom:5px;font-weight:650}
+.tile-lb{font-size:10px;color:rgba(189,183,220,0.62);text-transform:uppercase;letter-spacing:1.0px;margin-bottom:5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* HERO */
 .hero{background:linear-gradient(155deg,#180a32,#0c1426 50%,#091820);border-radius:22px;padding:22px;margin-bottom:12px;border:1px solid rgba(155,127,232,0.12);position:relative;overflow:hidden}
@@ -13988,7 +13988,7 @@ function rPlan() {
     try {
       var _sL = '';
       var _iCtx = geodeGetIncomeContext(S);
-      var _hD = S.debts && S.debts.some(function(d){ return Number(d.balance||0)>0; });
+      var _hD = !!selectWorstHighAprDebt(S.debts, 10) && calcMonthlyLeftover(S) > 50;
       var _lft = calcMonthlyLeftover(S);
       var _bT = Number(S.emergencyBuffer||0);
       var _bS = Number(S.bufferSaved||0);
