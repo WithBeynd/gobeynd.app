@@ -365,7 +365,7 @@ canvas{display:block}
       <div class="ob-dots"><div class="od on"></div><div class="od"></div><div class="od"></div></div>
       <div class="ob-ey">Welcome to Beynd</div>
       <div class="ob-h">Your wealth,<br><em>beautifully</em> clear.</div>
-      <div class="ob-p">Financial coaching that guides you before every decision that matters.</div>
+      <div class="ob-p">Financial decision coaching — so you always know what to do with your money, and why.<br><span style="font-size:10px;opacity:0.72">Beynd is a personal finance tool, not regulated financial advice.</span></div>
       <div style="display:flex;align-items:center;gap:8px;margin:14px 0 0;padding:10px 14px;border-radius:12px;background:rgba(52,213,160,0.07);border:1px solid rgba(52,213,160,0.18)">
         <svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="flex-shrink:0"><path d="M10 2L3 5v5c0 4.4 3 8.1 7 9 4-0.9 7-4.6 7-9V5L10 2z" stroke="#34d5a0" stroke-width="1.5" stroke-linejoin="round"/></svg>
         <div style="font-size:11px;color:rgba(52,213,160,0.9);line-height:1.4;font-weight:500">Your data never leaves this phone. No account, no server, no sharing.</div>
@@ -17447,6 +17447,16 @@ function rMe() {
   h+='<div class=\"card\" style=\"margin-bottom:14px;padding:0;overflow:hidden\">';
   h+=geodeBuildUserGuideHtml();
   h+='</div>';
+  h+='<div class="sh">About</div>';
+  h+='<div class="card" style="margin-bottom:14px">';
+  h+='<div style="font-size:14px;font-weight:700;color:var(--tx-1);margin-bottom:2px">Beynd</div>';
+  h+='<div style="font-size:11px;color:var(--tx-3);margin-bottom:10px">Financial Decision Coaching &middot; Version 2.0 &middot; &copy; 2026 Beynd Ltd</div>';
+  h+='<div style="font-size:11px;color:var(--tx-2);line-height:1.6;margin-bottom:10px">Beynd is a personal finance tool, not a financial adviser. Nothing in the app is regulated financial advice. Your data stays on this device. No account. No server.</div>';
+  h+='<div style="display:flex;flex-direction:column;gap:5px;font-size:11px">';
+  h+='<a href="https://withbeynd.com/#terms" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Terms of Service</a>';
+  h+='<a href="https://withbeynd.com/#privacy" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Privacy Policy</a>';
+  h+='<a href="mailto:hello@withbeynd.com" style="color:#9b7fe8;text-decoration:none">hello@withbeynd.com</a>';
+  h+='</div></div>';
   h+='<div class="sh" style="color:#f07070">Danger Zone</div><div class="card" style="border-color:rgba(240,112,112,0.12)">';
   h+='<div style="font-size:11px;color:var(--tx-3);margin-bottom:11px">Permanently deletes all Beynd data from this device.</div>';
   h+='<button onclick="resetAll()" style="width:100%;background:rgba(240,112,112,0.1);border:1px solid rgba(240,112,112,0.18);border-radius:11px;padding:11px;color:#f07070;font-size:13px;font-weight:700;cursor:pointer;font-family:-apple-system,sans-serif">Reset All Data</button></div>';
@@ -17796,6 +17806,8 @@ function geodeIntelSetPlanMode(mode) {
 /** Build the Beynd Intelligence card as an HTML string.
  *  data = parsed API response object, or null when offline / not yet fetched. */
 function geodeIntelBuildCardHtml(data) {
+  // No bank connection yet — render nothing until real data arrives.
+  if (!data) return '';
 
   function fieldRow(label, rawVal) {
     var v = (rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== '')
@@ -18534,7 +18546,7 @@ function geodeIntelApplyBankEstimate() {
   try {
     var d = _geodeIntelData;
     if (!d || typeof d !== 'object') {
-      alert('Reality is ready, but manual plan input mapping needs to be connected safely.');
+      toast('Bank-powered plan updates are not available yet.', 'info');
       return;
     }
     var money = (d.moneySnapshot && typeof d.moneySnapshot === 'object') ? d.moneySnapshot : {};
@@ -18545,7 +18557,7 @@ function geodeIntelApplyBankEstimate() {
 
     // Guard: respect same conditions as the button visibility check.
     if (isNaN(inc) || inc <= 0 || conf === 'LOW') {
-      alert('Reality is ready, but manual plan input mapping needs to be connected safely.');
+      toast('Bank-powered plan updates are not available yet.', 'info');
       return;
     }
 
@@ -18586,16 +18598,14 @@ function geodeIntelApplyBankEstimate() {
 
     // Step 4: inform the user what was and was not updated.
     if (hasUnmapped) {
-      alert(
-        'Your income has been updated. Fixed commitments and spending categories will be mapped in a future update.'
-      );
+      toast('Your income has been updated.', 'ok');
     } else {
       toast('Plan updated to reflect your actual income.', 'ok');
     }
   } catch (_e) {
     // Fail silently on the dashboard — no partial state mutation reaches here
     // unless save() was already called, in which case the income update is valid.
-    alert('Your income has been updated. Fixed commitments and spending categories will be mapped in a future update.');
+    toast('Your income has been updated.', 'ok');
   }
 }
 
