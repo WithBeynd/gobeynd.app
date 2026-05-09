@@ -17062,7 +17062,7 @@ function openInvModal(id){
     h += '<option value="' + glg.id + '"' + (e && e.goalId === glg.id ? ' selected' : '') + '>' + escHtmlLite(glg.name || 'Goal') + '</option>';
   }
   h += '</select>';
-  h += '<div style="font-size:10px;color:var(--tx-3);margin-top:5px;line-height:1.4">When linked and the balance is above zero, that goal\u2019s progress uses investment balances only (Saved So Far on the goal is ignored until you unlink or balances return to zero).</div>';
+  h += '<div style="font-size:10px;color:var(--tx-3);margin-top:5px;line-height:1.4">Choose a goal here if this investment should count toward that goal\u2019s progress. Selecting \u201cGoal-linked\u201d under \u201cWhat is this for?\u201d does not link it by itself. When linked, goal progress uses the investment balance \u2014 not Saved So Far \u2014 to avoid double counting.</div>';
   h += '</div>';
   h+='<div style="font-size:10px;color:rgba(189,183,220,0.75);margin:-2px 0 8px;line-height:1.35">Optional</div>';
   h+=
@@ -17092,29 +17092,46 @@ function saveInv(id){
     toast('Enter an amount before saving.', 'warn');
     return;
   }
-  var prevInv = id ? S.investments.filter(function (x) { return x.id === id; })[0] : null;
-  var invBeforeLocal = prevInv ? toNum(prevInv.balance) : 0;
-  setLastSnapshotBeforeChange();
-  var _invGoalId = String(((document.getElementById('xgoalid')||{}).value)||'').trim();
-  var obj={name:nm,type:(document.getElementById('xtype')||{}).value||'other',balance:Number(bal),returns:Number((document.getElementById('xr')||{}).value)||0,platform:(document.getElementById('xp')||{}).value||'',notes:(document.getElementById('xo')||{}).value||'',purpose:String(((document.getElementById('xpurpose')||{}).value)||'').trim(),horizon:String(((document.getElementById('xhorizon')||{}).value)||'').trim(),contributionStyle:String(((document.getElementById('xcs')||{}).value)||'').trim(),goalId:_invGoalId};
-  obj.baseBalance = obj.balance;
-  if (!obj.purpose) delete obj.purpose;
-  if (!obj.horizon) delete obj.horizon;
-  if (!obj.contributionStyle) delete obj.contributionStyle;
-  if (!obj.goalId) delete obj.goalId;
-  var msg = '';
-  if(id){for(var i=0;i<S.investments.length;i++){if(S.investments[i].id===id){Object.assign(S.investments[i],obj);break;}}msg='Investment updated.';}
-  else{obj.id=uid();S.investments.push(obj);msg='Investment added.';}
-  var invRowId = id || obj.id;
-  geodeRecomputeBalancesFromPayments();
-  var invRowAfter = S.investments.filter(function (x) { return x.id === invRowId; })[0];
-  var invAfterLocal = invRowAfter ? toNum(invRowAfter.balance) : 0;
-  var invDeltaLocal = invAfterLocal - invBeforeLocal;
-  if (invDeltaLocal !== 0) appendActivityLog('invest', invDeltaLocal, { investId: invRowId, source: 'balance_update' });
-  save();
-  geodeSuccessToast(geodeStageLToastAfterSave(msg, 'invest', { _seed: Date.now() }));
-  closeModal();
-  render();
+  // Read all DOM values upfront — required before any modal swap that would destroy the form.
+  var _invType    = (document.getElementById('xtype')||{}).value||'other';
+  var _invR       = Number((document.getElementById('xr')||{}).value)||0;
+  var _invP       = (document.getElementById('xp')||{}).value||'';
+  var _invO       = (document.getElementById('xo')||{}).value||'';
+  var _invPurpose = String(((document.getElementById('xpurpose')||{}).value)||'').trim();
+  var _invHorizon = String(((document.getElementById('xhorizon')||{}).value)||'').trim();
+  var _invCs      = String(((document.getElementById('xcs')||{}).value)||'').trim();
+  var _invGoalId  = String(((document.getElementById('xgoalid')||{}).value)||'').trim();
+  function _doSaveInv() {
+    var prevInv = id ? S.investments.filter(function(x){ return x.id===id; })[0] : null;
+    var invBeforeLocal = prevInv ? toNum(prevInv.balance) : 0;
+    setLastSnapshotBeforeChange();
+    var obj={name:nm,type:_invType,balance:Number(bal),returns:_invR,platform:_invP,notes:_invO,purpose:_invPurpose,horizon:_invHorizon,contributionStyle:_invCs,goalId:_invGoalId};
+    obj.baseBalance = obj.balance;
+    if (!obj.purpose) delete obj.purpose;
+    if (!obj.horizon) delete obj.horizon;
+    if (!obj.contributionStyle) delete obj.contributionStyle;
+    if (!obj.goalId) delete obj.goalId;
+    var msg = '';
+    if(id){for(var i=0;i<S.investments.length;i++){if(S.investments[i].id===id){Object.assign(S.investments[i],obj);break;}}msg='Investment updated.';}
+    else{obj.id=uid();S.investments.push(obj);msg='Investment added.';}
+    var invRowId = id || obj.id;
+    geodeRecomputeBalancesFromPayments();
+    var invRowAfter = S.investments.filter(function(x){ return x.id===invRowId; })[0];
+    var invAfterLocal = invRowAfter ? toNum(invRowAfter.balance) : 0;
+    var invDeltaLocal = invAfterLocal - invBeforeLocal;
+    if (invDeltaLocal !== 0) appendActivityLog('invest', invDeltaLocal, { investId: invRowId, source: 'balance_update' });
+    save();
+    geodeSuccessToast(geodeStageLToastAfterSave(msg, 'invest', { _seed: Date.now() }));
+    closeModal();
+    render();
+  }
+  // Guard: warn if user chose Goal-linked purpose but did not select a goal.
+  // Uses toast so the investment form stays open with all entered values intact.
+  if (_invPurpose === 'goal-linked' && !_invGoalId) {
+    toast('Choose a goal to link this investment, or change \u201cWhat is this for?\u201d before saving.', 'warn');
+    return;
+  }
+  _doSaveInv();
 }
 function delInv(id){
   geodeConfirm('Remove this investment from Beynd? Scheduled contributions linked to it will also be removed. Nothing is sold or moved. Any goal using this investment for progress will show its manually saved amount instead.', function() {
