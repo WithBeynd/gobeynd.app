@@ -14432,7 +14432,7 @@ function geodeShouldCascadeDeleteLinkedPayment(p, idStr, kind) {
 }
 
 function delGoal(id) {
-  geodeConfirm('Remove this goal? Scheduled contributions linked to it will also be removed from Beynd. Paid one-time contributions stay in your history. This does not move any money.', function() {
+  geodeConfirm('Remove this goal? Scheduled contributions linked to it will also be removed from Beynd. Paid one-time contributions stay in your history. Any investment linked to this goal will stay in Investments but will no longer count toward this goal. This does not move any money.', function() {
     var idStr = String(id);
     S.goals = S.goals.filter(function(g) { return String(g.id) !== idStr; });
     var inv = S.investments || [];
