@@ -295,6 +295,36 @@ canvas{display:block}
 .pl-status.done{border-color:rgba(52,213,160,0.18);background:rgba(52,213,160,0.06);color:rgba(52,213,160,0.82)}
 .pl-status.inp{border-color:rgba(245,194,52,0.16);background:rgba(245,194,52,0.06);color:rgba(245,194,52,0.78)}
 
+/* Plan step detail drill-through (Stage 21B — layout only) */
+.geode-plan-detail-wrap{padding:20px 18px 28px}
+.geode-plan-detail-back{margin-bottom:14px;width:100%}
+.geode-plan-detail-card{border-radius:16px;border:1px solid var(--bd);background:var(--bg-surface);padding:14px 16px;margin-bottom:14px}
+.geode-plan-detail-card-summary{border-color:rgba(155,127,232,0.22);background:rgba(155,127,232,0.06)}
+.geode-plan-detail-kicker{font-size:11px;color:var(--tx-3);margin-bottom:6px;line-height:1.4}
+.geode-plan-detail-title{font-size:18px;font-weight:700;color:var(--tx-1);line-height:1.3;margin-bottom:8px}
+.geode-plan-detail-amount{font-size:22px;font-weight:800;line-height:1.2;margin-bottom:8px}
+.geode-plan-detail-status{margin-bottom:10px}
+.geode-plan-detail-trust{font-size:11px;color:var(--tx-3);line-height:1.45}
+.geode-plan-detail-card-h{font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px}
+.geode-plan-detail-metricrow{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px;color:rgba(237,234,255,0.9);margin-bottom:8px}
+.geode-plan-detail-metricrow span:first-child{color:var(--tx-3)}
+.geode-plan-detail-pbar{height:8px;border-radius:999px;background:rgba(255,255,255,0.06);overflow:hidden;margin-top:12px}
+.geode-plan-detail-pfill{height:100%;border-radius:999px;background:linear-gradient(90deg,#9b7fe8,#60a5fa)}
+.geode-plan-detail-muted{font-size:12px;color:var(--tx-3);line-height:1.5}
+.geode-plan-detail-why{font-size:12px;color:rgba(237,234,255,0.88);line-height:1.5}
+.geode-plan-detail-chiprow{display:flex;flex-wrap:wrap;gap:8px}
+.geode-plan-detail-chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);color:rgba(237,234,255,0.88)}
+.geode-plan-detail-chip b{font-weight:600;color:rgba(196,171,255,0.95)}
+.geode-plan-detail-more{margin-bottom:14px;padding:12px 14px;border-radius:14px;border:1px solid var(--bd);background:rgba(255,255,255,0.02)}
+.geode-plan-detail-more summary{cursor:pointer;font-size:12px;font-weight:600;color:rgba(196,171,255,0.95);list-style:none;outline:none}
+.geode-plan-detail-more summary::-webkit-details-marker{display:none}
+.geode-plan-detail-more-body{margin-top:10px;font-size:11px;color:rgba(237,234,255,0.82);line-height:1.55}
+.geode-plan-detail-more-body .geode-plan-detail-noteblk{margin-top:8px}
+.geode-plan-detail-apply{width:100%;margin-top:4px}
+.geode-plan-detail-impact-note{font-size:11px;color:var(--tx-3);line-height:1.45;margin-top:10px}
+.geode-plan-detail-impact-note + .geode-plan-detail-impact-note{margin-top:8px}
+.geode-plan-detail-card-assume{border-color:rgba(255,255,255,0.06);background:rgba(255,255,255,0.02)}
+
 @keyframes fi{from{opacity:0}to{opacity:1}}
 @keyframes su{from{transform:translateY(60px);opacity:0}to{transform:translateY(0);opacity:1}}
 </style>
@@ -10164,6 +10194,21 @@ function geodePlanPageDebtFromStep(step) {
   return selectWorstHighAprDebt(S.debts, 10);
 }
 
+/** Plan step detail drill-through: resolve debt by step label (display-only; name match only). */
+function geodePlanDetailDebtFromStep(step) {
+  if (!step) return null;
+  var hi = geodePlanPageDebtFromStep(step);
+  if (hi) return hi;
+  var lb = String(step.label || '');
+  if (lb.indexOf('Pay down ') !== 0) return null;
+  var pnm = lb.slice('Pay down '.length).trim();
+  var debts = S.debts || [];
+  for (var _pdi = 0; _pdi < debts.length; _pdi++) {
+    if (debts[_pdi] && String(debts[_pdi].name || '').trim() === pnm) return debts[_pdi];
+  }
+  return null;
+}
+
 /** Plain text for deduping plan step copy (display-only). */
 function geodePlanPagePlainStepText(s) {
   return String(s || '')
@@ -11002,7 +11047,7 @@ function geodeOverBudgetPlanBlockHtml(left) {
   return h;
 }
 
-/** Plan tab: full-screen-style step detail shell (display-only; Stage 20C). */
+/** Plan tab: full-screen-style step detail shell (display-only; layout 21B, debt impact 22B). */
 function geodePlanStepDetailPageHtml(plan, ix) {
   plan = plan || {};
   var steps = plan.steps || [];
@@ -11034,57 +11079,267 @@ function geodePlanStepDetailPageHtml(plan, ix) {
   var statusCls = prog.phase === 'done' ? 'pl-status done' : prog.phase === 'partial' ? 'pl-status inp' : 'pl-status';
   var stepY = steps.length;
   var stepX = ix + 1;
-  var whyPlain = geodePlanPagePlainStepText(step.why);
-  if (!whyPlain) {
-    whyPlain =
-      'This is the step Beynd is surfacing at position ' +
-      stepX +
-      ' of your plan sequence this month. Review the details below.';
+  var whySrc = geodePlanPagePlainStepText(step.why);
+  var detailDebt = geodePlanDetailDebtFromStep(step);
+  var whyShort;
+  if (detailDebt) {
+    var wLead = geodePlanPageDebtWhyLead(step);
+    if (wLead && !/\bfastest\b/i.test(wLead)) {
+      whyShort = geodeHomeInsightShortLine(wLead, 180);
+    } else if (whySrc) {
+      var cutWhy = whySrc.split(/[—–-]\s*about\s/i)[0].trim();
+      whyShort = geodeHomeInsightShortLine(cutWhy || whySrc, 180);
+    } else {
+      whyShort =
+        String(step.label || '').indexOf('Reduce high') === 0
+          ? 'Based on what you entered, this debt is where Beynd sees the strongest interest drag right now.'
+          : 'Based on what you entered, Beynd is steering spare cash toward this balance in your debt-focused plan.';
+    }
+  } else {
+    whyShort = whySrc
+      ? geodeHomeInsightShortLine(whySrc, 200)
+      : 'This step is surfaced because it lines up with what you entered and how Beynd is ordering this month\u2019s plan.';
   }
   var explainPlain = step.explain ? geodePlanPagePlainStepText(step.explain) : '';
   var notePlain = geodePlanPagePlainStepText(step.note);
-  var usedIntro =
-    'Based on what you entered, Beynd uses your income, spending, debts, goals, and plan style to build this month\u2019s steps. What follows is what this step is carrying forward.';
-  var usedBody = '';
-  if (explainPlain) usedBody += explainPlain;
-  if (notePlain) usedBody += (usedBody ? ' ' : '') + notePlain;
-  if (!usedBody) usedBody = 'No extra calculation notes on this step beyond the amount and status shown above.';
-  var h = '<div style="padding:20px 18px 28px">';
+  var moreLen = explainPlain.length + notePlain.length;
+  var longMore =
+    (explainPlain && explainPlain.length > 100) ||
+    (notePlain && notePlain.length > 100) ||
+    moreLen > 180;
+
+  var incV = toNum(S.income);
+  var spendV = geodeMonthlyExpenseTotal(S);
+  var debtCt = 0;
+  var goalsCt = 0;
+  var di, gi;
+  var dList = S.debts || [];
+  var gList = S.goals || [];
+  for (di = 0; di < dList.length; di++) {
+    if (dList[di]) debtCt++;
+  }
+  for (gi = 0; gi < gList.length; gi++) {
+    if (gList[gi]) goalsCt++;
+  }
+  var ps = S.planStrategy || 'balanced';
+  var styleChip =
+    ps === 'debt' ? 'Debt-focused' : ps === 'growth' ? 'Growth' : 'Balanced';
+
+  var h = '<div class="geode-plan-detail-wrap">';
   h +=
-    '<button type="button" class="btn btn-s" style="margin-bottom:14px;width:100%" onclick="geodeClosePlanStepDetail()">Back to monthly plan</button>';
+    '<button type="button" class="btn btn-s geode-plan-detail-back" onclick="geodeClosePlanStepDetail()">Back to monthly plan</button>';
+
+  h += '<div class="geode-plan-detail-card geode-plan-detail-card-summary">';
+  h += '<div class="geode-plan-detail-kicker">' + escHtmlLite('Step ' + stepX + ' of ' + stepY) + '</div>';
+  h += '<div class="geode-plan-detail-title">' + escHtmlLite(labelShown) + '</div>';
   h +=
-    '<div style="font-size:11px;color:var(--tx-3);margin-bottom:8px;line-height:1.45">' +
-    escHtmlLite('Step ' + stepX + ' of ' + stepY) +
-    '</div>';
-  h +=
-    '<div style="font-size:18px;font-weight:700;color:var(--tx-1);line-height:1.3;margin-bottom:6px">' +
-    escHtmlLite(labelShown) +
-    '</div>';
-  h +=
-    '<div style="font-size:22px;font-weight:800;color:' +
+    '<div class="geode-plan-detail-amount" style="color:' +
     (step.color || '#9b7fe8') +
-    ';margin-bottom:8px">' +
+    '">' +
     escHtmlLite(amtShown) +
     '</div>';
-  h += '<div style="margin-bottom:16px"><span class="' + statusCls + '">' + escHtmlLite(statusLb) + '</span></div>';
+  h += '<div class="geode-plan-detail-status"><span class="' + statusCls + '">' + escHtmlLite(statusLb) + '</span></div>';
   h +=
-    '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Why this step</div>';
-  h +=
-    '<div style="font-size:12px;color:rgba(237,234,255,0.88);line-height:1.55;margin-bottom:18px">' +
-    escHtmlLite(whyPlain) +
+    '<div class="geode-plan-detail-trust">' +
+    escHtmlLite('Beynd is reading this as the next useful move from your current setup.') +
     '</div>';
+  h += '</div>';
+
+  h += '<div class="geode-plan-detail-card">';
+  h += '<div class="geode-plan-detail-card-h">Impact snapshot</div>';
+  if (detailDebt) {
+    if (prog.suggested > 0) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
+        escHtmlLite(fm(prog.suggested)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Logged this month</span><span>' +
+        escHtmlLite(fm(prog.applied)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Remaining on this step</span><span>' +
+        escHtmlLite(fm(prog.remaining)) +
+        '</span></div>';
+      var pctD = Math.round(Math.min(100, Math.max(0, prog.ratio * 100)));
+      h +=
+        '<div class="geode-plan-detail-pbar" role="progressbar" aria-valuenow="' +
+        pctD +
+        '" aria-valuemin="0" aria-valuemax="100">';
+      h += '<div class="geode-plan-detail-pfill" style="width:' + pctD + '%"></div></div>';
+    } else {
+      h +=
+        '<div class="geode-plan-detail-muted">' +
+        escHtmlLite('No plan amount on this step — interest context still applies to this balance.') +
+        '</div>';
+    }
+    var miEst = mintCost(detailDebt);
+    h +=
+      '<div class="geode-plan-detail-metricrow" style="margin-top:10px"><span>Estimated interest/month</span><span>' +
+      escHtmlLite('about ' + fm(miEst) + '/month') +
+      '</span></div>';
+    var extraPlan = toNum(step.amount);
+    var aprN = toNum(detailDebt.apr);
+    if (extraPlan > 0 && aprN > 0) {
+      var redMo = (extraPlan * aprN) / 100 / 12;
+      h +=
+        '<div class="geode-plan-detail-impact-note">' +
+        escHtmlLite(
+          'If this reduces principal, future monthly interest drag could fall by about ' + fm(redMo) + '.'
+        ) +
+        '</div>';
+    } else if (extraPlan > 0) {
+      h +=
+        '<div class="geode-plan-detail-impact-note">' +
+        escHtmlLite(
+          'If this amount goes directly to principal, it reduces the balance used for future interest calculations.'
+        ) +
+        '</div>';
+    }
+    if (step.debtProjectionNote) {
+      var dpn = geodePlanPagePlainStepText(step.debtProjectionNote);
+      if (dpn) {
+        h += '<div class="geode-plan-detail-impact-note">' + escHtmlLite(dpn) + '</div>';
+      }
+    } else {
+      var minPD = toNum(detailDebt.minp);
+      if (minPD > 0 && extraPlan > 0) {
+        var dpX = getDebtProjection(detailDebt, minPD, extraPlan);
+        if (dpX && dpX.monthsSaved != null && dpX.monthsSaved >= 1) {
+          var ms = dpX.monthsSaved;
+          h +=
+            '<div class="geode-plan-detail-impact-note">' +
+            escHtmlLite(
+              'Beynd\u2019s simple projection suggests this could shorten payoff time by about ' +
+                ms +
+                ' month' +
+                (ms === 1 ? '' : 's') +
+                '.'
+            ) +
+            '</div>';
+        }
+      }
+    }
+  } else {
+    if (prog.suggested > 0) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
+        escHtmlLite(fm(prog.suggested)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Logged this month</span><span>' +
+        escHtmlLite(fm(prog.applied)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Remaining on this step</span><span>' +
+        escHtmlLite(fm(prog.remaining)) +
+        '</span></div>';
+      var pct = Math.round(Math.min(100, Math.max(0, prog.ratio * 100)));
+      h +=
+        '<div class="geode-plan-detail-pbar" role="progressbar" aria-valuenow="' +
+        pct +
+        '" aria-valuemin="0" aria-valuemax="100">';
+      h += '<div class="geode-plan-detail-pfill" style="width:' + pct + '%"></div></div>';
+    } else {
+      h +=
+        '<div class="geode-plan-detail-muted">' +
+        escHtmlLite(
+          'No fixed amount on this step. When you act, Beynd tracks what you log against what the plan suggested.'
+        ) +
+        '</div>';
+    }
+  }
+  h += '</div>';
+
+  if (detailDebt) {
+    h += '<div class="geode-plan-detail-card">';
+    h += '<div class="geode-plan-detail-card-h">Debt facts</div>';
+    h +=
+      '<div class="geode-plan-detail-metricrow"><span>Balance</span><span>' +
+      escHtmlLite(fm(toNum(detailDebt.balance))) +
+      '</span></div>';
+    var aprDV = detailDebt.apr;
+    var aprShow =
+      aprDV === '' || aprDV == null || (typeof aprDV === 'number' && isNaN(aprDV))
+        ? '\u2014'
+        : String(toNum(aprDV)) + '%';
+    h +=
+      '<div class="geode-plan-detail-metricrow"><span>APR</span><span>' + escHtmlLite(aprShow) + '</span></div>';
+    var mpD = toNum(detailDebt.minp);
+    h +=
+      '<div class="geode-plan-detail-metricrow"><span>Minimum payment</span><span>' +
+      escHtmlLite(mpD > 0 ? fm(mpD) : '\u2014') +
+      '</span></div>';
+    h += '</div>';
+  }
+
+  h += '<div class="geode-plan-detail-card">';
+  h += '<div class="geode-plan-detail-card-h">Why this step</div>';
+  h += '<div class="geode-plan-detail-why">' + escHtmlLite(whyShort) + '</div>';
+  h += '</div>';
+
+  if (!detailDebt) {
+    h += '<div class="geode-plan-detail-card">';
+    h += '<div class="geode-plan-detail-card-h">What Beynd used</div>';
+    h += '<div class="geode-plan-detail-chiprow">';
+    h +=
+      '<span class="geode-plan-detail-chip"><b>Income</b> ' +
+      escHtmlLite(incV > 0 ? fm(incV) : 'Not added yet') +
+      '</span>';
+    h +=
+      '<span class="geode-plan-detail-chip"><b>Spending</b> ' +
+      escHtmlLite(spendV > 0 ? fm(spendV) : geodeHasMeaningfulMonthlyExpenses(S) ? 'Added data' : 'Not added yet') +
+      '</span>';
+    h +=
+      '<span class="geode-plan-detail-chip"><b>Debts</b> ' +
+      escHtmlLite(debtCt ? debtCt + ' added' : 'None added') +
+      '</span>';
+    h +=
+      '<span class="geode-plan-detail-chip"><b>Goals</b> ' +
+      escHtmlLite(goalsCt ? goalsCt + ' added' : 'None added') +
+      '</span>';
+    h +=
+      '<span class="geode-plan-detail-chip"><b>Plan style</b> ' + escHtmlLite(styleChip) + '</span>';
+    h += '</div></div>';
+  }
+
+  if (detailDebt) {
+    h += '<div class="geode-plan-detail-card geode-plan-detail-card-assume">';
+    h += '<div class="geode-plan-detail-card-h">Assumptions</div>';
+    h +=
+      '<div class="geode-plan-detail-muted">' +
+      escHtmlLite(
+        'This estimate assumes the extra payment reduces principal, APR stays similar, and no new charges are added. Your lender\u2019s actual interest calculation may differ.'
+      ) +
+      '</div>';
+    h +=
+      '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
+      escHtmlLite('Beynd used your income, spending, debt details, and plan style.') +
+      '</div>';
+    h += '</div>';
+  }
+
+  if (longMore && (explainPlain || notePlain)) {
+    h += '<details class="geode-plan-detail-more">';
+    h += '<summary>More detail</summary>';
+    h += '<div class="geode-plan-detail-more-body">';
+    if (explainPlain) {
+      h +=
+        '<div><span style="color:var(--tx-3);font-weight:600">Context</span><div class="geode-plan-detail-noteblk">' +
+        escHtmlLite(explainPlain) +
+        '</div></div>';
+    }
+    if (notePlain) {
+      h +=
+        '<div><span style="color:var(--tx-3);font-weight:600">Note</span><div class="geode-plan-detail-noteblk">' +
+        escHtmlLite(notePlain) +
+        '</div></div>';
+    }
+    h += '</div></details>';
+  }
+
   h +=
-    '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">What Beynd used</div>';
-  h +=
-    '<div style="font-size:11px;color:rgba(237,234,255,0.72);line-height:1.5;margin-bottom:10px">' +
-    escHtmlLite(usedIntro) +
-    '</div>';
-  h +=
-    '<div style="font-size:12px;color:rgba(237,234,255,0.88);line-height:1.55;margin-bottom:20px">' +
-    escHtmlLite(geodeHomeInsightShortLine(usedBody, 520)) +
-    '</div>';
-  h +=
-    '<button type="button" class="btn btn-p" onclick="geodePlanApplyPriorityStep(' +
+    '<button type="button" class="btn btn-p geode-plan-detail-apply" onclick="geodePlanApplyPriorityStep(' +
     escHtmlLite(String(ix)) +
     ')">Apply this step</button>';
   h += '</div>';
