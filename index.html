@@ -288,14 +288,9 @@ canvas{display:block}
 .frd{height:4px;border-radius:2px;background:#202038;flex:1}
 .frd.on{background:#9b7fe8;flex:2}
 
-/* PLAN PAGE: progressive disclosure for long priority stacks (display-only) */
+/* PLAN PAGE: step rows; depth via View details drill-through (display-only) */
 .pl-pri{position:relative}
-.pl-head{cursor:pointer;user-select:none;-webkit-user-select:none;outline:none}
-.pl-head:active{opacity:0.96}
-.pl-body{max-height:0;overflow:hidden;opacity:0;transition:max-height 180ms ease,opacity 180ms ease}
-.pl-pri.open .pl-body{max-height:1800px;opacity:1}
 .pl-collapsed{display:block}
-.pl-pri.open .pl-collapsed{display:none}
 .pl-status{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;letter-spacing:0.3px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);color:rgba(189,183,220,0.72)}
 .pl-status.done{border-color:rgba(52,213,160,0.18);background:rgba(52,213,160,0.06);color:rgba(52,213,160,0.82)}
 .pl-status.inp{border-color:rgba(245,194,52,0.16);background:rgba(245,194,52,0.06);color:rgba(245,194,52,0.78)}
@@ -5853,6 +5848,8 @@ function saveInc() {
 
 // ── TABS ──────────────────────────────────────────
 var tab = 'home', msub = 'overview', dchart = 'nw', xinv = 'isa';
+/** Runtime-only Plan step drill-through index (never persisted). */
+window._geodePlanDetailIx = null;
 function goTab(t) {
   if (typeof _geodeBootstrap !== 'undefined' && !_geodeBootstrap) {
     markActive();
@@ -11005,20 +11002,108 @@ function geodeOverBudgetPlanBlockHtml(left) {
   return h;
 }
 
+/** Plan tab: full-screen-style step detail shell (display-only; Stage 20C). */
+function geodePlanStepDetailPageHtml(plan, ix) {
+  plan = plan || {};
+  var steps = plan.steps || [];
+  var step = steps[ix];
+  if (!step) return '';
+  var prog = geodePlanStepProgress(S, step);
+  var bufDisp = geodePlanBufferStepDisplay(step);
+  var invDisp = geodePlanInvestStepDisplay(step);
+  var labelShown = geodePlanPageStepTitle(step, prog);
+  if (step.label === 'Build your emergency fund' && geodeGetBufferReadinessState() === 'NO_BUFFER_CONTEXT' && bufDisp.label) {
+    labelShown = bufDisp.label;
+  }
+  if (step.label === 'Invest what remains' && invDisp.label != null && prog.phase === 'none') {
+    labelShown = invDisp.label;
+  }
+  var sug = toNum(step.amount);
+  var amtShown =
+    invDisp.amountStr != null
+      ? invDisp.amountStr
+      : bufDisp.amountStr != null
+        ? bufDisp.amountStr
+        : fm(step.amount);
+  if (sug > 0 && prog.phase === 'partial' && prog.remaining >= 1 && bufDisp.amountStr !== '\u2014') {
+    amtShown = fm(prog.remaining);
+  } else if (sug > 0 && prog.phase === 'done') {
+    amtShown = fm(step.amount);
+  }
+  var statusLb = prog.phase === 'done' ? 'Completed' : prog.phase === 'partial' ? 'In progress' : 'Not started';
+  var statusCls = prog.phase === 'done' ? 'pl-status done' : prog.phase === 'partial' ? 'pl-status inp' : 'pl-status';
+  var stepY = steps.length;
+  var stepX = ix + 1;
+  var whyPlain = geodePlanPagePlainStepText(step.why);
+  if (!whyPlain) {
+    whyPlain =
+      'This is the step Beynd is surfacing at position ' +
+      stepX +
+      ' of your plan sequence this month. Review the details below.';
+  }
+  var explainPlain = step.explain ? geodePlanPagePlainStepText(step.explain) : '';
+  var notePlain = geodePlanPagePlainStepText(step.note);
+  var usedIntro =
+    'Based on what you entered, Beynd uses your income, spending, debts, goals, and plan style to build this month\u2019s steps. What follows is what this step is carrying forward.';
+  var usedBody = '';
+  if (explainPlain) usedBody += explainPlain;
+  if (notePlain) usedBody += (usedBody ? ' ' : '') + notePlain;
+  if (!usedBody) usedBody = 'No extra calculation notes on this step beyond the amount and status shown above.';
+  var h = '<div style="padding:20px 18px 28px">';
+  h +=
+    '<button type="button" class="btn btn-s" style="margin-bottom:14px;width:100%" onclick="geodeClosePlanStepDetail()">Back to monthly plan</button>';
+  h +=
+    '<div style="font-size:11px;color:var(--tx-3);margin-bottom:8px;line-height:1.45">' +
+    escHtmlLite('Step ' + stepX + ' of ' + stepY) +
+    '</div>';
+  h +=
+    '<div style="font-size:18px;font-weight:700;color:var(--tx-1);line-height:1.3;margin-bottom:6px">' +
+    escHtmlLite(labelShown) +
+    '</div>';
+  h +=
+    '<div style="font-size:22px;font-weight:800;color:' +
+    (step.color || '#9b7fe8') +
+    ';margin-bottom:8px">' +
+    escHtmlLite(amtShown) +
+    '</div>';
+  h += '<div style="margin-bottom:16px"><span class="' + statusCls + '">' + escHtmlLite(statusLb) + '</span></div>';
+  h +=
+    '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Why this step</div>';
+  h +=
+    '<div style="font-size:12px;color:rgba(237,234,255,0.88);line-height:1.55;margin-bottom:18px">' +
+    escHtmlLite(whyPlain) +
+    '</div>';
+  h +=
+    '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">What Beynd used</div>';
+  h +=
+    '<div style="font-size:11px;color:rgba(237,234,255,0.72);line-height:1.5;margin-bottom:10px">' +
+    escHtmlLite(usedIntro) +
+    '</div>';
+  h +=
+    '<div style="font-size:12px;color:rgba(237,234,255,0.88);line-height:1.55;margin-bottom:20px">' +
+    escHtmlLite(geodeHomeInsightShortLine(usedBody, 520)) +
+    '</div>';
+  h +=
+    '<button type="button" class="btn btn-p" onclick="geodePlanApplyPriorityStep(' +
+    escHtmlLite(String(ix)) +
+    ')">Apply this step</button>';
+  h += '</div>';
+  return h;
+}
+
 function geodePlanPagePrioritiesStackHtml(plan) {
   var steps = plan.steps || [];
   if (!steps.length) return '';
-  // Default expansion: first step not completed (uses existing progress state only).
-  var openIx = 0;
+  // Lightweight indicator: “Step X of Y in progress” (display-only; derived from progress).
+  var stepX = 0;
   for (var oi = 0; oi < steps.length; oi++) {
-    var op = geodePlanStepProgress(S, steps[oi]);
-    if (!op || op.phase !== 'done') {
-      openIx = oi;
+    var opx = geodePlanStepProgress(S, steps[oi]);
+    if (!opx || opx.phase !== 'done') {
+      stepX = oi + 1;
       break;
     }
   }
-  // Lightweight indicator: “Step X of Y in progress” (display-only; derived from progress).
-  var stepX = openIx + 1;
+  if (stepX === 0) stepX = steps.length;
   var stepY = steps.length;
   var h =
     '<div style="margin:14px 0 8px;font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase">Plan sequence</div>';
@@ -11065,22 +11150,14 @@ function geodePlanPagePrioritiesStackHtml(plan) {
     var statusLb = prog.phase === 'done' ? 'Completed' : prog.phase === 'partial' ? 'In progress' : 'Not started';
     var statusCls = prog.phase === 'done' ? 'pl-status done' : prog.phase === 'partial' ? 'pl-status inp' : 'pl-status';
     var isLast = i === steps.length - 1;
-    var isDebtStep = s.label && String(s.label).indexOf('Reduce high') === 0;
     h +=
-      '<div class="pl-pri' +
-      (i === openIx ? ' open' : '') +
-      '" data-pl-ix="' +
+      '<div class="pl-pri" data-pl-ix="' +
       escHtmlLite(String(i)) +
       '" style="padding:12px 0;' +
       (!isLast ? 'border-bottom:1px solid var(--bd)' : '') +
       '">';
-    // Header (always visible): priority + title + amount + status. Clicking toggles disclosure.
-    h +=
-      '<div class="pl-head" role="button" tabindex="0" onclick="geodePlanTogglePriority(' +
-      escHtmlLite(String(i)) +
-      ')" onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodePlanTogglePriority(' +
-      escHtmlLite(String(i)) +
-      ');}}catch(e){}">';
+    // Summary row: priority + title + amount + status — depth via View details (Stage 20C/20E).
+    h += '<div>';
     h += '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">';
     h += '<div style="min-width:0">';
     h +=
@@ -11111,19 +11188,11 @@ function geodePlanPagePrioritiesStackHtml(plan) {
         escHtmlLite(capShown) +
         '</div>';
     }
-    h += '</div>';
-    // Expanded body (keeps existing deep explanation structure).
-    h += '<div class="pl-body">';
-    if (isDebtStep) {
-      h += geodePlanPageDebtStepDetailHtml(s, prog);
-    } else {
-      h += geodePlanPageNonDebtExplainHtml(s, bufDisp, invDisp, prog);
-    }
     h +=
       '<div style="margin-top:10px">' +
-      '<button type="button" class="btn-sm" onclick="geodePlanApplyPriorityStep(' +
-      escHtmlLite(String(i)) +
-      ')">Apply this step</button>' +
+      '<button type="button" class="btn-sm" onclick="geodeOpenPlanStepDetail(' +
+      i +
+      ')">View details</button>' +
       '</div>';
     h += '</div>';
     h += '</div>';
@@ -14141,9 +14210,37 @@ function geodePlanSetSubView(view) {
   render();
 }
 
+/** Open Plan step detail (runtime state only; not persisted). */
+function geodeOpenPlanStepDetail(ix) {
+  try {
+    window._geodePlanDetailIx = Number(ix);
+  } catch (eOpenPd) {
+    window._geodePlanDetailIx = null;
+  }
+  render();
+}
+
+function geodeClosePlanStepDetail() {
+  window._geodePlanDetailIx = null;
+  render();
+}
+
 function rPlan() {
   var c = document.getElementById('content');
   try {
+    var _pdRaw = window._geodePlanDetailIx;
+    if (_pdRaw != null && _pdRaw !== '') {
+      try {
+        var _planDet = getMonthPlan();
+        var _stDet = (_planDet && _planDet.steps) || [];
+        var _ixDet = Number(_pdRaw);
+        if (isFinite(_ixDet) && _ixDet >= 0 && _ixDet < _stDet.length && _stDet[_ixDet]) {
+          c.innerHTML = geodePlanStepDetailPageHtml(_planDet, _ixDet);
+          return;
+        }
+      } catch (_ePdView) {}
+      window._geodePlanDetailIx = null;
+    }
   var pad = 'padding:20px 18px 28px';
   var h = '';
   var _planSubView = 'monthly';
