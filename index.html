@@ -684,8 +684,17 @@ function coercePersistedBoolean(v) {
   return false;
 }
 
-function applyTheme(t){document.body.classList.toggle('light',t==='light');}
-function toggleTheme(){S.theme=S.theme==='light'?'dark':'light';applyTheme(S.theme);try{save();}catch(e){}}
+/** White/light appearance temporarily disabled (Stage 19G): never attach body.light; CSS kept for backlog. */
+function applyTheme(t){
+  document.body.classList.remove('light');
+}
+function toggleTheme(){
+  S.theme = 'dark';
+  applyTheme('dark');
+  try {
+    save();
+  } catch (e) {}
+}
 function load() {
   try {
     var d = localStorage.getItem(KEY);
@@ -770,6 +779,12 @@ function load() {
   }
   geodeNormalizeIncomeTypeFields();
   captureMonthlySnapshot();
+  if (S.theme === 'light') {
+    S.theme = 'dark';
+    try {
+      save();
+    } catch (eTh) {}
+  }
 }
 function save() {
   geodeNormalizeIncomeTypeFields();
@@ -17632,19 +17647,12 @@ function rMe() {
   sets.forEach(function(s){
     h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--bd)"><div><div style="font-size:13px;font-weight:500">'+s[0]+'</div><div style="font-size:10px;color:var(--tx-3);margin-top:1px">'+s[1]+'</div></div><button class="btn-sm" onclick="'+s[2]+'">Go</button></div>';
   });
-  var _themeIsLight = S.theme === 'light';
-  var _toggleBg = _themeIsLight ? 'rgba(106,76,184,0.9)' : 'rgba(155,127,232,0.25)';
-  var _toggleBd = _themeIsLight ? 'rgba(106,76,184,0.6)' : 'rgba(155,127,232,0.3)';
-  var _knobPos = _themeIsLight ? 'right:3px' : 'left:3px';
-  var _knobBg = _themeIsLight ? '#ffffff' : 'rgba(196,171,255,0.6)';
-  var _knobIcon = _themeIsLight ? '\u2600' : '\u263d';
-  var _themeLb = _themeIsLight ? 'White mode' : 'Dark mode';
-  h += '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--bd)">';
-  h += '<div><div style="font-size:13px;font-weight:500">Appearance</div>';
-  h += '<div style="font-size:10px;color:var(--tx-3);margin-top:1px">' + _themeLb + '</div></div>';
-  h += '<div onclick="toggleTheme();rMe()" style="cursor:pointer;width:44px;height:26px;border-radius:13px;background:' + _toggleBg + ';border:1px solid ' + _toggleBd + ';position:relative;transition:background 0.2s;flex-shrink:0">';
-  h += '<div style="position:absolute;top:3px;' + _knobPos + ';width:18px;height:18px;border-radius:50%;background:' + _knobBg + ';display:flex;align-items:center;justify-content:center;font-size:11px;transition:all 0.2s">' + _knobIcon + '</div>';
-  h += '</div></div>';
+  h += '<div style="padding:10px 0;border-bottom:1px solid var(--bd)">';
+  h += '<div style="font-size:13px;font-weight:500">Appearance</div>';
+  h += '<div style="font-size:10px;color:var(--tx-3);margin-top:1px">Dark mode</div>';
+  h +=
+    '<div style="font-size:10px;color:var(--tx-3);margin-top:6px;line-height:1.35;opacity:0.88">White mode is being redesigned.</div>';
+  h += '</div>';
   h+='<div style="height:2px"></div></div>';
   h+='<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:8px 0 14px">Data is stored locally on this device.</div>';
   h+='<div class=\"sh\">Guide & Help</div>';
