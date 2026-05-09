@@ -13,7 +13,7 @@
 <title>Beynd — Go further</title>
 <style>
 :root{
-  --bg-base:#05050f;--bg-surface:#0f0f1e;--bg-raised:#181830;--bg-card:#141428;
+  --bg-base:#07071a;--bg-surface:#0f0f1e;--bg-raised:#181830;--bg-card:#141428;
   --bd:rgba(255,255,255,0.07);--bd-em:rgba(255,255,255,0.12);
   --tx-1:#edeaff;--tx-2:rgba(189,183,220,0.78);--tx-3:#9b93b8;--tx-4:rgba(255,255,255,0.22);
   --gem:#9b7fe8;--gem-l:#c4abff;--rose:#e87ca0;
@@ -75,7 +75,7 @@ html,body{height:100%;background:var(--bg-base);overflow:hidden;font-family:-app
 #splash{position:fixed;inset:0;z-index:99;background:radial-gradient(ellipse at 50% 40%,#1c0d38,#0a0618 50%,#05050f);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;transition:opacity 0.4s}
 #splash.gone{opacity:0;pointer-events:none}
 .sp-title{font-size:46px;font-weight:700;letter-spacing:5px;margin-top:18px;font-family:Georgia,"Palatino Linotype",Palatino,serif;background:linear-gradient(135deg,#c4abff,#e87ca0);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.sp-sub{font-size:11px;letter-spacing:4px;color:#706a90;text-transform:uppercase;margin-top:8px}
+.sp-sub{font-size:11px;letter-spacing:4px;color:#9b93b8;text-transform:uppercase;margin-top:8px}
 .sp-tap{font-size:11px;color:rgba(255,255,255,0.25);margin-top:60px;letter-spacing:2px}
 
 /* HEADER */
@@ -110,7 +110,7 @@ body.light .pill.ac{color:#6a4cb8 !important;border-color:rgba(106,76,184,0.35) 
 .ic-leg{width:10px;height:10px;flex-shrink:0}
 .mo-close-ic{display:inline-flex;width:16px;height:16px;color:#edeaff}
 .ic-dep-x{width:16px;height:16px;color:#706a90}
-.tab-lb{font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:rgba(189,183,220,0.45)}
+.tab-lb{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:rgba(189,183,220,0.45)}
 .tab.on .tab-lb{color:#c4abff}
 .tab-dot{width:4px;height:4px;border-radius:2px;background:#9b7fe8;opacity:0}
 .tab.on .tab-dot{opacity:1}
@@ -128,11 +128,11 @@ body.light .pill.ac{color:#6a4cb8 !important;border-color:rgba(106,76,184,0.35) 
 /* GRID */
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
 .tile{background:#101020;border:1px solid rgba(255,255,255,0.05);border-radius:16px;padding:13px;cursor:pointer}
-.tile-lb{font-size:9px;color:rgba(189,183,220,0.62);text-transform:uppercase;letter-spacing:1.6px;margin-bottom:5px;font-weight:650}
+.tile-lb{font-size:10px;color:rgba(189,183,220,0.62);text-transform:uppercase;letter-spacing:1.0px;margin-bottom:5px;font-weight:650}
 
 /* HERO */
 .hero{background:linear-gradient(155deg,#180a32,#0c1426 50%,#091820);border-radius:22px;padding:22px;margin-bottom:12px;border:1px solid rgba(155,127,232,0.12);position:relative;overflow:hidden}
-.hero::before{content:'';position:absolute;top:-40px;right:-40px;width:180px;height:180px;border-radius:50%;background:radial-gradient(circle,rgba(155,127,232,0.15),transparent 70%)}
+.hero::before{content:'';position:absolute;top:-40px;right:-40px;width:180px;height:180px;border-radius:50%;background:radial-gradient(circle,rgba(155,127,232,0.07),transparent 70%)}
 
 /* FIELDS */
 .field{margin-bottom:12px}
@@ -159,7 +159,7 @@ textarea.fi{min-height:70px}
 .prog-fill{height:100%;border-radius:99px;transition:width 0.5s}
 
 /* SECTION */
-.sh{font-size:9px;font-weight:650;color:rgba(189,183,220,0.62);letter-spacing:1.8px;text-transform:uppercase;margin:16px 0 10px;display:flex;align-items:center;gap:8px}
+.sh{font-size:9px;font-weight:650;color:rgba(189,183,220,0.62);letter-spacing:1.2px;text-transform:uppercase;margin:16px 0 10px;display:flex;align-items:center;gap:8px}
 .sh::after{content:'';flex:1;height:1px;background:rgba(255,255,255,0.05)}
 
 /* EMPTY */
@@ -211,7 +211,7 @@ textarea.fi{min-height:70px}
 .chart-wrap{width:100%;height:180px;position:relative}
 canvas{display:block}
 .chart-tabs{display:flex;gap:6px;margin-bottom:12px}
-.ct{flex:1;background:#181830;border:1px solid rgba(255,255,255,0.07);border-radius:9px;padding:7px 4px;font-size:9px;font-weight:700;color:#706a90;cursor:pointer;text-align:center;letter-spacing:0.5px;display:inline-flex;align-items:center;justify-content:center;gap:5px}
+.ct{flex:1;background:#181830;border:1px solid rgba(255,255,255,0.07);border-radius:9px;padding:7px 4px;font-size:9px;font-weight:700;color:#9b93b8;cursor:pointer;text-align:center;letter-spacing:0.5px;display:inline-flex;align-items:center;justify-content:center;gap:5px}
 .ct.on{background:#9b7fe8;border-color:#9b7fe8;color:#fff}
 .ct .ic{color:currentColor}
 
@@ -223,7 +223,7 @@ canvas{display:block}
 .ob-ey{display:inline-flex;background:rgba(155,127,232,0.1);border:1px solid rgba(155,127,232,0.2);border-radius:20px;padding:5px 13px;font-size:10px;font-weight:600;color:#c4abff;letter-spacing:1px;text-transform:uppercase;margin-bottom:16px}
 .ob-h{font-size:34px;font-weight:700;line-height:1.1;margin-bottom:9px}
 .ob-h em{color:#c4abff;font-style:italic}
-.ob-p{font-size:13px;color:#706a90;line-height:1.6;margin-bottom:24px}
+.ob-p{font-size:13px;color:#9b93b8;line-height:1.6;margin-bottom:24px}
 .ob-dots{display:flex;gap:5px;margin-bottom:24px}
 .od{height:4px;border-radius:2px;background:#202038;flex:1;transition:all 0.3s}
 .od.on{background:#9b7fe8;flex:2}
@@ -10005,12 +10005,8 @@ function renderMonthPlan() {
     if (s.goalStatusWhy) {
       h += '<div style="font-size:10px;color:rgba(255,255,255,0.38);margin-top:4px;line-height:1.35">' + s.goalStatusWhy + '</div>';
     }
-    if (s.why) h += '<div style="font-size:10px;color:rgba(255,255,255,0.45);margin-top:3px;line-height:1.35">' + s.why + '</div>';
+    if (s.why) h += '<div style="font-size:10px;color:rgba(255,255,255,0.72);margin-top:3px;line-height:1.35">' + s.why + '</div>';
     if (s.explain) h += '<div style="font-size:10px;color:var(--tx-3);margin-top:4px;line-height:1.35">' + s.explain + '</div>';
-    if (s.urgency) {
-      var ulb = (s.urgency==='urgent'?'URGENT':s.urgency==='high'?'HIGH PRIORITY':s.urgency==='medium'?'IMPORTANT':'LONG-TERM');
-      h += '<div style="font-size:9px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,0.35);margin-top:3px">' + ulb + '</div>';
-    }
     h += '</div>';
     h += '<div style="font-size:16px;font-weight:700;color:' + s.color + ';flex-shrink:0">' + fm(s.amount) + '</div>';
     h += '</div>';
