@@ -13998,7 +13998,7 @@ function rPlan() {
       var _bSh = _bT>0 && _bS<_bT*0.9;
       if (_iCtx==='IRREGULAR') { _sL='With variable income in the picture, your plan puts buffer ahead of goals \u2014 so a slower month doesn\u2019t create a knock-on problem.'; }
       else if (_lft<0) { _sL='Your current entries show more going out than coming in. The plan looks for pressure points first \u2014 you\u2019ll know best what\u2019s realistic to adjust.'; }
-      else if (_hD&&_bSh) { _sL='With debt and a buffer gap showing, your plan prioritises the buffer first. A cushion makes an unexpected cost less likely to mean new borrowing.'; }
+      else if (_hD&&_bSh) { _sL=S.planStrategy==='debt' ? 'Even in Debt-focused mode, a small buffer comes first, so an unexpected cost does not force new borrowing. Your debt step follows immediately.' : 'With debt and a buffer gap showing, your plan prioritises the buffer first. A cushion makes an unexpected cost less likely to mean new borrowing.'; }
       else if (_hD) { _sL='Based on what\u2019s entered, this debt appears first because its interest is creating the most monthly drag. If something else is pressing right now, you can adjust around it.'; }
       else if (_bSh) { _sL='With no high-interest debt showing, your plan points toward a buffer next. That gives more room before committing to longer-term goals.'; }
       else if (S.goals&&S.goals.length>0) { _sL='With debt and buffer pressure lower, your plan has more room for goals. You can still reorder them if one matters more this month.'; }
@@ -17389,8 +17389,6 @@ function rMe() {
   h+='<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">'+'<svg width="14" height="14" viewBox="0 0 20 20" fill="none">'+'<path d="M10 2L3 5v5c0 4.4 3 8.1 7 9 4-0.9 7-4.6 7-9V5L10 2z" stroke="#34d5a0" stroke-width="1.5" stroke-linejoin="round"/>'+'</svg><span style="font-size:10px;font-weight:700;color:#34d5a0;letter-spacing:0.5px">YOUR PRIVACY</span></div>';
   h+='<div style="font-size:13px;color:var(--tx-1);font-weight:600;margin-bottom:6px">Your data stays on your device. Always.</div>';
   h+='<div style="font-size:11px;color:var(--tx-2);line-height:1.6;margin-bottom:8px">No account required. No server. Nothing uploaded, analysed remotely, or sold. Your finances exist only on this phone.</div>';
-  h+='<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Bank sync — coming in v2</div>';
-  h+='<div style="font-size:11px;color:var(--tx-2);line-height:1.5;margin-bottom:6px">Read-only Open Banking planned — still your choice, never required.</div>';
   h+='<div style="font-size:10px;color:var(--tx-3)">Most users complete setup in under 2 minutes using Quick Setup.</div>';
   h+='</div>';
   /* Smart Import hidden — parser rebuild in progress. Uncomment to restore.
