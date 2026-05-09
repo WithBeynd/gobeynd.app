@@ -250,7 +250,7 @@ canvas{display:block}
 .pl-pri.open .pl-body{max-height:1800px;opacity:1}
 .pl-collapsed{display:block}
 .pl-pri.open .pl-collapsed{display:none}
-.pl-status{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;letter-spacing:0.3px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);color:rgba(189,183,220,0.72)}
+.pl-status{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;letter-spacing:0.3px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);color:rgba(189,183,220,0.72)}
 .pl-status.done{border-color:rgba(52,213,160,0.18);background:rgba(52,213,160,0.06);color:rgba(52,213,160,0.82)}
 .pl-status.inp{border-color:rgba(245,194,52,0.16);background:rgba(245,194,52,0.06);color:rgba(245,194,52,0.78)}
 
@@ -8503,6 +8503,8 @@ function geodeInsightPolishBody(topic, msg, vIx) {
  * S.lastShownNudgeTopics is committed after DOM paint in rHome().
  */
 function renderInsights() {
+  /** When Needs attention lists overdue rows, skip only the generic overdue Insight — not the whole strip. */
+  var _skipOverdueInsight = false;
   if (geodeIsEmptyState()) {
     S._pendingLastShownHighlightTopics = [];
     return '';
@@ -8519,33 +8521,36 @@ function renderInsights() {
 
   if (geodeHasOverdue(S)) {
     try {
-      var stOd = nudgeStyle('warning', 'tight_month');
-      S._pendingLastShownHighlightTopics = ['overdue_focus'];
-      return (
-        '<div style="margin-bottom:6px">' +
-        '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px">' +
-        geodeIcon('sparkles', 'ic ic-hdr-sm') +
-        '<span>Insight</span><span style="flex:1;height:1px;background:rgba(255,255,255,0.05)"></span></div>' +
-        '<div style="background:rgba(255,255,255,0.02);border:1px solid ' +
-        stOd.color +
-        '44;border-left:3px solid ' +
-        stOd.color +
-        ';border-radius:14px;padding:13px 14px;margin-bottom:8px;opacity:1">' +
-        '<div style="display:flex;align-items:flex-start;gap:10px">' +
-        '<span class="ic ic-nudge" style="color:' +
-        stOd.color +
-        ';flex-shrink:0">' +
-        geodeSvg(stOd.icon) +
-        '</span><div style="min-width:0">' +
-        '<div style="font-size:12px;font-weight:700;color:' +
-        stOd.color +
-        ';margin-bottom:4px;line-height:1.3">' +
-        escHtmlLite('Keep the picture honest') +
-        '</div>' +
-        '<div style="font-size:11px;color:rgba(255,255,255,0.72);line-height:1.45">' +
-        escHtmlLite('Small updates now keep your guidance accurate.') +
-        '</div></div></div></div></div>'
-      );
+      _skipOverdueInsight = geodeOverdueItems().length > 0;
+      if (!_skipOverdueInsight) {
+        var stOd = nudgeStyle('warning', 'tight_month');
+        S._pendingLastShownHighlightTopics = ['overdue_focus'];
+        return (
+          '<div style="margin-bottom:6px">' +
+          '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px">' +
+          geodeIcon('sparkles', 'ic ic-hdr-sm') +
+          '<span>Insight</span><span style="flex:1;height:1px;background:rgba(255,255,255,0.05)"></span></div>' +
+          '<div style="background:rgba(255,255,255,0.02);border:1px solid ' +
+          stOd.color +
+          '44;border-left:3px solid ' +
+          stOd.color +
+          ';border-radius:14px;padding:13px 14px;margin-bottom:8px;opacity:1">' +
+          '<div style="display:flex;align-items:flex-start;gap:10px">' +
+          '<span class="ic ic-nudge" style="color:' +
+          stOd.color +
+          ';flex-shrink:0">' +
+          geodeSvg(stOd.icon) +
+          '</span><div style="min-width:0">' +
+          '<div style="font-size:12px;font-weight:700;color:' +
+          stOd.color +
+          ';margin-bottom:4px;line-height:1.3">' +
+          escHtmlLite('Keep the picture honest') +
+          '</div>' +
+          '<div style="font-size:11px;color:rgba(255,255,255,0.72);line-height:1.45">' +
+          escHtmlLite('Small updates now keep your guidance accurate.') +
+          '</div></div></div></div></div>'
+        );
+      }
     } catch (_eOdIn) {
       S._pendingLastShownHighlightTopics = [];
       return '';
@@ -8563,6 +8568,11 @@ function renderInsights() {
   }
   pool = geodeFilterHighlightPool(pool, latestKind, pressure);
   pool = geodeFilterNoIncomeHighlightPool(pool);
+  if (_skipOverdueInsight) {
+    pool = pool.filter(function (hn) {
+      return hn && hn.topic !== 'tight_month';
+    });
+  }
 
   if (isEmptyFinancialProfile(S)) {
     S._pendingLastShownHighlightTopics = [];
@@ -8620,6 +8630,9 @@ function renderInsights() {
   if (primary && mainInsightKind !== 'none' && geodeInsightTopicMatchesMainKind(primary.topic, mainInsightKind)) {
     primary = null;
   }
+  if (_skipOverdueInsight && primary && primary.topic === 'tight_month') {
+    primary = null;
+  }
   var nudges = [];
   if (primary) {
     var insightBody = geodeInsightPolishBody(primary.topic, pMsg, geodeInsightVariantSeed(primary.topic));
@@ -8633,7 +8646,7 @@ function renderInsights() {
       explain: primary.explain,
       _slot: 'primary'
     });
-  } else if (!geodeHasOverdue(S) && (hasPastDueUnconfirmed || needsScheduledContributionReview)) {
+  } else if ((!geodeHasOverdue(S) || _skipOverdueInsight) && (hasPastDueUnconfirmed || needsScheduledContributionReview)) {
     var awarenessTitle = 'Pending checks: Contributions';
     try {
       awarenessTitle = hasPastDueUnconfirmed ? geodePastDueContributionInsightTitle(S) : geodeNeedsReviewContributionHomeInsightTitle(S);
@@ -10261,8 +10274,8 @@ function geodePlanPageDebtStepDetailHtml(step, prog) {
   if (d) {
     h += '<div style="margin-top:12px">';
     h +=
-      '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:8px">Key facts</div>';
-    h += '<div style="font-size:10px;color:rgba(189,183,220,0.95);line-height:1.55">';
+      '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:8px">Key facts</div>';
+    h += '<div style="font-size:11px;color:rgba(189,183,220,0.95);line-height:1.55">';
     h +=
       '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><span style="color:var(--tx-3)">Balance</span><span style="font-weight:500">' +
       escHtmlLite(fm(toNum(d.balance))) +
@@ -10292,7 +10305,7 @@ function geodePlanPageDebtStepDetailHtml(step, prog) {
       for (var tmi = 0; tmi < debtsAll.length; tmi++) totalMinAll += toNum(debtsAll[tmi].minp);
       if (totalMinAll > 0) {
         h +=
-          '<div style="margin-top:8px;font-size:9px;color:var(--tx-3);line-height:1.4">' +
+          '<div style="margin-top:8px;font-size:11px;color:var(--tx-3);line-height:1.4">' +
           escHtmlLite('All debts — minimum payments combined: ' + fm(totalMinAll)) +
           '</div>';
       }
@@ -10314,7 +10327,7 @@ function geodePlanPageDebtStepDetailHtml(step, prog) {
   }
   if (dLines.length) {
     h +=
-      '<div style="margin-top:12px;font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:6px">Why this step</div>';
+      '<div style="margin-top:12px;font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:6px">Why this step</div>';
     h +=
       '<div style="font-size:11px;color:rgba(237,234,255,0.88);line-height:1.45">' +
       escHtmlLite(geodeHomeInsightShortLine(dLines.slice(0, 1).join(' '), 130)) +
@@ -10341,7 +10354,7 @@ function geodePlanPageDebtStepDetailHtml(step, prog) {
     h +=
       '<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(52,213,160,0.08);border:1px solid rgba(52,213,160,0.28)">';
     h +=
-      '<div style="font-size:9px;font-weight:700;color:rgba(52,213,160,0.95);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px">Impact</div>';
+      '<div style="font-size:11px;font-weight:700;color:rgba(52,213,160,0.95);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px">Impact</div>';
     h += '<div style="font-size:11px;color:rgba(237,234,255,0.92);line-height:1.45;font-weight:500">' + impactInner + '</div>';
     h += '</div>';
   }
@@ -10387,8 +10400,8 @@ function geodePlanPageBufferPriorityBodyHtml(step, bufDisp, prog) {
   if (st !== 'NO_BUFFER_CONTEXT') {
     h += '<div style="margin-top:12px">';
     h +=
-      '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:8px">Key facts</div>';
-    h += '<div style="font-size:10px;color:rgba(189,183,220,0.95);line-height:1.55">';
+      '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:8px">Key facts</div>';
+    h += '<div style="font-size:11px;color:rgba(189,183,220,0.95);line-height:1.55">';
     h +=
       '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><span style="color:var(--tx-3)">Monthly expenses (basis)</span><span style="font-weight:500">' +
       escHtmlLite(fm(mo)) +
@@ -10411,7 +10424,7 @@ function geodePlanPageBufferPriorityBodyHtml(step, bufDisp, prog) {
   }
   if (!whyBlock) whyBlock = 'Cash buffer absorbs surprises before they become new debt.';
   h +=
-    '<div style="margin-top:12px;font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:6px">Why this step</div>';
+    '<div style="margin-top:12px;font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:6px">Why this step</div>';
   h +=
     '<div style="font-size:11px;color:rgba(237,234,255,0.88);line-height:1.45">' +
     escHtmlLite(geodeHomeInsightShortLine(whyBlock, 115)) +
@@ -10430,7 +10443,7 @@ function geodePlanPageBufferPriorityBodyHtml(step, bufDisp, prog) {
     h +=
       '<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.25)">';
     h +=
-      '<div style="font-size:9px;font-weight:700;color:rgba(147,197,253,0.95);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px">Progress</div>';
+      '<div style="font-size:11px;font-weight:700;color:rgba(147,197,253,0.95);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px">Progress</div>';
     h +=
       '<div style="font-size:11px;color:rgba(237,234,255,0.9);line-height:1.45;font-weight:500">' +
       escHtmlLite(impact) +
@@ -10470,8 +10483,8 @@ function geodePlanPageInvestPriorityBodyHtml(step, invDisp, prog) {
 
   h += '<div style="margin-top:12px">';
   h +=
-    '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:8px">Key facts</div>';
-  h += '<div style="font-size:10px;color:rgba(189,183,220,0.95);line-height:1.55">';
+    '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:8px">Key facts</div>';
+  h += '<div style="font-size:11px;color:rgba(189,183,220,0.95);line-height:1.55">';
   var tBal = geodeTotalInvestmentBalance(S);
   h +=
     '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><span style="color:var(--tx-3)">Portfolio balance</span><span style="font-weight:500">' +
@@ -10502,7 +10515,7 @@ function geodePlanPageInvestPriorityBodyHtml(step, invDisp, prog) {
   if (tone && (!dText || dText.indexOf(tone.slice(0, 22)) < 0)) dText = (dText ? dText + ' ' : '') + tone;
   if (invMetaWhy && (!dText || dText.indexOf(invMetaWhy.slice(0, 18)) < 0)) dText = (dText ? dText + ' ' : '') + invMetaWhy;
   h +=
-    '<div style="margin-top:12px;font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:6px">Why this step</div>';
+    '<div style="margin-top:12px;font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:6px">Why this step</div>';
   h +=
     '<div style="font-size:11px;color:rgba(237,234,255,0.88);line-height:1.45">' +
     escHtmlLite(
@@ -10528,7 +10541,7 @@ function geodePlanPageInvestPriorityBodyHtml(step, invDisp, prog) {
   h +=
     '<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(155,127,232,0.1);border:1px solid rgba(155,127,232,0.28)">';
   h +=
-    '<div style="font-size:9px;font-weight:700;color:rgba(196,171,255,0.95);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px">Impact</div>';
+    '<div style="font-size:11px;font-weight:700;color:rgba(196,171,255,0.95);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px">Impact</div>';
   h +=
     '<div style="font-size:11px;color:rgba(237,234,255,0.9);line-height:1.45;font-weight:500">' +
     escHtmlLite(impact) +
@@ -10550,18 +10563,24 @@ function geodePlanPageGoalPriorityBodyHtml(step, prog) {
     prog.phase === 'done'
       ? 'Suggested amount met for ' + gName + '.'
       : prog.phase === 'partial'
-        ? 'Add the remainder to ' + gName + ' this month.'
-        : 'Schedule this toward ' + gName + ' this month.';
+        ? 'Add what\u2019s left this month toward ' + gName + ' to keep it moving.'
+        : 'Use the amount on this step toward ' + gName + ' this month.';
   h +=
     '<div style="font-size:11px;color:rgba(189,183,220,0.93);line-height:1.45">' +
     escHtmlLite(bLine) +
     '</div>';
+  if (prog.phase !== 'done') {
+    h +=
+      '<div style="margin-top:8px;font-size:11px;color:rgba(189,183,220,0.88);line-height:1.45">' +
+      escHtmlLite('This step supports your goal by setting aside the amount shown.') +
+      '</div>';
+  }
 
   if (g) {
     h += '<div style="margin-top:12px">';
     h +=
-      '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:8px">Key facts</div>';
-    h += '<div style="font-size:10px;color:rgba(189,183,220,0.95);line-height:1.55">';
+      '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:8px">Key facts</div>';
+    h += '<div style="font-size:11px;color:rgba(189,183,220,0.95);line-height:1.55">';
     h +=
       '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><span style="color:var(--tx-3)">Saved</span><span style="font-weight:500">' +
       escHtmlLite(fm(geodeGoalEffectiveSaved(g))) +
@@ -10594,7 +10613,7 @@ function geodePlanPageGoalPriorityBodyHtml(step, prog) {
   var tone = geodePlanPageStrategyToneLine('goal');
   if (tone && (!whyOne || whyOne.indexOf(tone.slice(0, 22)) < 0)) whyOne = (whyOne ? whyOne + ' ' : '') + tone;
   h +=
-    '<div style="margin-top:12px;font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:6px">Why this step</div>';
+    '<div style="margin-top:12px;font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:6px">Why this step</div>';
   h +=
     '<div style="font-size:11px;color:rgba(237,234,255,0.88);line-height:1.45">' +
     escHtmlLite(geodeHomeInsightShortLine(whyOne || 'Keeps a dated goal from slipping.', 115)) +
@@ -10610,7 +10629,7 @@ function geodePlanPageGoalPriorityBodyHtml(step, prog) {
     h +=
       '<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(245,194,52,0.08);border:1px solid rgba(245,194,52,0.28)">';
     h +=
-      '<div style="font-size:9px;font-weight:700;color:rgba(245,194,52,0.95);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px">Momentum</div>';
+      '<div style="font-size:11px;font-weight:700;color:rgba(245,194,52,0.95);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px">Momentum</div>';
     h +=
       '<div style="font-size:11px;color:rgba(237,234,255,0.9);line-height:1.45;font-weight:500">' +
       escHtmlLite(impact) +
@@ -10660,7 +10679,7 @@ function geodePlanPageOverviewHtml(plan) {
   var h =
     '<div style="margin:0 0 16px;padding:14px 16px;border-radius:16px;background:rgba(155,127,232,0.07);border:1px solid rgba(155,127,232,0.24)">';
   h +=
-    '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Plan overview</div>';
+    '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Plan overview</div>';
   if (plan.strategyLine) {
     var slDisp = String(plan.strategyLine).replace(/^Monthly plan style:\s*/i, 'Style: ');
     h +=
@@ -10683,7 +10702,7 @@ function geodePlanPageOverviewHtml(plan) {
     '<div style="margin-top:10px;font-size:12px;font-weight:700;color:#f5c234">' +
     escHtmlLite('Spare cash: ' + fm(plan.leftover)) +
     '</div>' +
-    '<div style="margin-top:4px;font-size:8px;color:var(--tx-4);line-height:1.25;font-weight:500">' +
+    '<div style="margin-top:4px;font-size:11px;color:var(--tx-4);line-height:1.35;font-weight:500">' +
     escHtmlLite('Based on your current plan.') +
     '</div>';
   if (plan.projection) {
@@ -10748,9 +10767,9 @@ function geodePlanPageStatusSectionHtml() {
     col = '#34d5a0';
     why = 'No large spare-cash amounts to allocate right now \u2014 the order below shows where things go when cash appears.';
   } else if (p1p && p1p.phase === 'done') {
-    headline = 'Top priority met';
+    headline = 'First step complete';
     col = '#34d5a0';
-    why = 'Your top priority is met this month \u2014 the rest of the stack stays in order if there\u2019s more to allocate.';
+    why = 'Your first step is done this month \u2014 the rest of the stack stays in order if there\u2019s more to allocate.';
   } else if (ratio >= 0.72) {
     headline = 'Mostly on track';
     col = '#34d5a0';
@@ -10793,7 +10812,7 @@ function geodePlanPageStyleSectionHtml() {
     return Math.round(Number(n) * 100);
   }
   var sliceLine =
-    'The priority order stays fixed. Style affects how leftover cash is split: debt overpay ~' +
+    'Plan order stays fixed. Style affects how leftover cash is split: debt overpay ~' +
     pct(cfg.debtRatio) +
     '%, buffer ~' +
     pct(cfg.emergencyCapRatio) +
@@ -10805,7 +10824,7 @@ function geodePlanPageStyleSectionHtml() {
   var toneLine = geodePlanStrategyVoiceLine();
   return (
     '<div style="margin:0 0 14px;padding:14px;border-radius:14px;background:var(--bg-surface);border:1px solid var(--bd)">' +
-    '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px">Plan style</div>' +
+    '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px">Plan style</div>' +
     '<div style="font-size:15px;font-weight:700;color:var(--tx-1)">' +
     escHtmlLite(fullName) +
     '</div>' +
@@ -10815,7 +10834,7 @@ function geodePlanPageStyleSectionHtml() {
     '<div style="margin-top:8px;font-size:11px;color:rgba(237,234,255,0.82);line-height:1.45">' +
     escHtmlLite(geodeHomeInsightShortLine(toneLine, 110)) +
     '</div>' +
-    '<div style="margin-top:8px;font-size:11px"><span class="link-like" onclick="goTab(\'me\')">Change in Settings</span></div>' +
+    '<div style="margin-top:8px;font-size:11px"><span class="link-like" onclick="goTab(\'me\')">Plan strategy · Settings</span></div>' +
     '</div>'
   );
 }
@@ -10835,7 +10854,7 @@ function geodeOverBudgetPlanBlockHtml(left) {
   h += '<div style="margin:0 0 14px;padding:16px;border-radius:14px;' +
     'background:rgba(240,112,112,0.06);border:1px solid rgba(240,112,112,0.28);' +
     'border-left:3px solid #f07070">';
-  h += '<div style="font-size:9px;font-weight:800;letter-spacing:1.5px;' +
+  h += '<div style="font-size:11px;font-weight:800;letter-spacing:1.5px;' +
     'text-transform:uppercase;color:#f07070;margin-bottom:6px">Over budget</div>';
   h += '<div style="font-size:22px;font-weight:800;color:#f07070;line-height:1.1;margin-bottom:6px">' +
     escHtmlLite('\u2212' + fm(over)) + '</div>';
@@ -10864,7 +10883,7 @@ function geodeOverBudgetPlanBlockHtml(left) {
     var sorted = Object.keys(catTotals).sort(function(a,b){ return catTotals[b]-catTotals[a]; });
     if (sorted.length > 0) {
       h += '<div style="margin:0 0 14px">';
-      h += '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:1.5px;' +
+      h += '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:1.5px;' +
         'text-transform:uppercase;margin-bottom:8px">Your spending breakdown</div>';
       h += '<div style="background:var(--bg-surface);border:1px solid var(--bd);border-radius:14px;padding:4px 14px">';
       var topCats = sorted.slice(0, 5);
@@ -10941,7 +10960,7 @@ function geodePlanPagePrioritiesStackHtml(plan) {
   var stepX = openIx + 1;
   var stepY = steps.length;
   var h =
-    '<div style="margin:14px 0 8px;font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase">This month\u2019s priorities</div>';
+    '<div style="margin:14px 0 8px;font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase">Plan sequence</div>';
   h +=
     '<div style="margin:-2px 0 10px;font-size:11px;color:var(--tx-2);line-height:1.35">Step ' +
     escHtmlLite(String(stepX)) +
@@ -11004,7 +11023,7 @@ function geodePlanPagePrioritiesStackHtml(plan) {
     h += '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">';
     h += '<div style="min-width:0">';
     h +=
-      '<div style="font-size:9px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:' +
+      '<div style="font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:' +
       (s.color || '#9b7fe8') +
       '">' +
       escHtmlLite(pr) +
@@ -11027,7 +11046,7 @@ function geodePlanPagePrioritiesStackHtml(plan) {
     // Collapsed-only caption (avoid repeating the full explanation).
     if (capShown) {
       h +=
-        '<div class="pl-collapsed" style="font-size:9px;color:var(--tx-3);margin-top:6px;line-height:1.35">' +
+        '<div class="pl-collapsed" style="font-size:11px;color:var(--tx-3);margin-top:6px;line-height:1.35">' +
         escHtmlLite(capShown) +
         '</div>';
     }
@@ -11567,9 +11586,9 @@ function geodeHomePlanStepRibbonTitle(step, prog) {
   if (lb === 'Invest what remains') {
     var st = geodeInvestmentContributionState(S);
     if (ph === 'done') return 'Next plan step';
-    if (st === 'NONE') return 'After higher priorities, this is where spare cash goes to work';
-    if (st === 'NOT_STARTED') return 'After higher priorities, this is where spare cash goes to work';
-    return 'After higher priorities, this is where spare cash goes to work';
+    if (st === 'NONE') return 'After earlier plan steps, review what\u2019s left';
+    if (st === 'NOT_STARTED') return 'After earlier plan steps, review what\u2019s left';
+    return 'After earlier plan steps, review what\u2019s left';
   }
   return String(step.label || '').trim();
 }
@@ -11642,10 +11661,16 @@ function geodeMainActionSubForStep(step, prog, mainKind) {
     return 'Your plan points here before longer-term goals.';
   }
   if (lb === 'Invest what remains') {
-    return 'After higher priorities, this is where spare cash goes to work.';
+    return 'After earlier plan steps, review what is left.';
   }
   if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
-    return '';
+    var _gn =
+      lb.indexOf('Restart progress on ') === 0
+        ? lb.slice('Restart progress on '.length).trim()
+        : lb.slice('Catch up on '.length).trim();
+    return _gn
+      ? 'Add this month\u2019s amount to keep ' + _gn + ' moving.'
+      : 'Add this month\u2019s amount on this step to keep the goal moving.';
   }
   return '';
 }
@@ -13341,7 +13366,7 @@ function geodeOverdueItems() {
     var d = new Date(p.date); d.setHours(0,0,0,0);
     if (d < today) {
       var daysLate = Math.round((today-d)/86400000);
-      items.push({ kind:'payment', name:p.name||'Payment', amount:Number(p.amount)||0, daysLate:daysLate, id:p.id });
+      items.push({ kind:'payment', name:p.name||'Payment', amount:Number(p.amount)||0, daysLate:daysLate, id:p.id, debtId: p.debtId ? String(p.debtId) : '' });
     }
   });
   // Overdue goals
@@ -13352,14 +13377,106 @@ function geodeOverdueItems() {
     var d = new Date(g.targetDate); d.setHours(0,0,0,0);
     if (d < today) {
       var daysLate = Math.round((today-d)/86400000);
-      items.push({ kind:'goal', name:g.name||'Goal', remaining:remaining, daysLate:daysLate, id:g.id });
+      items.push({ kind:'goal', name:g.name||'Goal', remaining:remaining, daysLate:daysLate, id:g.id, debtId:'' });
     }
   });
   return items;
 }
 
+/** Display-only: mirrors geodeGetMainAction user-action gate for overdue vs Main Action dedup. */
+function geodeHomeHasMeaningfulUserActionForDedup(st) {
+  st = st || S;
+  try {
+    if ((st.debts || []).length > 0) return true;
+    if ((st.goals || []).length > 0) return true;
+    if ((st.investments || []).length > 0) return true;
+    if ((st.payments || []).length > 0) return true;
+  } catch (_e) {}
+  return false;
+}
+
+/** Display-only: plan step Home Main Action would centre on when plan-linked (null otherwise). */
+function geodeHomeResolvedPlanStepForDedup(state) {
+  state = state || S;
+  try {
+    if (geodeIsEmptyState()) return null;
+    if (geodeGetIncomeContext(state) === 'NONE') return null;
+    if (geodeHasOverdue(state)) return null;
+    try {
+      if (state.planCommitted) {
+        var _rpD = (state.reductionPlan && typeof state.reductionPlan === 'object') ? state.reductionPlan : {};
+        var _anyD = false;
+        for (var _kd in _rpD) {
+          if (Object.prototype.hasOwnProperty.call(_rpD, _kd) && _rpD[_kd] && _rpD[_kd].applied) {
+            _anyD = true;
+            break;
+          }
+        }
+        if (_anyD) return null;
+      }
+    } catch (_e1) {}
+    if (!geodeHasMeaningfulMonthlyExpenses(state)) {
+      if (!geodeHomeHasMeaningfulUserActionForDedup(state)) return null;
+    }
+    var planD = getMonthPlan();
+    var stepsD = (planD && planD.steps) ? planD.steps : [];
+    var p1d = planD && (planD.priority1 || stepsD[0]);
+    if (!p1d || !stepsD.length || toNum(p1d.amount) <= 0) return null;
+    var progD = geodePlanStepProgress(state, p1d);
+    if (progD.phase === 'done') {
+      var p2d = geodePlanNextStepAfterP1(planD);
+      if (p2d && toNum(p2d.amount) > 0) return p2d;
+    }
+    return p1d;
+  } catch (_e2) {
+    return null;
+  }
+}
+
+function geodeHomeFindGoalIdByNameHomeDedup(nm) {
+  var gl = S.goals || [];
+  var n = String(nm || '').trim();
+  for (var gi = 0; gi < gl.length; gi++) {
+    if (gl[gi] && String(gl[gi].name || '').trim() === n) return String(gl[gi].id || '');
+  }
+  return '';
+}
+
+/** Display-only: linked ids for a plan step (Needs attention vs Main Action dedup). */
+function geodeHomePlanStepDebtGoalIds(step) {
+  if (!step || !step.label) return { debtId: '', goalId: '' };
+  var lb = String(step.label);
+  if (lb.indexOf('Reduce high') === 0) {
+    var dn = lb.replace(/^Reduce high[\u2011\u2010\-]interest /, '').trim();
+    var dlist = S.debts || [];
+    for (var _di = 0; _di < dlist.length; _di++) {
+      if (dlist[_di] && String(dlist[_di].name || '').trim() === dn) {
+        return { debtId: String(dlist[_di].id || ''), goalId: '' };
+      }
+    }
+    return { debtId: '', goalId: '' };
+  }
+  if (lb.indexOf('Restart progress on ') === 0) {
+    return { debtId: '', goalId: geodeHomeFindGoalIdByNameHomeDedup(lb.slice('Restart progress on '.length).trim()) };
+  }
+  if (lb.indexOf('Catch up on ') === 0) {
+    return { debtId: '', goalId: geodeHomeFindGoalIdByNameHomeDedup(lb.slice('Catch up on '.length).trim()) };
+  }
+  return { debtId: '', goalId: '' };
+}
+
 function geodeOverdueCardHtml() {
   var items = geodeOverdueItems();
+  if (!items.length) return '';
+  var stepDedup = geodeHomeResolvedPlanStepForDedup(S);
+  var dg = stepDedup ? geodeHomePlanStepDebtGoalIds(stepDedup) : { debtId: '', goalId: '' };
+  if (stepDedup && (dg.debtId || dg.goalId)) {
+    items = items.filter(function (item) {
+      if (item.kind === 'goal' && dg.goalId && String(item.id) === String(dg.goalId)) return false;
+      if (item.kind === 'payment' && dg.debtId && item.debtId && String(item.debtId) === String(dg.debtId)) return false;
+      return true;
+    });
+  }
   if (!items.length) return '';
   var h = '<div style="background:rgba(240,112,112,0.06);border:1px solid rgba(240,112,112,0.2);border-left:3px solid var(--danger);border-radius:14px;padding:13px 15px;margin-bottom:10px">';
   h += '<div style="font-size:9px;font-weight:700;color:var(--danger);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Needs attention</div>';
@@ -13772,6 +13889,7 @@ function rHome() {
         '</svg>' +
         '<div style="font-size:11px;color:rgba(155,127,232,0.9);line-height:1.4;font-weight:500">' +
         'Buffer-first mode — your plan adjusts for variable income.' +
+        ' <span class="link-like" onclick="goTab(\'me\')" style="font-size:11px">Adjust in Settings</span>' +
         '</div></div>';
     }
   } catch (_eIrr) {}
@@ -13867,42 +13985,76 @@ function rHome() {
     '<button type="button" onclick="geodeOpenAskBeynd()" style="width:100%;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:rgba(155,127,232,0.12);border:1px solid rgba(155,127,232,0.35);border-radius:12px;padding:13px 14px;color:#c4abff;font-size:13px;font-weight:700;cursor:pointer;font-family:-apple-system,sans-serif">' +
     geodeIcon('sparkles', 'ic ic-qa') +
     'Ask Beynd</button></div>';
+  var _homeShowGoalPreview = S.goals.length > 0;
+  h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px">';
   h +=
-    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px">' +
     '<button type="button" onclick="msub=\'overview\';goTab(\'money\')" style="flex:1;min-width:140px;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:rgba(155,127,232,0.1);border:1px solid rgba(155,127,232,0.22);border-radius:12px;padding:12px 14px;color:#c4abff;font-size:12px;font-weight:700;cursor:pointer;font-family:-apple-system,sans-serif">' +
     geodeIcon('bar-chart-2', 'ic ic-qa') +
-    'My finances</button>' +
-    '<button type="button" onclick="msub=\'goals\';goTab(\'money\')" style="flex:1;min-width:140px;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:rgba(52,213,160,0.1);border:1px solid rgba(52,213,160,0.2);border-radius:12px;padding:12px 14px;color:#34d5a0;font-size:12px;font-weight:700;cursor:pointer;font-family:-apple-system,sans-serif">' +
-    geodeIcon('target', 'ic ic-qa') +
-    'My goals</button>' +
-    '</div>';
+    'My finances</button>';
+  if (!_homeShowGoalPreview) {
+    h +=
+      '<button type="button" onclick="msub=\'goals\';goTab(\'money\')" style="flex:1;min-width:140px;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:rgba(52,213,160,0.1);border:1px solid rgba(52,213,160,0.2);border-radius:12px;padding:12px 14px;color:#34d5a0;font-size:12px;font-weight:700;cursor:pointer;font-family:-apple-system,sans-serif">' +
+      geodeIcon('target', 'ic ic-qa') +
+      'My goals</button>';
+  }
+  h += '</div>';
 
-  if (S.goals.length > 0) {
+  if (_homeShowGoalPreview) {
     var g = selectPrimaryGoal(S.goals) || S.goals[0];
-    h += '<div class="sh" style="margin-top:20px">Goal preview</div>';
+    var _focusGoalStrip = false;
+    try {
+      if (geodeHomeMainActionInsightKind() === 'goal') {
+        var _dedSt = geodeHomeResolvedPlanStepForDedup(S);
+        var _dedIds = _dedSt ? geodeHomePlanStepDebtGoalIds(_dedSt) : { goalId: '' };
+        _focusGoalStrip = !!(_dedIds.goalId && String(g.id) === String(_dedIds.goalId));
+      }
+    } catch (_eFgs) {}
+    h += '<div class="sh" style="margin-top:20px">Focus goal</div>';
     var gEffH = geodeGoalEffectiveSaved(g);
     var p = g.amount > 0 ? Math.min(100, gEffH / Number(g.amount) * 100) : 0;
     var dLeft = dl(g.targetDate);
     var col = g.col || '#9b7fe8';
-    h +=
-      '<div style="background:var(--bg-surface);border:1px solid var(--bd);border-radius:18px;padding:16px;margin-bottom:8px;cursor:pointer" onclick="goTab(\'goals\')">';
-    if (dLeft !== null) {
+    if (_focusGoalStrip) {
       h +=
-        '<div style="display:inline-flex;background:var(--bg-raised);border-radius:20px;padding:2px 8px;font-size:9px;color:var(--tx-4);margin-bottom:7px">' +
-        (dLeft > 0 ? dLeft + ' days left' : dLeft === 0 ? 'Due today' : 'Overdue') +
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;margin-bottom:8px;border-radius:14px;background:var(--bg-surface);border:1px solid var(--bd);cursor:pointer" onclick="goTab(\'goals\')">';
+      h +=
+        '<div style="min-width:0;font-size:13px;font-weight:700;color:var(--tx-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        escHtmlLite(String(g.name || '')) +
         '</div>';
+      h +=
+        '<div style="flex-shrink:0;font-size:12px;font-weight:600;color:var(--tx-3)">' +
+        escHtmlLite(p.toFixed(0) + '%') +
+        '</div>';
+      h += '</div>';
+    } else {
+      h +=
+        '<div style="background:var(--bg-surface);border:1px solid var(--bd);border-radius:18px;padding:16px;margin-bottom:8px;cursor:pointer" onclick="goTab(\'goals\')">';
+      if (dLeft !== null) {
+        h +=
+          '<div style="display:inline-flex;background:var(--bg-raised);border-radius:20px;padding:2px 8px;font-size:9px;color:var(--tx-4);margin-bottom:7px">' +
+          (dLeft > 0 ? dLeft + ' days left' : dLeft === 0 ? 'Due today' : 'Overdue') +
+          '</div>';
+      }
+      h +=
+        '<div style="font-size:14px;font-weight:700;margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        escHtmlLite(String(g.name || '')) +
+        '</div>';
+      h +=
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px"><span style="font-size:18px;font-weight:700;color:' +
+        col +
+        '">' +
+        fm(gEffH) +
+        '</span><span style="font-size:10px;color:var(--tx-3)">of ' +
+        fm(g.amount) +
+        '</span></div>';
+      h +=
+        '<div class="prog" style="height:5px"><div class="prog-fill" style="width:' +
+        p.toFixed(0) +
+        '%;background:' +
+        col +
+        '"></div></div>';
+      h += '<div style="font-size:9px;color:var(--tx-3);margin-top:4px">' + p.toFixed(0) + '%</div></div>';
     }
-    h += '<div style="font-size:14px;font-weight:700;margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + g.name + '</div>';
-    h +=
-      '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px"><span style="font-size:18px;font-weight:700;color:' +
-      col +
-      '">' +
-      fm(gEffH) +
-      '</span><span style="font-size:10px;color:var(--tx-3)">of ' +
-      fm(g.amount) +
-      '</span></div>';
-    h += '<div class="prog" style="height:5px"><div class="prog-fill" style="width:' + p.toFixed(0) + '%;background:' + col + '"></div></div>';
-    h += '<div style="font-size:9px;color:var(--tx-3);margin-top:4px">' + p.toFixed(0) + '%</div></div>';
     h +=
       '<div style="font-size:12px;font-weight:600;color:#c4abff;margin-top:10px;cursor:pointer" onclick="goTab(\'goals\')">View all goals</div>';
   }
@@ -14030,7 +14182,7 @@ function rPlan() {
     if (!plan.steps.length) {
       h +=
         '<div style="padding:14px;border-radius:14px;background:rgba(255,255,255,0.03);border:1px solid var(--bd);font-size:12px;color:rgba(237,234,255,0.88);line-height:1.45">';
-      h += escHtmlLite('Not enough spare cash or data yet to build a priority stack this month.');
+      h += escHtmlLite('Not enough spare cash or data yet to build plan steps this month.');
       h += '</div>';
       h += geodePlanPageAlignmentSectionHtml();
       h += geodePlanPageHomeLinkRow();
@@ -14050,9 +14202,10 @@ function rPlan() {
     }
     h += geodePlanPageWhyOrderSectionHtml();
     if (plan.noInvestNote) {
+      var _noInvDisp = String(plan.noInvestNote).replace(/higher[\u2011\u002d]priority plan steps/gi, 'earlier plan steps');
       h +=
         '<div style="margin:12px 0;font-size:11px;color:rgba(255,255,255,0.42);line-height:1.4">' +
-        escHtmlLite(plan.noInvestNote) +
+        escHtmlLite(_noInvDisp) +
         '</div>';
     }
     h += geodePlanPageAlignmentSectionHtml();
