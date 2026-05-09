@@ -14337,13 +14337,40 @@ function geodeConfirm(msg, onYes) {
   }, 0);
 }
 
+/** Stage 7F: true when a payment should be removed as part of a cascade delete for a parent record.
+ * Removes: unpaid/upcoming/overdue linked payments, and all recurring linked payments (regardless of when last paid).
+ * Preserves: paid non-recurring historical records only.
+ * Rationale: recurring payments are revived each month by syncRecurringPayments(), so preserving any
+ * recurring linked payment would create a ghost outflow/overdue on the next calendar month boundary. */
+function geodeShouldCascadeDeleteLinkedPayment(p, idStr, kind) {
+  if (!p || !idStr) return false;
+  var linked = false;
+  if (kind === 'goal'   && String(p.goalId   || '') === idStr) linked = true;
+  if (kind === 'debt'   && String(p.debtId   || '') === idStr) linked = true;
+  if (kind === 'invest' && String(p.investId || '') === idStr) linked = true;
+  if (!linked) return false;
+  if (String(p.status || '') !== 'paid') return true;
+  if (p.rec === 'yes') return true;
+  return false;
+}
+
 function delGoal(id) {
-  geodeConfirm('Remove this goal?', function() {
-    S.goals = S.goals.filter(function(g) { return g.id !== id; });
+  geodeConfirm('Remove this goal? Scheduled contributions linked to it will also be removed from Beynd. Paid one-time contributions stay in your history. This does not move any money.', function() {
+    var idStr = String(id);
+    S.goals = S.goals.filter(function(g) { return String(g.id) !== idStr; });
     var inv = S.investments || [];
     for (var ii = 0; ii < inv.length; ii++) {
-      if (inv[ii] && String(inv[ii].goalId || '') === String(id)) delete inv[ii].goalId;
+      if (inv[ii] && String(inv[ii].goalId || '') === idStr) delete inv[ii].goalId;
     }
+    S.payments = (S.payments || []).filter(function(p) {
+      return !geodeShouldCascadeDeleteLinkedPayment(p, idStr, 'goal');
+    });
+    try {
+      if (S.completedGoalAcknowledged && typeof S.completedGoalAcknowledged === 'object') {
+        delete S.completedGoalAcknowledged[idStr];
+      }
+    } catch (_eCga) {}
+    geodeRecomputeBalancesFromPayments();
     save();
     render();
   });
@@ -14885,8 +14912,15 @@ function saveDebt(id) {
   render();
 }
 function delDebt(id){
-  geodeConfirm('Remove this debt from Beynd? This does not affect what you owe \u2014 it only removes Beynd\u2019s record of it.', function() {
-    S.debts=S.debts.filter(function(d){return d.id!==id;});save();render();
+  geodeConfirm('Remove this debt from Beynd? Scheduled payments linked to it will also be removed. This does not affect what you owe.', function() {
+    var idStr = String(id);
+    S.debts = S.debts.filter(function(d){ return String(d.id) !== idStr; });
+    S.payments = (S.payments || []).filter(function(p) {
+      return !geodeShouldCascadeDeleteLinkedPayment(p, idStr, 'debt');
+    });
+    geodeRecomputeBalancesFromPayments();
+    save();
+    render();
   });
 }
 
@@ -17083,8 +17117,15 @@ function saveInv(id){
   render();
 }
 function delInv(id){
-  geodeConfirm('Remove this investment from Beynd? This does not move or sell anything \u2014 it only removes Beynd\u2019s record of it.', function() {
-    S.investments=S.investments.filter(function(e){return e.id!==id;});save();render();
+  geodeConfirm('Remove this investment from Beynd? Scheduled contributions linked to it will also be removed. Nothing is sold or moved. Any goal using this investment for progress will show its manually saved amount instead.', function() {
+    var idStr = String(id);
+    S.investments = S.investments.filter(function(e){ return String(e.id) !== idStr; });
+    S.payments = (S.payments || []).filter(function(p) {
+      return !geodeShouldCascadeDeleteLinkedPayment(p, idStr, 'invest');
+    });
+    geodeRecomputeBalancesFromPayments();
+    save();
+    render();
   });
 }
 
