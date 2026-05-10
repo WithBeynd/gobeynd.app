@@ -19064,6 +19064,250 @@ function exportCSV() {
   toast('Saved.');
 }
 
+/**
+ * Beynd backup envelope validation (44B) — read-only helpers for future restore.
+ * Does not restore, write localStorage, merge live state, or call save/load/render.
+ * Future restore must add rollback, confirmation, and schema migration before any write.
+ */
+
+/** True if value is a non-array object suitable as a JSON object record. */
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  var p = Object.getPrototypeOf(value);
+  return p === Object.prototype || p === null;
+}
+
+/**
+ * Validates redacted JSON backup envelope from exportJSONBackup().
+ * @returns {{ ok: boolean, errors: string[], warnings: string[], meta: object }}
+ */
+function validateBeyndBackupEnvelope(obj) {
+  var errors = [];
+  var warnings = [];
+  var meta = {};
+  if (!isPlainObject(obj)) {
+    errors.push('Backup root must be a JSON object.');
+    return { ok: false, errors: errors, warnings: warnings, meta: meta };
+  }
+  if (obj.app !== 'Beynd') {
+    errors.push('Not a Beynd backup (app field missing or wrong).');
+  }
+  if (obj.exportType !== 'state_backup_redacted_v1') {
+    errors.push('Unrecognised backup type (exportType).');
+  }
+  if (obj.exportFormatVersion !== 1) {
+    errors.push('Unsupported export format version.');
+  }
+  if (obj.redacted !== true) {
+    errors.push('Only redacted v1 backups are accepted by this validator.');
+  }
+  if (!isPlainObject(obj.data)) {
+    errors.push('Backup is missing a data object.');
+  }
+  if (typeof obj.sourceStorageKey === 'string' && obj.sourceStorageKey !== KEY) {
+    warnings.push(
+      'Backup source key is "' +
+        String(obj.sourceStorageKey) +
+        '" (this app uses "' +
+        KEY +
+        '"). Restore may still be possible on this device.'
+    );
+  }
+  var sv = obj.schemaVersion;
+  if (sv === null || typeof sv === 'undefined') {
+    warnings.push('Schema version missing — treat as legacy or unknown.');
+  } else if (typeof sv !== 'number' || !isFinite(sv) || sv !== Math.floor(sv) || sv < 1) {
+    errors.push('Invalid schemaVersion in backup.');
+  } else if (sv > GEODE_SCHEMA_VERSION) {
+    errors.push(
+      'Backup schema version (' +
+        sv +
+        ') is newer than this app (' +
+        GEODE_SCHEMA_VERSION +
+        '). Update Beynd before restoring.'
+    );
+  }
+  meta.exportedAt = typeof obj.exportedAt === 'string' ? obj.exportedAt : '';
+  meta.exportType = obj.exportType;
+  meta.exportFormatVersion = obj.exportFormatVersion;
+  meta.schemaVersion = sv;
+  meta.sourceStorageKey = obj.sourceStorageKey;
+  meta.redacted = obj.redacted;
+  return { ok: errors.length === 0, errors: errors, warnings: warnings, meta: meta };
+}
+
+/** Top-level persisted keys allowed into a future restorable state (matches S + load() norms; secrets excluded). */
+function geodeBeyndBackupRestorableKeyWhitelist() {
+  return [
+    'ready',
+    'hasOnboarded',
+    'profile',
+    'cur',
+    'finRegion',
+    'planStrategy',
+    'income',
+    'incomeExplicitlySet',
+    'incomeTypeUserSet',
+    'incomeType',
+    'hasDependants',
+    'goals',
+    'debts',
+    'payments',
+    'expenses',
+    'investments',
+    'snapshots',
+    'lastSnapshot',
+    'lastShownNudgeTopics',
+    'lastActionOutcome',
+    '_suggestionBatchResolved',
+    'adaptiveDisplayModeByFamily',
+    'lastSeenAt',
+    'reminderPrefs',
+    'quickSetupDismissed',
+    'realityCheck',
+    'completedGoalAcknowledged',
+    'theme',
+    '_schemaVersion',
+    'ignoredMerchants',
+    'reductionPlan',
+    'planCommitted'
+  ];
+}
+
+/** Keys never copied from backup data (redacted export + security). */
+function geodeBeyndBackupForbiddenDataKeys() {
+  return [
+    'beyondApiKey',
+    'pin',
+    'pw',
+    'activityLog',
+    '_pendingLastShownHighlightTopics',
+    'lastSuggestedActions',
+    'lastSuggestedActionsMeta',
+    'followthroughOutcomeHistory',
+    'nudgeHistory'
+  ];
+}
+
+/**
+ * Builds a whitelisted state object from backup data (no I/O, no mutation of obj).
+ * Call validateBeyndBackupEnvelope first; this repeats validation and returns combined messages.
+ */
+function extractRestorableData(obj) {
+  var errors = [];
+  var warnings = [];
+  var strippedKeys = [];
+  var state = {};
+  var counts = { debts: 0, goals: 0, payments: 0, expenses: 0, investments: 0 };
+  var v = validateBeyndBackupEnvelope(obj);
+  for (var vi = 0; vi < v.warnings.length; vi++) warnings.push(v.warnings[vi]);
+  if (!v.ok) {
+    for (var ei = 0; ei < v.errors.length; ei++) errors.push(v.errors[ei]);
+    return {
+      ok: false,
+      errors: errors,
+      warnings: warnings,
+      state: state,
+      strippedKeys: strippedKeys,
+      counts: counts
+    };
+  }
+  var data = obj.data;
+  var whitelist = geodeBeyndBackupRestorableKeyWhitelist();
+  var allow = {};
+  for (var ai = 0; ai < whitelist.length; ai++) allow[whitelist[ai]] = true;
+  var forbidden = geodeBeyndBackupForbiddenDataKeys();
+  var forbid = {};
+  for (var fi = 0; fi < forbidden.length; fi++) forbid[forbidden[fi]] = true;
+
+  var dk;
+  var dataKeys = Object.keys(data);
+  for (var di = 0; di < dataKeys.length; di++) {
+    dk = dataKeys[di];
+    if (forbid[dk]) {
+      strippedKeys.push(dk);
+      continue;
+    }
+    if (!allow[dk]) {
+      strippedKeys.push(dk);
+      continue;
+    }
+    try {
+      state[dk] = JSON.parse(JSON.stringify(data[dk]));
+    } catch (_eCopy) {
+      errors.push('Could not copy field: ' + dk);
+    }
+  }
+
+  var arrNames = ['debts', 'goals', 'payments', 'expenses', 'investments'];
+  for (var ai2 = 0; ai2 < arrNames.length; ai2++) {
+    var an = arrNames[ai2];
+    if (!Object.prototype.hasOwnProperty.call(state, an)) {
+      counts[an] = 0;
+      continue;
+    }
+    if (!Array.isArray(state[an])) {
+      errors.push('Field "' + an + '" must be an array.');
+      counts[an] = 0;
+    } else {
+      counts[an] = state[an].length;
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors: errors,
+    warnings: warnings,
+    state: state,
+    strippedKeys: strippedKeys,
+    counts: counts
+  };
+}
+
+/**
+ * Short human-readable summary lines for dry-run UI (display-only).
+ * @returns {string[]}
+ */
+function summarizeBeyndBackupValidation(meta, counts, warnings) {
+  var lines = [];
+  meta = meta || {};
+  counts = counts || {};
+  warnings = warnings || [];
+  lines.push('Backup format: redacted Beynd state backup');
+  if (meta.exportedAt) {
+    try {
+      lines.push('Exported: ' + new Date(meta.exportedAt).toLocaleString());
+    } catch (_eD) {
+      lines.push('Exported: ' + String(meta.exportedAt));
+    }
+  }
+  var sv = meta.schemaVersion;
+  lines.push(
+    'Schema version: ' +
+      (sv === null || typeof sv === 'undefined' || sv === ''
+        ? 'unknown'
+        : String(sv))
+  );
+  lines.push(
+    'Contains: ' +
+      (counts.debts | 0) +
+      ' debts, ' +
+      (counts.goals | 0) +
+      ' goals, ' +
+      (counts.payments | 0) +
+      ' payments, ' +
+      (counts.expenses | 0) +
+      ' expenses, ' +
+      (counts.investments | 0) +
+      ' investments'
+  );
+  lines.push('API key, PIN/password, and selected logs are not restored from this backup.');
+  for (var wi = 0; wi < warnings.length; wi++) {
+    lines.push('Note: ' + warnings[wi]);
+  }
+  return lines;
+}
+
 /** Redacted full-state JSON backup (export only; does not mutate S or change save/load). */
 function exportJSONBackup() {
   if (
