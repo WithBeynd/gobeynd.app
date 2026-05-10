@@ -18346,7 +18346,7 @@ function geodeBuildUserGuideHtml() {
       title: 'Your data and privacy',
       icon: 'shield',
       body: '<p>Everything is stored on your device only. Nothing is uploaded, shared, or sold. There is no Beynd account.</p>' +
-            '<p>To back up your data, go to Settings \u2192 Export data. This downloads a CSV of everything.</p>' +
+            '<p>To back up your data, go to Settings and use <strong>Export CSV</strong> or <strong>Download backup</strong> (redacted JSON).</p>' +
             '<p>To protect your data on a shared device, set a PIN in Settings \u2192 Security.</p>' +
             '<p>If you need to start fresh, Settings \u2192 Reset All Data clears everything permanently.</p>' +
             '<p><a href="https://withbeynd.com/#privacy">View full Privacy Policy</a></p>' +
@@ -18448,7 +18448,12 @@ function rMe() {
     ['Financial region',rlb,'openRegionModal()'],
     ['Plan strategy',psn,'openPlanStrategyModal()'],
 
-    ['Export data','Download everything as a CSV','exportCSV()'],
+    ['Export CSV','Spreadsheet-friendly summary. Cannot fully restore the app.','exportCSV()'],
+    [
+      'Download backup',
+      'Redacted JSON backup. Contains sensitive financial data; API key and lock details are excluded.',
+      'exportJSONBackup()'
+    ],
     ['Beynd AI key',S.beyondApiKey ? 'API key set – Ask Beynd is active' : 'Not set – Ask Beynd is disabled','geodeOpenApiKeyModal()'],
     ['Lock app','PIN screen; data stays on this device','lockApp()']
   ];
@@ -18462,7 +18467,8 @@ function rMe() {
     '<div style="font-size:10px;color:var(--tx-3);margin-top:6px;line-height:1.35;opacity:0.88">White mode is being redesigned.</div>';
   h += '</div>';
   h+='<div style="height:2px"></div></div>';
-  h+='<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:8px 0 14px">Data is stored locally on this device.</div>';
+  h+='<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:8px 0 4px">Data is stored locally on this device.</div>';
+  h+='<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:0 0 14px">Saving a backup copies data to a file. Keep it private.</div>';
   h+='<div class=\"sh\">Guide & Help</div>';
   h+='<div class=\"card\" style=\"margin-bottom:14px;padding:0;overflow:hidden\">';
   h+=geodeBuildUserGuideHtml();
@@ -18657,6 +18663,69 @@ function exportCSV() {
   var a=document.createElement('a');a.href=url;a.download='Beynd_'+geodeTodayLocalISO()+'.csv';
   document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
   toast('Saved.');
+}
+
+/** Redacted full-state JSON backup (export only; does not mutate S or change save/load). */
+function exportJSONBackup() {
+  if (
+    !confirm(
+      'This backup contains sensitive financial data. Keep the file private. API key and lock details are excluded. Continue?'
+    )
+  ) {
+    return;
+  }
+  try {
+    var clone = JSON.parse(JSON.stringify(S));
+    var excluded = [
+      'beyondApiKey',
+      'pin',
+      'pw',
+      'activityLog',
+      '_pendingLastShownHighlightTopics',
+      'lastSuggestedActions',
+      'lastSuggestedActionsMeta',
+      'followthroughOutcomeHistory',
+      'nudgeHistory'
+    ];
+    for (var ei = 0; ei < excluded.length; ei++) {
+      var ek = excluded[ei];
+      if (Object.prototype.hasOwnProperty.call(clone, ek)) {
+        delete clone[ek];
+      }
+    }
+    var schemaV = null;
+    try {
+      if (typeof S._schemaVersion !== 'undefined' && S._schemaVersion != null) {
+        schemaV = S._schemaVersion;
+      }
+    } catch (_eSch) {}
+    var envelope = {
+      app: 'Beynd',
+      exportType: 'state_backup_redacted_v1',
+      exportFormatVersion: 1,
+      exportedAt: new Date().toISOString(),
+      sourceStorageKey: KEY,
+      schemaVersion: schemaV,
+      redacted: true,
+      excludedTopLevelKeys: excluded.slice(),
+      notes:
+        'This backup excludes API key, PIN/password, and selected activity/coaching logs. It still contains sensitive financial data.',
+      data: clone
+    };
+    var json = JSON.stringify(envelope, null, 2);
+    var blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'Beynd_backup_' + geodeTodayLocalISO() + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast('Backup downloaded.', 'ok');
+  } catch (eBk) {
+    toast('Could not create backup.', 'warn');
+  }
 }
 
 // ── BEYND INTELLIGENCE ────────────────────────────────────────────────────────
