@@ -559,6 +559,8 @@ canvas{display:block}
 <script>
 // ── DATA ──────────────────────────────────────────
 var KEY = 'geode_v6';
+/** Local persisted-state schema marker for backup/restore validation (bump when structure changes). */
+var GEODE_SCHEMA_VERSION = 1;
 /** Until splash finishes, save() must not bump last-active (avoids sync-on-load skipping lock). */
 var _geodeBootstrap = true;
 var _geodeFirstBoot = false;
@@ -622,6 +624,8 @@ var S = {
   /** Stage 5: goal ids the user has acknowledged as reached. { [goalId]: true } */
   completedGoalAcknowledged: {},
   theme: 'dark',
+  /** Persisted schema version for backups and future migrations; see GEODE_SCHEMA_VERSION. */
+  _schemaVersion: GEODE_SCHEMA_VERSION,
   beyondApiKey: ''
 };
 /** Pre-mutation figures for the last modal save (Dashboard “since last update”); cleared on other saves. */
@@ -734,6 +738,15 @@ function load() {
       for (var k in p) S[k] = p[k];
       if (!S.finRegion || !/^(UK|US|EU|Other)$/.test(String(S.finRegion))) S.finRegion = 'UK';
       if (S.planStrategy !== 'debt' && S.planStrategy !== 'balanced' && S.planStrategy !== 'growth') S.planStrategy = 'balanced';
+      var _sv = S._schemaVersion;
+      if (
+        typeof _sv !== 'number' ||
+        !isFinite(_sv) ||
+        _sv !== Math.floor(_sv) ||
+        _sv < 1
+      ) {
+        S._schemaVersion = GEODE_SCHEMA_VERSION;
+      }
     }
   } catch(e) {}
   if (!S.snapshots || typeof S.snapshots !== 'object' || Array.isArray(S.snapshots)) S.snapshots = {};
