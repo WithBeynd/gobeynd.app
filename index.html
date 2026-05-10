@@ -14303,7 +14303,7 @@ function geodeOverdueCardHtml() {
   if (!items.length) return '';
   var h = '<div style="background:rgba(240,112,112,0.06);border:1px solid rgba(240,112,112,0.2);border-left:3px solid var(--danger);border-radius:14px;padding:13px 15px;margin-bottom:10px">';
   h += '<div style="font-size:9px;font-weight:700;color:var(--danger);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Needs attention</div>';
-  items.slice(0,3).forEach(function(item) {
+  items.slice(0,2).forEach(function(item) {
     h += '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid rgba(240,112,112,0.1)">';
     h += '<div style="font-size:12px;color:var(--tx-1);font-weight:600">' + escHtmlLite(item.name) + '</div>';
     if (item.kind === 'payment') {
@@ -14313,8 +14313,15 @@ function geodeOverdueCardHtml() {
     }
     h += '</div>';
   });
-  if (items.length > 3) {
-    h += '<div style="font-size:10px;color:var(--tx-3);margin-top:6px">Plus ' + (items.length-3) + ' more item' + (items.length-3===1?'':'s') + ' — check Plan for details.</div>';
+  if (items.length > 2) {
+    var _ovMore = items.length - 2;
+    var _ovMoreTxt =
+      _ovMore === 1 ? 'View all in Plan →' : '+' + _ovMore + ' more · View in Plan →';
+    h +=
+      '<div style="font-size:10px;color:var(--tx-3);margin-top:6px">' +
+      '<span class="link-like" onclick="goTab(\'plan\')">' +
+      escHtmlLite(_ovMoreTxt) +
+      '</span></div>';
   }
   h += '</div>';
   return h;
@@ -14742,7 +14749,9 @@ function rHome() {
   } catch (_eOb) {}
   h += geodeOverdueCardHtml();
   // Subscription nudge (Spending only; discrete days). Shown whenever eligible — not gated on other overdue items.
+  // HTML appended after Main Action so the primary coaching card stays the anchor (Stage 27B).
   var _homeSubRenewCardVisible = false;
+  var _homeSubRenewCardHtml = '';
   var _subsDue = geodeSubsDueSoon(7);
   if (_subsDue.length > 0) {
     _homeSubRenewCardVisible = true;
@@ -14751,28 +14760,28 @@ function rHome() {
     var _sCardItems = geodeListSubscriptionReminderItems(S);
     var _sCardCp = _sCardItems.length ? geodeSubscriptionReminderCopy(_sCardItems) : null;
     var _sdRenewLine = _sCardCp ? escHtmlLite(_sCardCp.line) : escHtmlLite(_sd.name || '');
-    h +=
+    _homeSubRenewCardHtml +=
       '<div style="background:rgba(245,194,52,0.07);border:1px solid rgba(245,194,52,0.22);border-left:3px solid var(--warn);border-radius:14px;padding:13px 15px;margin-bottom:10px;cursor:pointer" onclick="geodeOpenSubReview(\'' +
       _sd.id +
       "','" +
       _sdKind +
       '\')">';
-    h += '<div style="font-size:9px;font-weight:700;color:var(--warn);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:5px">Worth a quick look</div>';
-    h += '<div style="font-size:13px;font-weight:600;color:var(--tx-1);margin-bottom:2px">' + _sdRenewLine + '</div>';
+    _homeSubRenewCardHtml += '<div style="font-size:9px;font-weight:700;color:var(--warn);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:5px">Worth a quick look</div>';
+    _homeSubRenewCardHtml += '<div style="font-size:13px;font-weight:600;color:var(--tx-1);margin-bottom:2px">' + _sdRenewLine + '</div>';
     if (_subsDue.length === 1) {
       var _sdExp = (S.expenses || []).filter(function (_x) {
         return _x && _x.id === _sd.id;
       })[0];
       var _sdMo = _sdExp && _sdExp.rec === 'annual' ? toNum(_sdExp.amount) / 12 : toNum(_sd.amount);
       var _sdAnnual = _sdExp && _sdExp.rec === 'annual' ? toNum(_sdExp.amount) : _sdMo * 12;
-      h +=
+      _homeSubRenewCardHtml +=
         '<div style="font-size:11px;color:var(--tx-3)">' +
         fm(_sdMo) +
         '/month — ' +
         fm(_sdAnnual) +
         '/year. Tap to review or remove.</div>';
     } else {
-      h +=
+      _homeSubRenewCardHtml +=
         '<div style="font-size:11px;color:var(--tx-3)">Tap to review the next renewal or remove.</div>';
     }
     var _sCardMore = _sCardItems._geodeSubReminderExtraCount | 0;
@@ -14784,23 +14793,16 @@ function rHome() {
         (_sCardMore === 1 ? '' : 's') +
         (_sCardMore === 1 ? ' needs' : ' need') +
         ' a quick look too';
-      h +=
+      _homeSubRenewCardHtml +=
         '<div style="font-size:10px;color:rgba(237,234,255,0.55);margin-top:8px;line-height:1.35;font-weight:500">' +
         escHtmlLite(_sCardMoreLine) +
         '</div>';
     }
-    h += '</div>';
+    _homeSubRenewCardHtml += '</div>';
   }
-  try {
-    var _sw = geodeConsecutiveActiveWeeks(S);
-    if (_sw >= 2) {
-      h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-bottom:10px">' +
-        escHtmlLite('Checked in ' + _sw + ' week' + (_sw === 1 ? '' : 's') + ' in a row.') +
-        '</div>';
-    }
-  } catch (_eSw) {}
   h += geodeHomeGoalCompletionCardHtml();
   h += geodeHomeMainActionHtml(_homeSubRenewCardVisible);
+  h += _homeSubRenewCardHtml;
   h += renderInsights();
   // Reality check balance removed — use bank sync in v2
   h +=
@@ -14832,14 +14834,11 @@ function rHome() {
         _focusGoalStrip = !!(_dedIds.goalId && String(g.id) === String(_dedIds.goalId));
       }
     } catch (_eFgs) {}
-    h += '<div class="sh" style="margin-top:20px">Focus goal</div>';
     var gEffH = geodeGoalEffectiveSaved(g);
     var p = g.amount > 0 ? Math.min(100, gEffH / Number(g.amount) * 100) : 0;
-    var dLeft = dl(g.targetDate);
-    var col = g.col || '#9b7fe8';
     if (_focusGoalStrip) {
       h +=
-        '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;margin-bottom:8px;border-radius:14px;background:var(--bg-surface);border:1px solid var(--bd);cursor:pointer" onclick="goTab(\'goals\')">';
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;margin-top:20px;margin-bottom:8px;border-radius:14px;background:var(--bg-surface);border:1px solid var(--bd);cursor:pointer" onclick="goTab(\'goals\')">';
       h +=
         '<div style="min-width:0;font-size:13px;font-weight:700;color:var(--tx-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
         escHtmlLite(String(g.name || '')) +
@@ -14850,6 +14849,9 @@ function rHome() {
         '</div>';
       h += '</div>';
     } else {
+      h += '<div class="sh" style="margin-top:20px">Focus goal</div>';
+      var dLeft = dl(g.targetDate);
+      var col = g.col || '#9b7fe8';
       h +=
         '<div style="background:var(--bg-surface);border:1px solid var(--bd);border-radius:18px;padding:16px;margin-bottom:8px;cursor:pointer" onclick="goTab(\'goals\')">';
       if (dLeft !== null) {
