@@ -324,6 +324,26 @@ canvas{display:block}
 .geode-plan-detail-impact-note{font-size:11px;color:var(--tx-3);line-height:1.45;margin-top:10px}
 .geode-plan-detail-impact-note + .geode-plan-detail-impact-note{margin-top:8px}
 .geode-plan-detail-card-assume{border-color:rgba(255,255,255,0.06);background:rgba(255,255,255,0.02)}
+.geode-debt-impact{margin-top:14px;padding-top:14px;border-top:1px solid var(--bd);max-width:100%;box-sizing:border-box;font-size:11px;line-height:1.45;color:var(--tx-2)}
+.geode-debt-impact-title{font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.85px;text-transform:uppercase;margin-bottom:10px;line-height:1.35}
+.geode-debt-impact-sect{font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:0.65px;text-transform:uppercase;margin-top:12px;margin-bottom:6px;line-height:1.35}
+.geode-debt-impact-sect--first{margin-top:2px}
+.geode-debt-impact-note{margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;max-width:100%}
+.geode-debt-impact-relief{font-size:11px;line-height:1.45;margin-top:4px;color:var(--tx-2)}
+.geode-debt-impact-row{margin-bottom:8px;line-height:1.45}
+.geode-debt-impact-drag{font-size:11px;line-height:1.45;color:rgba(237,234,255,0.92)}
+.geode-debt-impact-muted{font-size:11px;color:var(--tx-3);line-height:1.45;margin-top:6px;word-break:break-word}
+.geode-debt-impact-bwrap{margin-top:10px;max-width:100%}
+.geode-debt-impact-bwrap--first{margin-top:8px}
+.geode-debt-impact-label{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px 10px;font-size:11px;line-height:1.35;color:var(--tx-2);margin-bottom:4px;max-width:100%}
+.geode-debt-impact-label span:first-child{min-width:0;flex:1 1 auto}
+.geode-debt-impact-label span:last-child{flex-shrink:0;text-align:right}
+.geode-debt-impact-bar{height:6px;border-radius:999px;background:rgba(255,255,255,0.06);overflow:hidden;max-width:100%}
+.geode-debt-impact-fill{height:100%;border-radius:999px;max-width:100%;min-width:0}
+.geode-debt-impact-fill--min{background:linear-gradient(90deg,var(--warn),rgba(245,194,52,0.45))}
+.geode-debt-impact-fill--plan{background:linear-gradient(90deg,var(--ok),rgba(52,213,160,0.5))}
+.geode-debt-impact-chip{display:inline-flex;align-items:center;font-size:11px;line-height:1.35;padding:5px 10px;border-radius:999px;background:var(--bg-card);border:1px solid var(--bd);color:var(--tx-2);max-width:100%;box-sizing:border-box}
+.geode-debt-impact-saved{font-size:11px;color:var(--ok);margin-top:8px;line-height:1.45}
 
 /* Plan tab panels — shared surface family (Stage 25B, dark cohesion) */
 .plan-panel{margin:0 0 14px;padding:14px 16px;border-radius:16px;background:var(--bg-surface);border:1px solid var(--bd)}
@@ -11031,6 +11051,155 @@ function geodeOverBudgetPlanBlockHtml(left) {
   return h;
 }
 
+/**
+ * Plan debt step detail — compact visual debt impact (42C+42E+42G+42I; display-only).
+ * Uses mintCost / getDebtProjection only; no balance or plan math changes.
+ */
+function geodePlanDebtImpactSnapshotHtml(step, detailDebt) {
+  if (!detailDebt) return '';
+  var bal = toNum(detailDebt.balance);
+  if (!(bal > 0)) return '';
+
+  var extraPlan = toNum(step && step.amount);
+  var h = '';
+  h += '<div class="geode-debt-impact">';
+  h += '<div class="geode-debt-impact-title">' + escHtmlLite('Debt impact snapshot') + '</div>';
+
+  h += '<div class="geode-debt-impact-sect geode-debt-impact-sect--first">' + escHtmlLite('Interest drag') + '</div>';
+  var aprN = toNum(detailDebt.apr);
+  if (!(aprN > 0)) {
+    h +=
+      '<div class="geode-debt-impact-row">' +
+      '<span class="geode-debt-impact-chip">' +
+      escHtmlLite('Add APR from your statement to estimate interest drag here.') +
+      '</span></div>';
+  } else {
+    var miEst = mintCost(detailDebt);
+    h +=
+      '<div class="geode-debt-impact-row geode-debt-impact-drag">' +
+      escHtmlLite('About ' + fm(miEst) + '/month from the APR you entered.') +
+      '</div>';
+    if (extraPlan > 0) {
+      var relMo = (extraPlan * aprN) / 100 / 12;
+      if (relMo >= 1) {
+        h +=
+          '<div class="geode-debt-impact-relief">' +
+          escHtmlLite(
+            'If this payment reduces principal, interest could fall by about ' + fm(relMo) + '/month.'
+          ) +
+          '</div>';
+      } else if (relMo > 0) {
+        h +=
+          '<div class="geode-debt-impact-relief">' +
+          escHtmlLite(
+            'This payment may slightly reduce future interest if it reduces principal.'
+          ) +
+          '</div>';
+      }
+    }
+  }
+
+  var minPD = toNum(detailDebt.minp);
+  var showedShorten = false;
+
+  if (minPD > 0 && extraPlan > 0) {
+    var dpX = getDebtProjection(detailDebt, minPD, extraPlan);
+    if (
+      dpX &&
+      dpX.currentMonths !== null &&
+      dpX.improvedMonths !== null &&
+      isFinite(dpX.currentMonths) &&
+      isFinite(dpX.improvedMonths)
+    ) {
+      var maxM = Math.max(1, dpX.currentMonths, dpX.improvedMonths);
+      var wCur = Math.min(100, Math.round((dpX.currentMonths / maxM) * 100));
+      var wImp = Math.min(100, Math.round((dpX.improvedMonths / maxM) * 100));
+      h += '<div class="geode-debt-impact-bwrap geode-debt-impact-bwrap--first">';
+      h += '<div class="geode-debt-impact-label">';
+      h +=
+        '<span>' +
+        escHtmlLite('Minimum path') +
+        '</span><span style="color:var(--tx-3)">' +
+        escHtmlLite('about ' + dpX.currentMonths + ' months') +
+        '</span></div>';
+      h +=
+        '<div class="geode-debt-impact-bar" role="img" aria-label="' +
+        escHtmlLite('Simple illustration: minimum path about ' + dpX.currentMonths + ' months') +
+        '"><div class="geode-debt-impact-fill geode-debt-impact-fill--min" style="width:' +
+        wCur +
+        '%"></div></div></div>';
+
+      h += '<div class="geode-debt-impact-bwrap">';
+      h += '<div class="geode-debt-impact-label">';
+      h +=
+        '<span>' +
+        escHtmlLite('With this plan') +
+        '</span><span style="color:var(--tx-3)">' +
+        escHtmlLite('about ' + dpX.improvedMonths + ' months') +
+        '</span></div>';
+      h +=
+        '<div class="geode-debt-impact-bar" role="img" aria-label="' +
+        escHtmlLite('Simple illustration: with this plan about ' + dpX.improvedMonths + ' months') +
+        '"><div class="geode-debt-impact-fill geode-debt-impact-fill--plan" style="width:' +
+        wImp +
+        '%"></div></div></div>';
+
+      if (dpX.monthsSaved != null && dpX.monthsSaved >= 1) {
+        showedShorten = true;
+        h +=
+          '<div class="geode-debt-impact-saved">' +
+          escHtmlLite(
+            'Could shorten this simple estimate by about ' +
+              dpX.monthsSaved +
+              ' month' +
+              (dpX.monthsSaved === 1 ? '' : 's') +
+              '.'
+          ) +
+          '</div>';
+      }
+    } else {
+      h +=
+        '<div class="geode-debt-impact-row">' +
+        '<span class="geode-debt-impact-chip">' +
+        escHtmlLite('Simple payoff estimate unavailable from current entries') +
+        '</span></div>';
+    }
+  } else if (minPD <= 0) {
+    h +=
+      '<div class="geode-debt-impact-row">' +
+      '<span class="geode-debt-impact-chip">' +
+      escHtmlLite('Confirm minimum payment on your statement, then add it here.') +
+      '</span></div>';
+  } else {
+    h +=
+      '<div class="geode-debt-impact-muted">' +
+      escHtmlLite(
+        'A plan amount on this step is needed for a side-by-side simple illustration (estimated).'
+      ) +
+      '</div>';
+  }
+
+  if (step && step.debtProjectionNote) {
+    var dpn = String(geodePlanPagePlainStepText(step.debtProjectionNote) || '').trim();
+    var looksLikeShortenDup =
+      showedShorten &&
+      /shorten/i.test(dpn) &&
+      /\babout\b/i.test(dpn) &&
+      /\d/.test(dpn) &&
+      /month/i.test(dpn);
+    var dpnCap = geodeHomeInsightShortLine(dpn, 100);
+    if (dpnCap.length > 0 && !looksLikeShortenDup) {
+      h +=
+        '<div class="geode-debt-impact-muted geode-debt-impact-note">' +
+        escHtmlLite(dpnCap) +
+        '</div>';
+    }
+  }
+
+  h += '</div>';
+  return h;
+}
+
 /** Plan tab: full-screen-style step detail shell (display-only; layout 21B, debt 22B, buffer 23B, goal 23E, invest 24B). */
 function geodePlanStepDetailPageHtml(plan, ix) {
   plan = plan || {};
@@ -11228,53 +11397,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         escHtmlLite('No plan amount on this step — interest context still applies to this balance.') +
         '</div>';
     }
-    var miEst = mintCost(detailDebt);
-    h +=
-      '<div class="geode-plan-detail-metricrow" style="margin-top:10px"><span>Estimated interest/month</span><span>' +
-      escHtmlLite('about ' + fm(miEst) + '/month') +
-      '</span></div>';
-    var extraPlan = toNum(step.amount);
-    var aprN = toNum(detailDebt.apr);
-    if (extraPlan > 0 && aprN > 0) {
-      var redMo = (extraPlan * aprN) / 100 / 12;
-      h +=
-        '<div class="geode-plan-detail-impact-note">' +
-        escHtmlLite(
-          'If this reduces principal, future monthly interest drag could fall by about ' + fm(redMo) + '.'
-        ) +
-        '</div>';
-    } else if (extraPlan > 0) {
-      h +=
-        '<div class="geode-plan-detail-impact-note">' +
-        escHtmlLite(
-          'If this amount goes directly to principal, it reduces the balance used for future interest calculations.'
-        ) +
-        '</div>';
-    }
-    if (step.debtProjectionNote) {
-      var dpn = geodePlanPagePlainStepText(step.debtProjectionNote);
-      if (dpn) {
-        h += '<div class="geode-plan-detail-impact-note">' + escHtmlLite(dpn) + '</div>';
-      }
-    } else {
-      var minPD = toNum(detailDebt.minp);
-      if (minPD > 0 && extraPlan > 0) {
-        var dpX = getDebtProjection(detailDebt, minPD, extraPlan);
-        if (dpX && dpX.monthsSaved != null && dpX.monthsSaved >= 1) {
-          var ms = dpX.monthsSaved;
-          h +=
-            '<div class="geode-plan-detail-impact-note">' +
-            escHtmlLite(
-              'Beynd\u2019s simple projection suggests this could shorten payoff time by about ' +
-                ms +
-                ' month' +
-                (ms === 1 ? '' : 's') +
-                '.'
-            ) +
-            '</div>';
-        }
-      }
-    }
+    h += geodePlanDebtImpactSnapshotHtml(step, detailDebt);
   } else if (detailBuffer) {
     if (prog.suggested > 0) {
       h +=
@@ -11678,6 +11801,10 @@ function geodePlanStepDetailPageHtml(plan, ix) {
       escHtmlLite(
         'This estimate assumes the extra payment reduces principal, APR stays similar, and no new charges are added. Your lender\u2019s actual interest calculation may differ.'
       ) +
+      '</div>';
+    h +=
+      '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
+      escHtmlLite('Use this as direction, not a lender payoff quote.') +
       '</div>';
     h +=
       '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
