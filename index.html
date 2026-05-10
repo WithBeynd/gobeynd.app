@@ -119,8 +119,8 @@ html,body{height:100%;background:var(--bg-base);overflow:hidden;font-family:-app
 #splash{position:fixed;inset:0;z-index:99;background:radial-gradient(ellipse at 50% 40%,#1c0d38,#0a0618 50%,#05050f);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;transition:opacity 0.4s}
 #splash.gone{opacity:0;pointer-events:none}
 .sp-title{font-size:46px;font-weight:700;letter-spacing:5px;margin-top:18px;font-family:Georgia,"Palatino Linotype",Palatino,serif;background:linear-gradient(135deg,#c4abff,#e87ca0);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.sp-sub{font-size:11px;letter-spacing:4px;color:#9b93b8;text-transform:uppercase;margin-top:8px}
-.sp-tap{font-size:11px;color:rgba(255,255,255,0.25);margin-top:60px;letter-spacing:2px}
+.sp-sub{font-size:11px;letter-spacing:4px;color:var(--tx-3);text-transform:uppercase;margin-top:8px}
+.sp-tap{font-size:11px;color:var(--tx-4);margin-top:60px;letter-spacing:2px}
 
 /* HEADER */
 #hdr{padding:50px 18px 12px;background:var(--bg-base);border-bottom:1px solid var(--bd);display:flex;align-items:flex-end;justify-content:space-between;flex-shrink:0}
@@ -239,15 +239,15 @@ textarea.fi{min-height:70px}
 /* LOGIN */
 #pg-login{position:fixed;inset:0;z-index:90;background:radial-gradient(ellipse at 50% 30%,#1c0d38,#0a0618 50%,#05050f);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px 24px}
 .pin-dots{display:flex;gap:12px;margin:14px 0}
-.pin-dot{width:13px;height:13px;border-radius:50%;background:#202038;border:2px solid rgba(255,255,255,0.1);transition:all 0.15s}
-.pin-dot.on{background:#9b7fe8;border-color:#9b7fe8}
+.pin-dot{width:13px;height:13px;border-radius:50%;background:#202038;border:2px solid var(--bd);transition:all 0.15s}
+.pin-dot.on{background:var(--gem);border-color:var(--gem)}
 .pin-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;width:100%;max-width:280px;margin-top:8px}
-.pin-btn{background:#181830;border:1px solid rgba(255,255,255,0.08);border-radius:13px;padding:16px;font-size:20px;font-weight:700;color:#edeaff;cursor:pointer;text-align:center;-webkit-user-select:none;user-select:none;transition:background 0.1s}
-.pin-btn:active{background:#9b7fe8}
-.login-box{width:100%;max-width:320px;background:#101020;border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:20px 18px}
-.login-toggle{display:flex;gap:6px;background:#181830;border-radius:10px;padding:4px;margin-bottom:16px}
+.pin-btn{background:var(--bg-raised);border:1px solid var(--bd);border-radius:13px;padding:16px;font-size:20px;font-weight:700;color:var(--tx-1);cursor:pointer;text-align:center;-webkit-user-select:none;user-select:none;transition:background 0.1s}
+.pin-btn:active{background:var(--gem)}
+.login-box{width:100%;max-width:320px;background:var(--bg-card);border:1px solid var(--bd-em);border-radius:20px;padding:20px 18px}
+.login-toggle{display:flex;gap:6px;background:var(--bg-raised);border-radius:10px;padding:4px;margin-bottom:16px}
 .lt{flex:1;border:none;border-radius:7px;padding:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:-apple-system,sans-serif}
-.lt.on{background:#9b7fe8;color:#fff}
+.lt.on{background:var(--gem);color:#fff}
 .lt.off{background:none;color:#706a90}
 
 /* DEBT INTEREST BAR */
@@ -504,17 +504,17 @@ canvas{display:block}
       <div style="margin:14px 0 4px">
         <div style="font-size:11px;font-weight:600;color:var(--tx-3);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:8px">Income type</div>
         <div style="display:grid;gap:6px">
-          <div id="ob-it-stable" onclick="obSelectIncomeType('stable')" style="background:rgba(155,127,232,0.15);border:1px solid #9b7fe8;border-radius:12px;padding:11px 12px;cursor:pointer">
-            <div style="font-size:12px;font-weight:700;color:#c4abff">Stable income</div>
-            <div style="font-size:10px;color:rgba(189,183,220,0.82);margin-top:3px;line-height:1.4">Best if your income is fairly predictable month to month.</div>
+          <div id="ob-it-stable" onclick="obSelectIncomeType('stable')" style="background:rgba(155,127,232,0.15);border:1px solid var(--gem);border-radius:12px;padding:11px 12px;cursor:pointer">
+            <div style="font-size:12px;font-weight:700;color:var(--gem-l)">Stable income</div>
+            <div style="font-size:10px;color:var(--tx-2);margin-top:3px;line-height:1.4">Best if your income is fairly predictable month to month.</div>
           </div>
-          <div id="ob-it-irregular" onclick="obSelectIncomeType('irregular')" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:11px 12px;cursor:pointer">
-            <div style="font-size:12px;font-weight:700;color:rgba(237,234,255,0.85)">Irregular / variable income</div>
-            <div style="font-size:10px;color:rgba(189,183,220,0.82);margin-top:3px;line-height:1.4">Best if income changes by month. Beynd will put more weight on your buffer.</div>
+          <div id="ob-it-irregular" onclick="obSelectIncomeType('irregular')" style="background:rgba(255,255,255,0.03);border:1px solid var(--bd);border-radius:12px;padding:11px 12px;cursor:pointer">
+            <div style="font-size:12px;font-weight:700;color:var(--tx-1)">Irregular / variable income</div>
+            <div style="font-size:10px;color:var(--tx-2);margin-top:3px;line-height:1.4">Best if income changes by month. Beynd will put more weight on your buffer.</div>
           </div>
-          <div id="ob-it-none" onclick="obSelectIncomeType('none')" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:11px 12px;cursor:pointer">
-            <div style="font-size:12px;font-weight:700;color:rgba(237,234,255,0.85)">No current income</div>
-            <div style="font-size:10px;color:rgba(189,183,220,0.82);margin-top:3px;line-height:1.4">Best if you are between income sources. Beynd will focus on stability first.</div>
+          <div id="ob-it-none" onclick="obSelectIncomeType('none')" style="background:rgba(255,255,255,0.03);border:1px solid var(--bd);border-radius:12px;padding:11px 12px;cursor:pointer">
+            <div style="font-size:12px;font-weight:700;color:var(--tx-1)">No current income</div>
+            <div style="font-size:10px;color:var(--tx-2);margin-top:3px;line-height:1.4">Best if you are between income sources. Beynd will focus on stability first.</div>
           </div>
         </div>
       </div>
@@ -3966,9 +3966,9 @@ function obSelectIncomeType(type) {
     if (!el) continue;
     var on = (ids[i] === _obIncomeType);
     el.style.background = on ? 'rgba(155,127,232,0.15)' : 'rgba(255,255,255,0.03)';
-    el.style.borderColor = on ? '#9b7fe8' : 'rgba(255,255,255,0.07)';
+    el.style.borderColor = on ? 'var(--gem)' : 'var(--bd)';
     var ttl = el.firstElementChild;
-    if (ttl) ttl.style.color = on ? '#c4abff' : 'rgba(237,234,255,0.85)';
+    if (ttl) ttl.style.color = on ? 'var(--gem-l)' : 'var(--tx-1)';
   }
   var lbl = document.getElementById('ob-inc-label');
   if (lbl) lbl.textContent = _obIncomeType === 'none' ? 'Monthly income \u2014 leave blank if none' : 'Monthly income';
