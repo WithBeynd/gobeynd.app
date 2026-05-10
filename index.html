@@ -18426,12 +18426,12 @@ function rMe() {
   h+='<div class="field"><label>New Password</label><input type="password" id="npw" class="fi" placeholder="Leave blank to keep current" /></div>';
   h+='<button class="btn btn-p" onclick="saveSec()">Update Security</button></div>';
   h+=geodeRenderReminderSectionHtml();
-  h+='<div class="sh">Data & Import</div>';
+  h+='<div class="sh">Data & privacy</div>';
   h+='<div class="card" style="margin-bottom:12px;border-color:rgba(155,127,232,0.14)">';
   h+='<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">'+'<svg width="14" height="14" viewBox="0 0 20 20" fill="none">'+'<path d="M10 2L3 5v5c0 4.4 3 8.1 7 9 4-0.9 7-4.6 7-9V5L10 2z" stroke="#34d5a0" stroke-width="1.5" stroke-linejoin="round"/>'+'</svg><span style="font-size:10px;font-weight:700;color:#34d5a0;letter-spacing:0.5px">YOUR PRIVACY</span></div>';
-  h+='<div style="font-size:13px;color:var(--tx-1);font-weight:600;margin-bottom:6px">Your data stays on your device. Always.</div>';
-  h+='<div style="font-size:11px;color:var(--tx-2);line-height:1.6;margin-bottom:8px">No account required. No server. Nothing uploaded, analysed remotely, or sold. Your finances exist only on this phone.</div>';
-  h+='<div style="font-size:10px;color:var(--tx-3)">Most users complete setup in under 2 minutes using Quick Setup.</div>';
+  h+='<div style="font-size:13px;color:var(--tx-1);font-weight:600;margin-bottom:6px;line-height:1.45">Beynd stores your app data locally on this device. If you download a backup, that file is yours to keep private.</div>';
+  h+='<div style="font-size:11px;color:var(--tx-2);line-height:1.55;margin-bottom:8px">No account required. No server. Nothing uploaded or sold.</div>';
+  h+='<div style="font-size:11px;color:var(--tx-3)">Most users complete setup in under 2 minutes using Quick Setup.</div>';
   h+='</div>';
   /* Smart Import hidden — parser rebuild in progress. Uncomment to restore.
   h+='<div class="card" style="margin-bottom:14px">';
@@ -18441,7 +18441,7 @@ function rMe() {
   h+='</div>';
   */
   h+='<div class="sh">Settings</div>';
-  h+='<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:-4px 0 10px">Currency, income, and how aggressively the monthly plan splits spare cash.</div>';
+  h+='<div style="font-size:11px;color:var(--tx-3);line-height:1.4;margin:-4px 0 10px">Currency, income, and how aggressively the monthly plan splits spare cash.</div>';
   h+='<div class="card">';
   var rlb = {UK:'UK',US:'US',EU:'EU',Other:'Other'}[S.finRegion] || 'UK';
   var psn = planStrategyDisplayName(S.planStrategy);
@@ -18453,36 +18453,68 @@ function rMe() {
       : S.incomeExplicitlySet
         ? 'No income — used for what is left each month'
         : 'Not set — used for what is left each month';
-  var sets=[
-    ['Currency',S.cur.code+' ('+S.cur.sym+')','openCurModal()'],
-    ['Monthly income',incRow,'openIncModal()'],
-    ['Income type',itd,'openIncomeTypeModal()'],
-    ['Do you support others financially?',deps,'openDependantsModal()'],
-    ['Financial region',rlb,'openRegionModal()'],
-    ['Plan strategy',psn,'openPlanStrategyModal()'],
-
-    ['Export CSV','Spreadsheet-friendly summary. Cannot fully restore the app.','exportCSV()'],
-    [
-      'Download backup',
-      'Redacted JSON backup. Contains sensitive financial data; API key and lock details are excluded.',
-      'exportJSONBackup()'
-    ],
-    ['Beynd AI key',S.beyondApiKey ? 'API key set – Ask Beynd is active' : 'Not set – Ask Beynd is disabled','geodeOpenApiKeyModal()'],
-    ['Lock app','PIN screen; data stays on this device','lockApp()']
-  ];
-  sets.forEach(function(s){
-    h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--bd)"><div><div style="font-size:13px;font-weight:500">'+s[0]+'</div><div style="font-size:10px;color:var(--tx-3);margin-top:1px">'+s[1]+'</div></div><button class="btn-sm" onclick="'+s[2]+'">Go</button></div>';
-  });
-  h += '<div style="padding:10px 0;border-bottom:1px solid var(--bd)">';
-  h += '<div style="font-size:13px;font-weight:500">Appearance</div>';
-  h += '<div style="font-size:10px;color:var(--tx-3);margin-top:1px">Dark mode</div>';
+  var geodeMeRow = function (title, subtitle, onclick, btnLabel) {
+    return (
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--bd)">' +
+      '<div><div style="font-size:13px;font-weight:500">' +
+      title +
+      '</div><div style="font-size:11px;color:var(--tx-3);margin-top:1px">' +
+      subtitle +
+      '</div></div>' +
+      '<button type="button" class="btn-sm" onclick="' +
+      onclick +
+      '">' +
+      btnLabel +
+      '</button></div>'
+    );
+  };
+  var geodeMeSub = function (label) {
+    return (
+      '<div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:var(--tx-3);text-transform:uppercase;padding:12px 0 4px">' +
+      label +
+      '</div>'
+    );
+  };
+  h += geodeMeSub('Plan &amp; money setup');
+  h += geodeMeRow('Currency', S.cur.code + ' (' + S.cur.sym + ')', 'openCurModal()', 'Change');
+  h += geodeMeRow('Monthly income', incRow, 'openIncModal()', 'Change');
+  h += geodeMeRow('Income type', itd, 'openIncomeTypeModal()', 'Change');
+  h += geodeMeRow('Do you support others financially?', deps, 'openDependantsModal()', 'Change');
+  h += geodeMeRow('Financial region', rlb, 'openRegionModal()', 'Change');
+  h += geodeMeRow('Plan strategy', psn, 'openPlanStrategyModal()', 'Change');
+  h += geodeMeSub('Data &amp; backup');
+  h += geodeMeRow('Export CSV', 'Spreadsheet-friendly summary. Cannot fully restore the app.', 'exportCSV()', 'Export');
+  h += geodeMeRow(
+    'Download backup',
+    'Redacted JSON backup. Contains sensitive financial data; API key and lock details are excluded.',
+    'exportJSONBackup()',
+    'Download'
+  );
+  h += geodeMeSub('Access &amp; tools');
+  h += geodeMeRow(
+    'Beynd AI key',
+    S.beyondApiKey ? 'API key set – Ask Beynd is active' : 'Not set – Ask Beynd is disabled',
+    'geodeOpenApiKeyModal()',
+    'Manage'
+  );
+  h += geodeMeRow('Lock app', 'PIN screen; data stays on this device', 'lockApp()', 'Lock');
   h +=
-    '<div style="font-size:10px;color:var(--tx-3);margin-top:6px;line-height:1.35;opacity:0.88">White mode is being redesigned.</div>';
-  h += '</div>';
+    '<div style="padding:10px 0 0;margin-top:2px;border-top:1px solid var(--bd)">' +
+    '<div style="font-size:13px;font-weight:500">Appearance</div>' +
+    '<div style="font-size:11px;color:var(--tx-3);margin-top:4px;line-height:1.4">Dark mode only for now — light mode is being redesigned.</div>' +
+    '</div>';
   h+='<div style="height:2px"></div></div>';
-  h+='<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:8px 0 4px">Data is stored locally on this device.</div>';
-  h+='<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:0 0 14px">Saving a backup copies data to a file. Keep it private.</div>';
-  h+='<div class=\"sh\">Guide & Help</div>';
+  h+='<div style="font-size:11px;color:var(--tx-3);line-height:1.4;margin:8px 0 4px">Data is stored locally on this device.</div>';
+  h+='<div style="font-size:11px;color:var(--tx-3);line-height:1.4;margin:0 0 8px">Saving a backup copies data to a file. Keep it private.</div>';
+  h +=
+    '<div style="font-size:11px;color:var(--tx-3);line-height:1.45;margin:0 0 14px">' +
+    '<a href="https://withbeynd.com/#terms" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Terms</a>' +
+    ' &middot; ' +
+    '<a href="https://withbeynd.com/#privacy" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Privacy</a>' +
+    ' &middot; ' +
+    '<a href="#geode-settings-guide" style="color:#9b7fe8;text-decoration:none">Guide</a>' +
+    '</div>';
+  h+='<div class=\"sh\" id=\"geode-settings-guide\">Guide & Help</div>';
   h+='<div class=\"card\" style=\"margin-bottom:14px;padding:0;overflow:hidden\">';
   h+=geodeBuildUserGuideHtml();
   h+='</div>';
