@@ -182,7 +182,7 @@ body.light .dash-net-hero{background:linear-gradient(155deg,#ffffff,#f5f4f8 50%,
 
 /* FIELDS */
 .field{margin-bottom:12px}
-.field label{display:block;font-size:9px;font-weight:700;color:#9b93b8;text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
+.field label{display:block;font-size:10px;font-weight:700;color:var(--tx-3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px}
 .fi{width:100%;background:var(--bg-raised);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 14px;color:#edeaff;font-size:15px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;outline:none;-webkit-appearance:none;appearance:none;resize:none}
 .fi:focus{border-color:#9b7fe8}
 textarea.fi{min-height:70px}
@@ -205,7 +205,7 @@ textarea.fi{min-height:70px}
 .prog-fill{height:100%;border-radius:99px;transition:width 0.5s}
 
 /* SECTION */
-.sh{font-size:9px;font-weight:650;color:rgba(189,183,220,0.62);letter-spacing:1.2px;text-transform:uppercase;margin:16px 0 10px;display:flex;align-items:center;gap:8px}
+.sh{font-size:10px;font-weight:650;color:rgba(189,183,220,0.62);letter-spacing:1px;text-transform:uppercase;margin:16px 0 10px;display:flex;align-items:center;gap:8px}
 .sh::after{content:'';flex:1;height:1px;background:rgba(255,255,255,0.05)}
 
 /* EMPTY */
@@ -13557,7 +13557,7 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   }
 
   var h = '<div class="home-primary-action" style="margin:0 0 12px">';
-  h += '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Main Action</div>';
+  h += '<div style="font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">Main Action</div>';
   h +=
     '<div class="card" style="background:rgba(245,194,52,0.06);border:1px solid rgba(245,194,52,0.65);border-radius:14px;padding:16px 16px;margin-bottom:0;box-shadow:0 0 0 1px rgba(245,194,52,0.4),0 0 20px rgba(245,194,52,0.14)">';
   h += '<div style="font-size:13px;font-weight:800;color:var(--tx-1);line-height:1.25;margin-bottom:3px">' + escHtmlLite(title) + '</div>';
@@ -13960,7 +13960,7 @@ function geodeHomePrimaryActionHtml() {
   var disp = geodeHomeActionCardCopy(a);
   var sub = String(disp.sub || '').trim();
   var h = '<div class="home-primary-action" style="margin:0 0 10px">';
-  h += '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px">Main Action</div>';
+  h += '<div style="font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px">Main Action</div>';
   h +=
     '<button type="button" class="card" onclick="openSuggestedAction(0)" style="width:100%;text-align:left;cursor:pointer;background:rgba(245,194,52,0.06);border:1px solid rgba(245,194,52,0.65);border-radius:14px;padding:16px 16px;margin-bottom:0;font-family:inherit;display:block;box-shadow:0 0 0 1px rgba(245,194,52,0.4),0 0 20px rgba(245,194,52,0.14);transition:background 0.15s,border-color 0.15s,transform 0.08s">';
   h += '<div style="font-size:13px;font-weight:700;color:var(--tx-1);margin-bottom:6px">' + escHtmlLite(disp.title) + '</div>';
@@ -14318,7 +14318,7 @@ function geodeOverdueCardHtml() {
   }
   if (!items.length) return '';
   var h = '<div style="background:rgba(240,112,112,0.06);border:1px solid rgba(240,112,112,0.2);border-left:3px solid var(--danger);border-radius:14px;padding:13px 15px;margin-bottom:10px">';
-  h += '<div style="font-size:9px;font-weight:700;color:var(--danger);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">Needs attention</div>';
+  h += '<div style="font-size:10px;font-weight:700;color:var(--danger);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px">Needs attention</div>';
   items.slice(0,2).forEach(function(item) {
     h += '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid rgba(240,112,112,0.1)">';
     h += '<div style="font-size:12px;color:var(--tx-1);font-weight:600">' + escHtmlLite(item.name) + '</div>';
@@ -14445,7 +14445,7 @@ function geodeOpenAskBeynd() {
   h += '<textarea id="beynd-input" class="fi" rows="2" placeholder="Ask about your finances\u2026" style="flex:1;resize:none;font-size:13px" onkeydown="try{if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();geodeAskBeynd();}}catch(e){}"></textarea>';
   h += '<button type="button" class="btn btn-p" onclick="geodeAskBeynd()" style="flex-shrink:0;padding:10px 16px">Ask</button>';
   h += '</div>';
-  h += '<div style="font-size:8px;color:rgba(112,106,144,0.6);margin-top:8px;line-height:1.35">A financial summary is sent to Anthropic to answer your questions. Conversation is not stored.</div>';
+  h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-top:8px">A financial summary is sent to Anthropic to answer your questions. Conversation is not stored.</div>';
   openModal(h);
   geodeAskBeynd('Briefly introduce yourself and give me one key observation about my finances right now.');
 }
@@ -14598,9 +14598,9 @@ function geodeHomeGoalCompletionCardHtml() {
   try { window._geodeUnackedGoalId = String(g.id); } catch (_e) {}
   var nm = escHtmlLite(String(g.name || 'Your goal'));
   var h = '<div style="margin-bottom:12px;padding:16px;border-radius:14px;' +
-    'background:rgba(52,213,160,0.06);border:1px solid rgba(52,213,160,0.22);border-left:3px solid #34d5a0">';
-  h += '<div style="font-size:9px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;' +
-    'color:#34d5a0;margin-bottom:8px">Goal reached</div>';
+    'background:rgba(52,213,160,0.06);border:1px solid rgba(52,213,160,0.22);border-left:3px solid var(--ok)">';
+  h += '<div style="font-size:10px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;' +
+    'color:var(--ok);margin-bottom:8px">Goal reached</div>';
   h += '<div style="font-size:15px;font-weight:700;color:var(--tx-1);margin-bottom:8px">' + nm + '</div>';
   h += '<div style="font-size:12px;color:rgba(237,234,255,0.85);line-height:1.55;margin-bottom:12px">' +
     escHtmlLite('That is worth recognising. You can now decide whether to keep this money free, redirect it to another goal, or strengthen your buffer.') +
@@ -14649,11 +14649,11 @@ function rHome() {
       '<div style="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:10px;text-align:left">' +
       escHtmlLite('Your next money move, based on this month.') +
       '</div>';
-    hEmpty += '<div style="font-size:9px;color:#c4abff;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-weight:700;text-align:left">Net Worth</div>';
-    hEmpty += '<div class="big-num" style="color:' + (net >= 0 ? '#34d5a0' : '#f07070') + ';text-align:left">' + fm(net) + '</div>';
+    hEmpty += '<div style="font-size:10px;color:var(--gem-l);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px;font-weight:700;text-align:left">Net Worth</div>';
+    hEmpty += '<div class="big-num" style="color:' + (net >= 0 ? 'var(--ok)' : 'var(--danger)') + ';text-align:left">' + fm(net) + '</div>';
     hEmpty +=
       '<details style="margin-top:8px;border:none;background:transparent;text-align:left">' +
-      '<summary style="font-size:10px;color:var(--tx-3);cursor:pointer;list-style:none;line-height:1.45;outline:none">Tap to see breakdown</summary>' +
+      '<summary style="font-size:11px;color:var(--tx-3);cursor:pointer;list-style:none;line-height:1.45;outline:none">Tap to see breakdown</summary>' +
       '<div style="margin-top:8px;font-size:10px;color:rgba(237,234,255,0.82);line-height:1.45">Assets: ' +
       fm(tSav) +
       '<br/>Liabilities: ' +
@@ -14682,11 +14682,11 @@ function rHome() {
     '<div style="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:10px">' +
     escHtmlLite('Your next money move, based on this month.') +
     '</div>';
-  h += '<div style="font-size:9px;color:#c4abff;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-weight:700">Net Worth</div>';
-  h += '<div class="big-num" style="color:' + (net >= 0 ? '#34d5a0' : '#f07070') + '">' + fm(net) + '</div>';
+  h += '<div style="font-size:10px;color:var(--gem-l);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px;font-weight:700">Net Worth</div>';
+  h += '<div class="big-num" style="color:' + (net >= 0 ? 'var(--ok)' : 'var(--danger)') + '">' + fm(net) + '</div>';
   h +=
     '<details style="margin-top:8px;border:none;background:transparent">' +
-    '<summary style="font-size:10px;color:var(--tx-3);cursor:pointer;list-style:none;line-height:1.45;outline:none">Tap to see breakdown</summary>' +
+    '<summary style="font-size:11px;color:var(--tx-3);cursor:pointer;list-style:none;line-height:1.45;outline:none">Tap to see breakdown</summary>' +
     '<div style="margin-top:8px;font-size:10px;color:rgba(237,234,255,0.82);line-height:1.45">Assets: ' +
     fm(tSav) +
     '<br/>Liabilities: ' +
@@ -14704,7 +14704,7 @@ function rHome() {
         h +=
           '<div style="margin-bottom:14px;padding:16px;border-radius:14px;' +
           'background:rgba(240,112,112,0.06);border:1px solid rgba(240,112,112,0.28);border-left:3px solid #f07070">' +
-          '<div style="font-size:9px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:#f07070;margin-bottom:6px">Your plan shows you\u2019re over budget</div>' +
+          '<div style="font-size:10px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--danger);margin-bottom:6px">Your plan shows you\u2019re over budget</div>' +
           '<div style="font-size:18px;font-weight:800;color:#f07070;margin-bottom:8px">\u2212' + escHtmlLite(fm(_qs_over)) + ' / month</div>' +
           '<div style="font-size:12px;color:rgba(237,234,255,0.88);line-height:1.55;margin-bottom:12px">' +
           escHtmlLite('Based on what you\u2019ve entered, your spending exceeds your income. ' +
@@ -14760,7 +14760,7 @@ function rHome() {
         'background:rgba(240,112,112,0.05);border:1px solid rgba(240,112,112,0.25);' +
         'border-left:3px solid #f07070">';
       h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">';
-      h += '<div style="font-size:9px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#f07070">Over budget</div>';
+      h += '<div style="font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--danger)">Over budget</div>';
       h += '<div style="font-size:16px;font-weight:800;color:#f07070">−' + escHtmlLite(fm(_homeOver)) + '</div>';
       h += '</div>';
       h += '<div style="font-size:11px;color:rgba(237,234,255,0.8);line-height:1.5;margin-bottom:10px">' +
@@ -14976,9 +14976,9 @@ function rPlan() {
         '<div style="padding:16px;border-radius:14px;background:rgba(155,127,232,0.06);border:1px solid rgba(155,127,232,0.18);margin-bottom:14px">' +
         '<div style="font-size:13px;font-weight:700;color:var(--tx-1);margin-bottom:10px">Three steps to your first plan</div>' +
         '<div style="font-size:12px;color:var(--tx-2);line-height:1.7">' +
-        '<div style="margin-bottom:6px"><span style="color:#9b7fe8;font-weight:700">1.</span> Set your monthly income \u2014 tap the income pill at the top of Home</div>' +
-        '<div style="margin-bottom:6px"><span style="color:#9b7fe8;font-weight:700">2.</span> Add your regular expenses in Money \u2192 Spending</div>' +
-        '<div><span style="color:#9b7fe8;font-weight:700">3.</span> Come back here \u2014 your plan builds automatically</div>' +
+        '<div style="margin-bottom:6px"><span style="color:var(--gem);font-weight:700">1.</span> Set your monthly income \u2014 tap the income pill at the top of Home</div>' +
+        '<div style="margin-bottom:6px"><span style="color:var(--gem);font-weight:700">2.</span> Add your regular expenses in Money \u2192 Spending</div>' +
+        '<div><span style="color:var(--gem);font-weight:700">3.</span> Come back here \u2014 your plan builds automatically</div>' +
         '</div></div>';
       h +=
         '<button type="button" class="btn btn-p" onclick="geodeOpenQuickSetupWizard()" style="width:100%;margin-bottom:10px">Quick setup (2 mins)</button>';
@@ -15128,15 +15128,15 @@ function rDash() {
   var left = calcMonthlyLeftover(S);
 
   var h = '<div class="dash-net-hero">';
-  h += '<div style="font-size:9px;color:#c4abff;letter-spacing:2px;text-transform:uppercase;margin-bottom:5px;font-weight:700">Net Worth</div>';
-  h += '<div class="big-num" style="color:'+(net>=0?'#34d5a0':'#f07070')+'">'+fm(net)+'</div>';
+  h += '<div style="font-size:10px;color:var(--gem-l);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:5px;font-weight:700">Net Worth</div>';
+  h += '<div class="big-num" style="color:'+(net>=0?'var(--ok)':'var(--danger)')+'">'+fm(net)+'</div>';
   // Removed incomplete “since last update” messaging from header.
   h += '</div>';
 
   h += '<div class="sh">Your financial position</div><div class="g2" style="grid-template-columns:repeat(3,1fr)">';
-  h += '<div class="tile"><div class="tile-lb">Assets</div><div class="med-num" style="color:#34d5a0">'+fm(assets)+'</div></div>';
-  h += '<div class="tile"><div class="tile-lb">Debt</div><div class="med-num" style="color:#f07070">'+fm(tDebt)+'</div></div>';
-  h += '<div class="tile"><div class="tile-lb">Net position</div><div class="med-num" style="color:'+(net>=0?'#9b7fe8':'#f07070')+'">'+fm(net)+'</div></div></div>';
+  h += '<div class="tile"><div class="tile-lb">Assets</div><div class="med-num" style="color:var(--ok)">'+fm(assets)+'</div></div>';
+  h += '<div class="tile"><div class="tile-lb">Debt</div><div class="med-num" style="color:var(--danger)">'+fm(tDebt)+'</div></div>';
+  h += '<div class="tile"><div class="tile-lb">Net position</div><div class="med-num" style="color:'+(net>=0?'var(--gem)':'var(--danger)')+'">'+fm(net)+'</div></div></div>';
 
   h += '<div class="chart-tabs">';
   var ctabs = [['nw','wallet','Net Worth'],['spend','receipt','Spending'],['debt','credit-card','Debt'],['inv','trending-up','Portfolio']];
@@ -15543,13 +15543,13 @@ function rMoneyOverview(el) {
   hero.style.cssText = 'background:var(--bg-surface);border-radius:20px;padding:20px;margin-bottom:12px;border:1px solid var(--bd-em)';
 
   var heroLabel = document.createElement('div');
-  heroLabel.style.cssText = 'font-size:9px;color:var(--gem-l);letter-spacing:2px;text-transform:uppercase;margin-bottom:5px;font-weight:700';
+  heroLabel.style.cssText = 'font-size:10px;color:var(--gem-l);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:5px;font-weight:700';
   heroLabel.textContent = 'Net Worth';
   hero.appendChild(heroLabel);
 
   var heroNum = document.createElement('div');
   heroNum.className = 'big-num';
-  heroNum.style.color = net >= 0 ? '#34d5a0' : '#f07070';
+  heroNum.style.color = net >= 0 ? 'var(--ok)' : 'var(--danger)';
   heroNum.textContent = fm(net);
   hero.appendChild(heroNum);
 
@@ -15568,7 +15568,7 @@ function rMoneyOverview(el) {
 
   // ── Financial summary rows ───────────────────────────────────────────────
   var sectionLabel = document.createElement('div');
-  sectionLabel.style.cssText = 'font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px';
+  sectionLabel.style.cssText = 'font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px';
   sectionLabel.textContent = 'Your finances';
   el.appendChild(sectionLabel);
 
@@ -15582,13 +15582,13 @@ function rMoneyOverview(el) {
     var gPct = Math.min(100, Math.round(primEff / Number(primGoal.amount) * 100));
     goalVal   = escHtmlLite(primGoal.name);
     goalDetail =
-      '<div style="font-size:12px;font-weight:700;color:#34d5a0">' + escHtmlLite(fm(primEff)) + '</div>' +
+      '<div style="font-size:12px;font-weight:700;color:var(--ok)">' + escHtmlLite(fm(primEff)) + '</div>' +
       '<div style="height:3px;background:var(--bg-raised);border-radius:2px;margin-top:5px;overflow:hidden">' +
-      '<div style="width:' + gPct + '%;height:3px;background:#34d5a0;border-radius:2px"></div></div>' +
-      '<div style="font-size:9px;color:var(--tx-3);margin-top:3px">' + gPct + '% of ' + escHtmlLite(fm(primGoal.amount)) + '</div>';
+      '<div style="width:' + gPct + '%;height:3px;background:var(--ok);border-radius:2px"></div></div>' +
+      '<div style="font-size:10px;color:var(--tx-3);margin-top:3px">' + gPct + '% of ' + escHtmlLite(fm(primGoal.amount)) + '</div>';
   } else if (S.goals.length) {
     goalVal    = escHtmlLite(fm(tGS)) + ' <span style="font-size:10px;font-weight:400;color:var(--tx-3)">saved</span>';
-    goalDetail = '<div style="font-size:12px;font-weight:700;color:#34d5a0">' + S.goals.length + ' goal' + (S.goals.length===1?'':'s') + '</div>';
+    goalDetail = '<div style="font-size:12px;font-weight:700;color:var(--ok)">' + S.goals.length + ' goal' + (S.goals.length===1?'':'s') + '</div>';
   } else {
     goalVal    = null;
     goalDetail = '<div style="font-size:12px;color:var(--tx-3)">No goals set</div>';
@@ -15598,8 +15598,8 @@ function rMoneyOverview(el) {
   var spendVal, spendDetail;
   if (S.expenses.length) {
     spendVal   = escHtmlLite(fm(tSpend)) + ' <span style="font-size:10px;font-weight:400;color:var(--tx-3)">/mo</span>';
-    spendDetail = '<div style="font-size:12px;font-weight:700;color:#f5c234">' + escHtmlLite(fm(tSpend)) + '</div>' +
-      '<div style="font-size:9px;color:var(--tx-3);margin-top:1px">' + S.expenses.length + ' categor' + (S.expenses.length===1?'y':'ies') + '</div>';
+    spendDetail = '<div style="font-size:12px;font-weight:700;color:var(--warn)">' + escHtmlLite(fm(tSpend)) + '</div>' +
+      '<div style="font-size:10px;color:var(--tx-3);margin-top:1px">' + S.expenses.length + ' categor' + (S.expenses.length===1?'y':'ies') + '</div>';
   } else {
     spendVal    = null;
     spendDetail = '<div style="font-size:12px;color:var(--tx-3)">No spending logged</div>';
@@ -15732,7 +15732,7 @@ function rMoney() {
     }
     if (_cfWarn) {
       h +=
-        '<div style="font-size:10px;color:rgba(245,194,52,0.9);line-height:1.4;margin:0 0 10px;padding:8px 12px;border-radius:10px;background:rgba(245,194,52,0.07);border:1px solid rgba(245,194,52,0.2)">' +
+        '<div style="font-size:10px;color:rgba(245,194,52,0.95);line-height:1.4;margin:0 0 10px;padding:8px 12px;border-radius:10px;background:rgba(245,194,52,0.07);border:1px solid rgba(245,194,52,0.2)">' +
         'Left this month may read higher than real life' +
         '</div>';
     }
@@ -15742,7 +15742,7 @@ function rMoney() {
       var _offT = geodeIntelAppliedPositiveDeltaTotal();
       if (_offT > 0) {
         h +=
-          '<div style="font-size:9px;color:rgba(112,106,144,0.92);line-height:1.35;margin:-4px 0 10px">' +
+          '<div style="font-size:10px;color:rgba(112,106,144,0.92);line-height:1.35;margin:-4px 0 10px">' +
           'Activity and your committed plan differ \u2014 Plan tab for detail.' +
           '</div>';
       }
@@ -15763,7 +15763,7 @@ function rMoney() {
   }
   h +=
     '<div style="margin:0 0 12px;padding:10px 12px;border-radius:12px;border:1px solid var(--bd);background:var(--bg-surface)">' +
-    '<div style="font-size:8px;font-weight:700;color:rgba(189,183,220,0.42);letter-spacing:1.2px;text-transform:uppercase;margin:0 0 8px">Income</div>' +
+    '<div style="font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:1.1px;text-transform:uppercase;margin:0 0 8px">Income</div>' +
     '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">' +
     '<span style="font-size:11px;color:rgba(189,183,220,0.58);line-height:1.35">Current income</span>' +
     '<span style="display:inline-flex;align-items:baseline;gap:8px;flex-wrap:wrap;justify-content:flex-end;text-align:right;max-width:58%">' +
@@ -15775,7 +15775,7 @@ function rMoney() {
     '</div>';
   // Quick Setup lives in initial onboarding only (not shown on Cash Flow).
   h +=
-    '<div style="font-size:8px;font-weight:700;color:var(--tx-3);letter-spacing:1.1px;text-transform:uppercase;margin:2px 0 6px;opacity:0.72">This month at a glance</div>';
+    '<div style="font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:1.1px;text-transform:uppercase;margin:2px 0 6px;opacity:0.72">This month at a glance</div>';
   h+='<div class="g2" style="margin-bottom:10px">';
   h+='<div class="tile" style="border-color:rgba(240,112,112,0.12)"><div class="tile-lb">Total Debt</div><div class="med-num" style="color:#f07070">'+fm(tDebt)+'</div></div>';
   h+=
@@ -15786,7 +15786,7 @@ function rMoney() {
     '">' +
     fm(left) +
     '</div>' +
-    (left < 0 ? '<div style="font-size:9px;color:#f07070;margin-top:3px">Below plan this month</div>' : '') +
+    (left < 0 ? '<div style="font-size:10px;color:var(--danger);margin-top:3px">Below plan this month</div>' : '') +
     geodeLeftThisMonthTileHintHtml() +
     '</div></div>';
   h +=
@@ -15863,7 +15863,7 @@ function rReview(el) {
   h += '<div class="card" style="margin-bottom:12px;padding:12px 14px">';
   h +=
     '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px">' +
-    '<div style="font-size:8px;font-weight:800;color:rgba(189,183,220,0.42);letter-spacing:1.4px;text-transform:uppercase">' +
+    '<div style="font-size:10px;font-weight:800;color:var(--tx-3);letter-spacing:1.1px;text-transform:uppercase">' +
     'Observed activity' +
     '</div>' +
     '</div>';
@@ -15906,26 +15906,26 @@ function rReview(el) {
 
   h += '<div class="card" style="margin-bottom:12px;padding:12px 14px">';
   h +=
-    '<div style="font-size:8px;font-weight:800;color:rgba(189,183,220,0.42);letter-spacing:1.4px;text-transform:uppercase;margin-bottom:8px">' +
+    '<div style="font-size:10px;font-weight:800;color:var(--tx-3);letter-spacing:1.1px;text-transform:uppercase;margin-bottom:8px">' +
     'Manual plan' +
     '</div>' +
     '<div style="font-size:10px;color:rgba(237,234,255,0.86);line-height:1.45">' +
     'You control your plan.' +
     '</div>' +
     '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px">' +
-    '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--bd);background:rgba(255,255,255,0.02);font-size:9px;font-weight:750;color:rgba(189,183,220,0.78)">' +
+    '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--bd);background:rgba(255,255,255,0.02);font-size:10px;font-weight:750;color:rgba(189,183,220,0.78)">' +
     'Spending lines ' +
     '<span style="color:var(--tx-1);font-weight:800">' +
     String(expN) +
     '</span>' +
     '</span>' +
-    '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--bd);background:rgba(255,255,255,0.02);font-size:9px;font-weight:750;color:rgba(189,183,220,0.78)">' +
+    '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--bd);background:rgba(255,255,255,0.02);font-size:10px;font-weight:750;color:rgba(189,183,220,0.78)">' +
     'Debts ' +
     '<span style="color:var(--tx-1);font-weight:800">' +
     String(debtN) +
     '</span>' +
     '</span>' +
-    '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--bd);background:rgba(255,255,255,0.02);font-size:9px;font-weight:750;color:rgba(189,183,220,0.78)">' +
+    '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--bd);background:rgba(255,255,255,0.02);font-size:10px;font-weight:750;color:rgba(189,183,220,0.78)">' +
     'Contributions to confirm ' +
     '<span style="color:var(--tx-1);font-weight:800">' +
     String(contribCheckN) +
@@ -15938,7 +15938,7 @@ function rReview(el) {
     '<div style="display:flex;justify-content:flex-end;align-items:center;padding:10px 2px 2px">' +
     '<button type="button" onclick="goTab(\'me\')" ' +
     'style="background:none;border:none;padding:0;margin:0;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,sans-serif;' +
-    'font-size:9px;font-weight:750;color:rgba(196,171,255,0.78);text-decoration:underline;text-underline-offset:2px;white-space:nowrap">' +
+    'font-size:10px;font-weight:750;color:var(--gem-l);text-decoration:underline;text-underline-offset:2px;white-space:nowrap">' +
     'Add data' +
     '</button>' +
     '</div>';
@@ -18273,10 +18273,10 @@ function delInv(id){
 function geodeOpenApiKeyModal() {
   var cur = S.beyondApiKey || '';
   var h = mh('Beynd AI key');
-  h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.55;margin:-4px 0 12px">An Anthropic API key enables the Ask Beynd coach on your Home screen. Your key is stored only on this device and never sent anywhere except to answer your questions.</div>';
-  h += '<div style="font-size:9px;color:var(--tx-3);line-height:1.35;margin-bottom:10px">Get a free key at <span style="color:#c4abff">console.anthropic.com</span>. Usage is pay-per-query and very low cost.</div>';
+  h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.55;margin:-4px 0 12px">An Anthropic API key enables Ask Beynd on your Home screen. Your key is stored only on this device and never sent anywhere except to answer your questions.</div>';
+  h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-bottom:10px">Get a free key at <span style="color:var(--gem-l)">console.anthropic.com</span>. Usage is pay-per-query and very low cost.</div>';
   h += '<div class="field"><label>API key</label><input id="beynd-key-in" class="fi" type="password" placeholder="sk-ant-..." value="' + escHtmlLite(cur) + '" /></div>';
-  h += '<div style="font-size:9px;color:rgba(112,106,144,0.7);line-height:1.35;margin-bottom:12px">A summary of your finances (not raw transaction names) is sent to Anthropic when you ask a question. Queries are not stored by Beynd.</div>';
+  h += '<div style="font-size:10px;color:rgba(112,106,144,0.7);line-height:1.35;margin-bottom:12px">A summary of your finances (not raw transaction names) is sent to Anthropic when you ask a question. Queries are not stored by Beynd.</div>';
   h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
   h += '<button class="btn btn-p" onclick="geodeSaveApiKey()" style="flex:1">Save</button>';
   if (cur) h += '<button class="btn btn-s" onclick="geodeClearApiKey()" style="flex:0">Remove key</button>';
@@ -18443,7 +18443,7 @@ function geodeMeChip(label, tone) {
 
 function geodeMeSub(label) {
   return (
-    '<div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:var(--tx-3);text-transform:uppercase;padding:12px 0 4px">' +
+    '<div style="font-size:11px;font-weight:700;letter-spacing:0.05em;color:var(--tx-3);text-transform:uppercase;padding:12px 0 4px">' +
     label +
     '</div>'
   );
@@ -18552,9 +18552,9 @@ function geodeBuildSettingsLandingHtml() {
   geodeNormalizeReminderPrefs();
   var r = S.reminderPrefs;
   var remSub = r.enabled ? 'On' : 'Off';
-  var profileSub = p.name && String(p.name).trim() ? String(p.name).trim() : 'Name and profile message';
-  var accessSub = (S.beyondApiKey ? 'AI key on' : 'AI key off') + ' \u00b7 Lock \u00b7 Dark mode';
   var displayName = p.name && String(p.name).trim() ? String(p.name).trim() : '';
+  var profileSub = displayName ? 'Name, photo, and message' : 'Name and profile message';
+  var accessSub = (S.beyondApiKey ? 'AI key on' : 'AI key off') + ' \u00b7 Lock \u00b7 Dark mode';
   var identityTitle = displayName || 'Your Beynd setup';
   var h = '';
   h +=
