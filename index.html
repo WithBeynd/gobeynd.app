@@ -15746,7 +15746,7 @@ function rMoney() {
     _incCfVal = '\u2014';
   }
   h +=
-    '<div style="margin:0 0 12px;padding:10px 12px;border-radius:12px;border:1px solid var(--bd);background:rgba(255,255,255,0.02)">' +
+    '<div style="margin:0 0 12px;padding:10px 12px;border-radius:12px;border:1px solid var(--bd);background:var(--bg-surface)">' +
     '<div style="font-size:8px;font-weight:700;color:rgba(189,183,220,0.42);letter-spacing:1.2px;text-transform:uppercase;margin:0 0 8px">Income</div>' +
     '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">' +
     '<span style="font-size:11px;color:rgba(189,183,220,0.58);line-height:1.35">Current income</span>' +
@@ -15758,6 +15758,8 @@ function rMoney() {
     '</div>' +
     '</div>';
   // Quick Setup lives in initial onboarding only (not shown on Cash Flow).
+  h +=
+    '<div style="font-size:8px;font-weight:700;color:var(--tx-3);letter-spacing:1.1px;text-transform:uppercase;margin:2px 0 6px;opacity:0.72">This month at a glance</div>';
   h+='<div class="g2" style="margin-bottom:10px">';
   h+='<div class="tile" style="border-color:rgba(240,112,112,0.12)"><div class="tile-lb">Total Debt</div><div class="med-num" style="color:#f07070">'+fm(tDebt)+'</div></div>';
   h+=
@@ -15771,6 +15773,8 @@ function rMoney() {
     (left < 0 ? '<div style="font-size:9px;color:#f07070;margin-top:3px">Below plan this month</div>' : '') +
     geodeLeftThisMonthTileHintHtml() +
     '</div></div>';
+  h +=
+    '<div style="font-size:10px;color:var(--tx-3);line-height:1.45;margin:0 0 12px;text-align:center;opacity:0.9">Beynd uses these entries to build your monthly plan.</div>';
   // Sub-tab row: 3+3 grid so 6 tabs fit cleanly on any screen
   h+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px">';
   [['overview','Overview'],['goals','Goals'],['expenses','Spending'],['debts','Debts'],['payments','Contributions'],['invest','Investments']].forEach(function(row){
