@@ -10789,42 +10789,27 @@ function geodePlanPageOverviewHtml(plan) {
     '<div class="plan-kicker">' +
     escHtmlLite('Plan overview') +
     '</div>';
-  if (plan.strategyLine) {
-    var slDisp = String(plan.strategyLine).replace(/^Monthly plan style:\s*/i, 'Style: ');
-    h +=
-      '<div style="font-size:11px;color:var(--tx-2);line-height:1.45">' +
-      escHtmlLite(slDisp) +
-      '</div>';
-  }
+  var narrative = '';
   if (plan.focusLine) {
-    var flDisp = String(plan.focusLine).replace(/^Focusing on:\s*/i, 'Focus: ');
+    narrative = String(plan.focusLine).replace(/^Focusing on:\s*/i, '');
+  } else if (plan.summary) {
+    narrative = geodeHomeInsightShortLine(String(plan.summary), 100);
+  }
+  if (narrative) {
     h +=
-      '<div style="margin-top:6px;font-size:11px;color:rgba(196,171,255,0.95);line-height:1.45">' +
-      escHtmlLite(flDisp) +
+      '<div style="font-size:12px;color:rgba(237,234,255,0.94);line-height:1.45">' +
+      escHtmlLite(narrative) +
       '</div>';
   }
-  h +=
-    '<div style="margin-top:12px;font-size:12px;color:rgba(237,234,255,0.94);line-height:1.45">' +
-    escHtmlLite(geodeHomeInsightShortLine(String(plan.summary || ''), 130)) +
-    '</div>';
   h +=
     '<div style="margin-top:10px;font-size:12px;font-weight:700;color:#f5c234">' +
-    escHtmlLite('Spare cash: ' + fm(plan.leftover)) +
-    '</div>' +
-    '<div style="margin-top:4px;font-size:11px;color:var(--tx-4);line-height:1.35;font-weight:500">' +
-    escHtmlLite('Based on your current plan.') +
+    escHtmlLite('Available room: ' + fm(plan.leftover)) +
     '</div>';
-  if (plan.projection) {
-    h +=
-      '<div style="margin-top:8px;font-size:11px;color:rgba(189,183,220,0.88);line-height:1.45">' +
-      escHtmlLite(geodeHomeInsightShortLine(String(plan.projection), 95)) +
-      '</div>';
-  }
   h += '</div>';
   return h;
 }
 
-function geodePlanPageStatusSectionHtml() {
+function geodePlanPageStatusSectionHtml(optSkipNegDup) {
   if (!geodeHasPlanContext()) {
     return (
       '<div class="plan-panel">' +
@@ -10838,6 +10823,7 @@ function geodePlanPageStatusSectionHtml() {
   }
   var left = calcMonthlyLeftover(S);
   if (left < 0) {
+    if (optSkipNegDup) return '';
     return (
       '<div class="plan-panel">' +
       '<div style="font-size:14px;font-weight:700;color:#f07070;line-height:1.35">' +
@@ -10916,37 +10902,11 @@ function geodePlanPageStatusSectionHtml() {
 function geodePlanPageStyleSectionHtml() {
   var k = S.planStrategy || 'balanced';
   var fullName = planStrategyDisplayName(k);
-  var cfg = getStrategyConfig(k);
-  function pct(n) {
-    return Math.round(Number(n) * 100);
-  }
-  var sliceLine =
-    'Plan order stays fixed. Style affects how leftover cash is split: debt overpay ~' +
-    pct(cfg.debtRatio) +
-    '%, buffer ~' +
-    pct(cfg.emergencyCapRatio) +
-    '%, goals ~' +
-    pct(cfg.goalRatio) +
-    '%, invest ~' +
-    pct(cfg.investRatio) +
-    '%. Changing style shifts the amounts, not the sequence.';
-  var toneLine = geodePlanStrategyVoiceLine();
   return (
-    '<div class="plan-panel">' +
-    '<div class="plan-kicker">' +
-    escHtmlLite('Plan style') +
-    '</div>' +
-    '<div style="font-size:15px;font-weight:700;color:var(--tx-1)">' +
-    escHtmlLite(fullName) +
-    '</div>' +
-    '<div style="margin-top:8px;font-size:11px;color:rgba(189,183,220,0.9);line-height:1.45">' +
-    escHtmlLite(sliceLine) +
-    '</div>' +
-    '<div style="margin-top:8px;font-size:11px;color:rgba(237,234,255,0.82);line-height:1.45">' +
-    escHtmlLite(geodeHomeInsightShortLine(toneLine, 110)) +
-    '</div>' +
-    '<div style="margin-top:8px;font-size:11px"><span class="link-like" onclick="goTab(\'me\')">Plan strategy · Settings</span></div>' +
-    '</div>'
+    '<div style="margin:0 0 12px;font-size:11px;color:var(--tx-2);line-height:1.45">' +
+    escHtmlLite(fullName + ' plan style') +
+    ' · ' +
+    '<span class="link-like" onclick="goTab(\'me\')">Change in Settings</span></div>'
   );
 }
 
@@ -11948,22 +11908,46 @@ function geodePlanApplyPriorityStep(ix) {
   } catch (_e) {}
 }
 
-function geodePlanPageWhyOrderSectionHtml() {
+function geodePlanPageHowPlanWorksSectionHtml() {
   var k = S.planStrategy || 'balanced';
+  var cfg = getStrategyConfig(k);
+  function pct(n) {
+    return Math.round(Number(n) * 100);
+  }
   var styleHint =
     k === 'debt'
-      ? 'Debt-focused style brings APR 5%+ debt into view before goals and new investing, while debt above 10% still comes first.'
+      ? 'Debt-focused style surfaces APR 5%+ debt before goals and new investing; APR above 10% still leads.'
       : k === 'growth'
-        ? 'Growth style steers more to goals and investing after basics.'
-        : 'Balanced style spreads spare cash across all four areas.';
+        ? 'Growth style tilts spare cash toward goals and investing once basics are covered.'
+        : 'Balanced style spreads spare cash across debt paydown, buffer, goals, and investing.';
+  var sliceShort =
+    'Rough split for leftover cash with this style: debt ~' +
+    pct(cfg.debtRatio) +
+    '%, buffer ~' +
+    pct(cfg.emergencyCapRatio) +
+    '%, goals ~' +
+    pct(cfg.goalRatio) +
+    '%, invest ~' +
+    pct(cfg.investRatio) +
+    '%.';
   var body =
-    '<p style="margin:0;line-height:1.45">' +
-    escHtmlLite('Fixed order: debt \u2192 buffer \u2192 goals \u2192 investing. ') +
+    '<p style="margin:0 0 10px;line-height:1.45">' +
+    escHtmlLite('Steps follow one steady order: debt care \u2192 buffer \u2192 goals \u2192 investing.') +
+    '</p>' +
+    '<p style="margin:0 0 10px;line-height:1.45">' +
     escHtmlLite(styleHint) +
+    '</p>' +
+    '<p style="margin:0 0 10px;line-height:1.45">' +
+    escHtmlLite(sliceShort) +
+    '</p>' +
+    '<p style="margin:0;line-height:1.45">' +
+    escHtmlLite('Changing plan style adjusts how amounts are split; the step order stays the same.') +
     '</p>';
   return (
     '<details style="margin:14px 0;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,0.03);border:1px solid var(--bd)">' +
-    '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:rgba(196,171,255,0.95);list-style:none;outline:none">Why this order?</summary>' +
+    '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:rgba(196,171,255,0.95);list-style:none;outline:none">' +
+    escHtmlLite('How this plan works') +
+    '</summary>' +
     '<div style="margin-top:10px;font-size:11px;color:rgba(237,234,255,0.78)">' +
     body +
     '</div></details>'
@@ -11974,25 +11958,16 @@ function geodePlanPageAlignmentSectionHtml() {
   if (geodeIsNoIncomeMode() || geodeIsEmptyState()) return '';
   var pl = geodeHomePressureLevel();
   var left = calcMonthlyLeftover(S);
-  var line = '';
+  var prefix = '';
   if (left < 0 || pl === 'strong') {
-    line = 'Recent spending is putting this plan under pressure.';
+    prefix = 'Activity and this plan may not match. ';
   } else if (pl === 'mild') {
-    line = 'Headroom is tight — small changes keep this plan realistic.';
-  } else {
-    line = 'Your current setup is aligned with this plan.';
+    prefix = 'Small tweaks keep this plan realistic. ';
   }
   return (
-    '<div style="margin:16px 0 0;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,0.02);border:1px solid var(--bd)">' +
-    '<div style="font-size:11px;color:rgba(237,234,255,0.88);line-height:1.45">' +
-    escHtmlLite(line) +
-    '</div></div>'
-  );
-}
-
-function geodePlanPageHomeLinkRow() {
-  return (
-    '<div style="margin-top:12px;font-size:11px"><span class="link-like" onclick="goTab(\'home\')">Review actions on Home</span></div>'
+    '<div style="margin:14px 0 0;font-size:11px;color:rgba(237,234,255,0.72);line-height:1.45">' +
+    escHtmlLite(prefix) +
+    '<span class="link-like" onclick="goTab(\'home\')">Review actions on Home</span></div>'
   );
 }
 
@@ -15021,25 +14996,23 @@ function rPlan() {
       var _bT = Number(S.emergencyBuffer||0);
       var _bS = Number(S.bufferSaved||0);
       var _bSh = _bT>0 && _bS<_bT*0.9;
-      if (_iCtx==='IRREGULAR') { _sL='With variable income in the picture, your plan puts buffer ahead of goals \u2014 so a slower month doesn\u2019t create a knock-on problem.'; }
-      else if (_lft<0) { _sL='Your current entries show more going out than coming in. The plan looks for pressure points first \u2014 you\u2019ll know best what\u2019s realistic to adjust.'; }
-      else if (_hD&&_bSh) { _sL=S.planStrategy==='debt' ? 'Even in Debt-focused mode, a small buffer comes first, so an unexpected cost does not force new borrowing. Your debt step follows immediately.' : 'With debt and a buffer gap showing, your plan prioritises the buffer first. A cushion makes an unexpected cost less likely to mean new borrowing.'; }
-      else if (_hD) { _sL='Based on what\u2019s entered, this debt appears first because its interest is creating the most monthly drag. If something else is pressing right now, you can adjust around it.'; }
-      else if (_bSh) { _sL='With no high-interest debt showing, your plan points toward a buffer next. That gives more room before committing to longer-term goals.'; }
-      else if (S.goals&&S.goals.length>0) { _sL='With debt and buffer pressure lower, your plan has more room for goals. You can still reorder them if one matters more this month.'; }
+      if (_iCtx==='IRREGULAR') { _sL='Variable income: buffer sits before goals so a quieter month doesn\u2019t knock the rest off course.'; }
+      else if (_lft<0) { _sL=''; }
+      else if (_hD&&_bSh) { _sL=S.planStrategy==='debt' ? 'High-interest debt is in play; a modest buffer still comes first so a surprise doesn\u2019t mean new borrowing. Debt follows next.' : 'Debt and a buffer gap both show; the buffer builds first so surprises are less likely to mean new borrowing.'; }
+      else if (_hD) { _sL='This debt sits first because its interest costs the most each month. Adjust if something else needs attention right now.'; }
+      else if (_bSh) { _sL='No high-interest debt flagged; the buffer is next so you have room before longer-term goals.'; }
+      else if (S.goals&&S.goals.length>0) { _sL='Debt and buffer look lighter; there\u2019s more room for goals this month. Reorder goals if one matters more now.'; }
       if (_sL) { h+='<div style="font-size:11px;color:var(--tx-3);line-height:1.55;margin-bottom:16px;padding:10px 14px;border-radius:10px;background:rgba(255,255,255,0.025);border-left:2px solid var(--gem)">'+escHtmlLite(_sL)+'</div>'; }
     } catch(_eSt) {}
 
-    h += geodePlanPageStatusSectionHtml();
-    h += geodePlanPageStyleSectionHtml();
-
     if (!geodeHasPositiveIncome()) {
+      h += geodePlanPageStatusSectionHtml();
+      h += geodePlanPageStyleSectionHtml();
       h +=
         '<div style="padding:14px;border-radius:14px;background:rgba(255,255,255,0.03);border:1px solid var(--bd);font-size:12px;color:rgba(237,234,255,0.85);line-height:1.45">';
       h += escHtmlLite('Add monthly income in Settings to see how Beynd would allocate spare cash.');
       h += '</div>';
       h += geodePlanPageAlignmentSectionHtml();
-      h += geodePlanPageHomeLinkRow();
       h += '</div>';
       c.innerHTML = h;
 
@@ -15048,35 +15021,42 @@ function rPlan() {
 
     var plan = getMonthPlan();
     if (!geodeHasPlanContext()) {
+      h += geodePlanPageStatusSectionHtml();
+      h += geodePlanPageStyleSectionHtml();
       h += geodePlanPageAlignmentSectionHtml();
-      h += geodePlanPageHomeLinkRow();
       h += '</div>';
       c.innerHTML = h;
 
       return;
     }
     if (!plan.steps.length) {
+      h += geodePlanPageStatusSectionHtml();
+      h += geodePlanPageStyleSectionHtml();
       h +=
         '<div style="padding:14px;border-radius:14px;background:rgba(255,255,255,0.03);border:1px solid var(--bd);font-size:12px;color:rgba(237,234,255,0.88);line-height:1.45">';
       h += escHtmlLite('Not enough spare cash or data yet to build plan steps this month.');
       h += '</div>';
       h += geodePlanPageAlignmentSectionHtml();
-      h += geodePlanPageHomeLinkRow();
       h += '</div>';
       c.innerHTML = h;
 
       return;
     }
 
+    h += geodePlanPageStatusSectionHtml(calcMonthlyLeftover(S) < 0);
+    h += geodePlanPageStyleSectionHtml();
+
     var _planLeftover = calcMonthlyLeftover(S);
-    h += geodePlanPageOverviewHtml(plan);
+    if (_planLeftover >= 0) {
+      h += geodePlanPageOverviewHtml(plan);
+    }
     if (_planLeftover < 0) {
       // Over budget: replace steps with recovery view — nothing to allocate
       h += geodeOverBudgetPlanBlockHtml(_planLeftover);
     } else {
       h += geodePlanPagePrioritiesStackHtml(plan);
     }
-    h += geodePlanPageWhyOrderSectionHtml();
+    h += geodePlanPageHowPlanWorksSectionHtml();
     if (plan.noInvestNote) {
       var _noInvDisp = String(plan.noInvestNote).replace(/higher[\u2011\u002d]priority plan steps/gi, 'earlier plan steps');
       h +=
@@ -15085,7 +15065,6 @@ function rPlan() {
         '</div>';
     }
     h += geodePlanPageAlignmentSectionHtml();
-    h += geodePlanPageHomeLinkRow();
     h += '</div>';
     c.innerHTML = h;
     return;
