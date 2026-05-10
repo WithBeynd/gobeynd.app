@@ -18408,6 +18408,35 @@ function geodeBuildUserGuideHtml() {
   return h;
 }
 
+/** Small read-only status pill for Settings (display only; no behaviour change). */
+function geodeMeChip(label, tone) {
+  var bg, bd, fg;
+  if (tone === 'good') {
+    bg = 'rgba(52,213,160,0.14)';
+    bd = 'rgba(52,213,160,0.38)';
+    fg = '#5ee9c0';
+  } else if (tone === 'warn') {
+    bg = 'rgba(240,176,112,0.14)';
+    bd = 'rgba(240,176,112,0.35)';
+    fg = '#f0c090';
+  } else {
+    bg = 'rgba(255,255,255,0.05)';
+    bd = 'rgba(255,255,255,0.12)';
+    fg = 'rgba(237,234,255,0.55)';
+  }
+  return (
+    '<span style="display:inline-block;font-size:9px;font-weight:700;letter-spacing:0.055em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid ' +
+    bd +
+    ';background:' +
+    bg +
+    ';color:' +
+    fg +
+    ';line-height:1.35;flex-shrink:0">' +
+    label +
+    '</span>'
+  );
+}
+
 function rMe() {
   var c=document.getElementById('content'), p=S.profile;
   var h='<div style="display:flex;flex-direction:column;align-items:center;padding:24px 0 18px">';
@@ -18453,12 +18482,18 @@ function rMe() {
       : S.incomeExplicitlySet
         ? 'No income — used for what is left each month'
         : 'Not set — used for what is left each month';
-  var geodeMeRow = function (title, subtitle, onclick, btnLabel) {
+  var geodeMeRow = function (title, subtitle, onclick, btnLabel, chipHtml) {
+    chipHtml = chipHtml || '';
     return (
-      '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--bd)">' +
-      '<div><div style="font-size:13px;font-weight:500">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--bd);gap:10px">' +
+      '<div style="min-width:0;flex:1">' +
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+      '<span style="font-size:13px;font-weight:500">' +
       title +
-      '</div><div style="font-size:11px;color:var(--tx-3);margin-top:1px">' +
+      '</span>' +
+      chipHtml +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--tx-3);margin-top:1px">' +
       subtitle +
       '</div></div>' +
       '<button type="button" class="btn-sm" onclick="' +
@@ -18493,14 +18528,18 @@ function rMe() {
   h += geodeMeSub('Access &amp; tools');
   h += geodeMeRow(
     'Beynd AI key',
-    S.beyondApiKey ? 'API key set – Ask Beynd is active' : 'Not set – Ask Beynd is disabled',
+    S.beyondApiKey ? 'Active — Ask Beynd can respond' : 'Not set — Ask Beynd is disabled',
     'geodeOpenApiKeyModal()',
-    'Manage'
+    'Manage',
+    geodeMeChip(S.beyondApiKey ? 'Active' : 'Not set', S.beyondApiKey ? 'good' : 'muted')
   );
   h += geodeMeRow('Lock app', 'PIN screen; data stays on this device', 'lockApp()', 'Lock');
   h +=
     '<div style="padding:10px 0 0;margin-top:2px;border-top:1px solid var(--bd)">' +
-    '<div style="font-size:13px;font-weight:500">Appearance</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+    '<span style="font-size:13px;font-weight:500">Appearance</span>' +
+    geodeMeChip('Dark only', 'muted') +
+    '</div>' +
     '<div style="font-size:11px;color:var(--tx-3);margin-top:4px;line-height:1.4">Dark mode only for now — light mode is being redesigned.</div>' +
     '</div>';
   h+='<div style="height:2px"></div></div>';
@@ -18511,8 +18550,6 @@ function rMe() {
     '<a href="https://withbeynd.com/#terms" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Terms</a>' +
     ' &middot; ' +
     '<a href="https://withbeynd.com/#privacy" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Privacy</a>' +
-    ' &middot; ' +
-    '<a href="#geode-settings-guide" style="color:#9b7fe8;text-decoration:none">Guide</a>' +
     '</div>';
   h+='<div class=\"sh\" id=\"geode-settings-guide\">Guide & Help</div>';
   h+='<div class=\"card\" style=\"margin-bottom:14px;padding:0;overflow:hidden\">';
