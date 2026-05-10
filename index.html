@@ -14629,6 +14629,10 @@ function rHome() {
   if (emptySt) {
     var hEmpty = '<div class="hero" style="padding:24px 20px 32px;margin-bottom:14px;text-align:center">';
     hEmpty += '<div style="font-size:11px;font-weight:600;color:var(--tx-4);margin-bottom:4px;text-align:left">' + nm + '</div>';
+    hEmpty +=
+      '<div style="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:10px;text-align:left">' +
+      escHtmlLite('Your next money move, based on this month.') +
+      '</div>';
     hEmpty += '<div style="font-size:9px;color:#c4abff;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-weight:700;text-align:left">Net Worth</div>';
     hEmpty += '<div class="big-num" style="color:' + (net >= 0 ? '#34d5a0' : '#f07070') + ';text-align:left">' + fm(net) + '</div>';
     hEmpty +=
@@ -14658,6 +14662,10 @@ function rHome() {
 
   var h = '<div class="hero" style="padding:24px;margin-bottom:14px">';
   h += '<div style="font-size:11px;font-weight:600;color:var(--tx-4);margin-bottom:4px">' + nm + '</div>';
+  h +=
+    '<div style="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:10px">' +
+    escHtmlLite('Your next money move, based on this month.') +
+    '</div>';
   h += '<div style="font-size:9px;color:#c4abff;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;font-weight:700">Net Worth</div>';
   h += '<div class="big-num" style="color:' + (net >= 0 ? '#34d5a0' : '#f07070') + '">' + fm(net) + '</div>';
   h +=
@@ -14761,7 +14769,7 @@ function rHome() {
     var _sCardCp = _sCardItems.length ? geodeSubscriptionReminderCopy(_sCardItems) : null;
     var _sdRenewLine = _sCardCp ? escHtmlLite(_sCardCp.line) : escHtmlLite(_sd.name || '');
     _homeSubRenewCardHtml +=
-      '<div style="background:rgba(245,194,52,0.07);border:1px solid rgba(245,194,52,0.22);border-left:3px solid var(--warn);border-radius:14px;padding:13px 15px;margin-bottom:10px;cursor:pointer" onclick="geodeOpenSubReview(\'' +
+      '<div style="background:var(--bg-surface);border:1px solid var(--bd);border-left:2px solid rgba(245,194,52,0.42);border-radius:14px;padding:13px 15px;margin-bottom:10px;cursor:pointer;box-shadow:none" onclick="geodeOpenSubReview(\'' +
       _sd.id +
       "','" +
       _sdKind +
