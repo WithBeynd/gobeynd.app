@@ -994,14 +994,16 @@ function setReminderFrequency(f) {
   render();
 }
 
-function geodeRenderReminderSectionHtml() {
+function geodeRenderReminderSectionHtml(skipOuterHeader) {
   geodeNormalizeReminderPrefs();
   var r = S.reminderPrefs;
   var show = r.enabled;
   var h = '';
-  h += '<div class="sh">Reminders</div>';
-  h +=
-    '<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:-4px 0 10px">Reminder preferences. Optional &mdash; off by default.</div>';
+  if (!skipOuterHeader) {
+    h += '<div class="sh">Reminders</div>';
+    h +=
+      '<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:-4px 0 10px">Reminder preferences. Optional &mdash; off by default.</div>';
+  }
   h += '<div class="card">';
   h +=
     '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--bd);gap:12px">' +
@@ -5903,6 +5905,7 @@ function goTab(t) {
     markActive();
   }
   tab = t;
+  if (t === 'me') window._geodeSettingsSection = '';
   var btns = document.querySelectorAll('.tab');
   for (var i=0; i<btns.length; i++) { btns[i].className = 'tab' + (btns[i].dataset.t===t?' on':''); }
   render();
@@ -18437,42 +18440,84 @@ function geodeMeChip(label, tone) {
   );
 }
 
-function rMe() {
-  var c=document.getElementById('content'), p=S.profile;
-  var h='<div style="display:flex;flex-direction:column;align-items:center;padding:24px 0 18px">';
-  h+='<div onclick="pickPhoto()" style="width:84px;height:84px;border-radius:50%;border:2.5px solid #9b7fe8;overflow:hidden;cursor:pointer;background:var(--bg-raised);display:flex;align-items:center;justify-content:center;position:relative">';
-  h+=p.photo?'<img src="'+p.photo+'" style="width:100%;height:100%;object-fit:cover" />':'<span class="ic" style="width:40px;height:40px;color:var(--tx-3)">' + geodeSvg('user') + '</span>';
-  h+='</div><input type="file" id="ph-in" accept="image/*" style="display:none" onchange="onPhoto(event)" />';
-  h+='<div style="margin-top:13px;font-size:24px;font-weight:700;background:linear-gradient(135deg,#c4abff,#e87ca0);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">'+(p.name||'Your Name')+'</div>';
-  if(p.bio) h+='<div style="font-size:12px;color:var(--tx-3);text-align:center;margin-top:5px;padding:0 28px;font-style:italic">&ldquo;'+p.bio+'&rdquo;</div>';
-  h+='</div>';
-  h+='<div class="card"><div class="card-title">Edit Profile</div>';
-  h+='<div class="field"><label>Name</label><input id="pr-n" class="fi" value="'+(p.name||'')+'" placeholder="Your full name" /></div>';
-  h+='<div class="field"><label>Profile Message</label><textarea id="pr-b" class="fi" placeholder="e.g. Building my future one day at a time">'+(p.bio||'')+'</textarea></div>';
-  h+='<button class="btn btn-p" onclick="saveProfile()">Save Profile</button></div>';
-  h+='<div class="sh">Security</div><div class="card">';
-  h+='<div class="field"><label>New PIN (4 digits)</label><input type="password" id="np" class="fi" placeholder="Leave blank to keep current" maxlength="4" inputmode="numeric" /></div>';
-  h+='<div class="field"><label>New Password</label><input type="password" id="npw" class="fi" placeholder="Leave blank to keep current" /></div>';
-  h+='<button class="btn btn-p" onclick="saveSec()">Update Security</button></div>';
-  h+=geodeRenderReminderSectionHtml();
-  h+='<div class="sh">Data & privacy</div>';
-  h+='<div class="card" style="margin-bottom:12px;border-color:rgba(155,127,232,0.14)">';
-  h+='<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">'+'<svg width="14" height="14" viewBox="0 0 20 20" fill="none">'+'<path d="M10 2L3 5v5c0 4.4 3 8.1 7 9 4-0.9 7-4.6 7-9V5L10 2z" stroke="#34d5a0" stroke-width="1.5" stroke-linejoin="round"/>'+'</svg><span style="font-size:10px;font-weight:700;color:#34d5a0;letter-spacing:0.5px">YOUR PRIVACY</span></div>';
-  h+='<div style="font-size:13px;color:var(--tx-1);font-weight:600;margin-bottom:6px;line-height:1.45">Beynd stores your app data locally on this device. If you download a backup, that file is yours to keep private.</div>';
-  h+='<div style="font-size:11px;color:var(--tx-2);line-height:1.55;margin-bottom:8px">No account required. No server. Nothing uploaded or sold.</div>';
-  h+='<div style="font-size:11px;color:var(--tx-3)">Most users complete setup in under 2 minutes using Quick Setup.</div>';
-  h+='</div>';
-  /* Smart Import hidden — parser rebuild in progress. Uncomment to restore.
-  h+='<div class="card" style="margin-bottom:14px">';
-  h+=
-    '<button type="button" class="btn btn-s" onclick="geodeOpenSmartImport()" style="width:100%;background:rgba(155,127,232,0.14);border:1px solid rgba(155,127,232,0.28);color:#e8ddff;font-weight:700">Import from statement</button>' +
-    '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-top:8px">Upload a CSV or paste lines to add spending and contributions.</div>';
-  h+='</div>';
-  */
-  h+='<div class="sh">Settings</div>';
-  h+='<div style="font-size:11px;color:var(--tx-3);line-height:1.4;margin:-4px 0 10px">Currency, income, and how aggressively the monthly plan splits spare cash.</div>';
-  h+='<div class="card">';
-  var rlb = {UK:'UK',US:'US',EU:'EU',Other:'Other'}[S.finRegion] || 'UK';
+
+function geodeMeSub(label) {
+  return (
+    '<div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:var(--tx-3);text-transform:uppercase;padding:12px 0 4px">' +
+    label +
+    '</div>'
+  );
+}
+
+function geodeMeRow(title, subtitle, onclick, btnLabel, chipHtml) {
+  chipHtml = chipHtml || '';
+  return (
+    '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--bd);gap:10px">' +
+    '<div style="min-width:0;flex:1">' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+    '<span style="font-size:13px;font-weight:500">' +
+    title +
+    '</span>' +
+    chipHtml +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--tx-3);margin-top:1px">' +
+    subtitle +
+    '</div></div>' +
+    '<button type="button" class="btn-sm" onclick="' +
+    onclick +
+    '">' +
+    btnLabel +
+    '</button></div>'
+  );
+}
+
+function geodeSettingsLandingRow(title, subtitle, sectionKey, chipHtml) {
+  chipHtml = chipHtml || '';
+  return (
+    '<div onclick="geodeSettingsOpen(\'' +
+    sectionKey +
+    '\')" style="display:flex;align-items:center;justify-content:space-between;padding:14px 14px;border-bottom:1px solid var(--bd);cursor:pointer;gap:12px">' +
+    '<div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+    '<div style="font-size:15px;font-weight:600;color:var(--tx-1)">' +
+    title +
+    '</div>' +
+    chipHtml +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--tx-3);margin-top:4px;line-height:1.4">' +
+    subtitle +
+    '</div></div>' +
+    '<span style="font-size:20px;color:var(--tx-3);flex-shrink:0;line-height:1">\u203a</span></div>'
+  );
+}
+
+function geodeSettingsOpen(section) {
+  var a = { profile: 1, plan: 1, data: 1, access: 1, reminders: 1, guide: 1, danger: 1 };
+  if (!section || !a[String(section)]) return;
+  window._geodeSettingsSection = String(section);
+  rMe();
+}
+
+function geodeSettingsBack() {
+  window._geodeSettingsSection = '';
+  rMe();
+}
+
+function geodeSettingsBackHeader(title, subtitle) {
+  return (
+    '<div style="padding:4px 0 14px;border-bottom:1px solid var(--bd);margin-bottom:12px">' +
+    '<button type="button" class="btn btn-s" onclick="geodeSettingsBack()">Back to Settings</button>' +
+    '<div class="sh" style="margin-top:10px;margin-bottom:0">' +
+    title +
+    '</div>' +
+    (subtitle
+      ? '<div style="font-size:11px;color:var(--tx-3);line-height:1.45;margin-top:4px">' + subtitle + '</div>'
+      : '') +
+    '</div>'
+  );
+}
+
+function geodeBuildSettingsPlanBodyHtml() {
+  var rlb = { UK: 'UK', US: 'US', EU: 'EU', Other: 'Other' }[S.finRegion] || 'UK';
   var psn = planStrategyDisplayName(S.planStrategy);
   var itd = geodeIncomeTypeDisplay();
   var deps = S.hasDependants ? 'Yes' : 'No';
@@ -18482,34 +18527,8 @@ function rMe() {
       : S.incomeExplicitlySet
         ? 'No income — used for what is left each month'
         : 'Not set — used for what is left each month';
-  var geodeMeRow = function (title, subtitle, onclick, btnLabel, chipHtml) {
-    chipHtml = chipHtml || '';
-    return (
-      '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--bd);gap:10px">' +
-      '<div style="min-width:0;flex:1">' +
-      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
-      '<span style="font-size:13px;font-weight:500">' +
-      title +
-      '</span>' +
-      chipHtml +
-      '</div>' +
-      '<div style="font-size:11px;color:var(--tx-3);margin-top:1px">' +
-      subtitle +
-      '</div></div>' +
-      '<button type="button" class="btn-sm" onclick="' +
-      onclick +
-      '">' +
-      btnLabel +
-      '</button></div>'
-    );
-  };
-  var geodeMeSub = function (label) {
-    return (
-      '<div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:var(--tx-3);text-transform:uppercase;padding:12px 0 4px">' +
-      label +
-      '</div>'
-    );
-  };
+  var h = '';
+  h += '<div class="card">';
   h += geodeMeSub('Plan &amp; money setup');
   h += geodeMeRow('Currency', S.cur.code + ' (' + S.cur.sym + ')', 'openCurModal()', 'Change');
   h += geodeMeRow('Monthly income', incRow, 'openIncModal()', 'Change');
@@ -18517,15 +18536,140 @@ function rMe() {
   h += geodeMeRow('Do you support others financially?', deps, 'openDependantsModal()', 'Change');
   h += geodeMeRow('Financial region', rlb, 'openRegionModal()', 'Change');
   h += geodeMeRow('Plan strategy', psn, 'openPlanStrategyModal()', 'Change');
-  h += geodeMeSub('Data &amp; backup');
-  h += geodeMeRow('Export CSV', 'Spreadsheet-friendly summary. Cannot fully restore the app.', 'exportCSV()', 'Export');
+  h += '<div style="height:2px"></div></div>';
+  return h;
+}
+
+function geodeBuildSettingsLandingHtml() {
+  var p = S.profile;
+  var psn = planStrategyDisplayName(S.planStrategy);
+  var incShort = geodeHasPositiveIncome()
+    ? fm(S.income)
+    : S.incomeExplicitlySet
+      ? 'No income'
+      : 'Not set';
+  var planSub = S.cur.code + ' \u00b7 ' + incShort + ' \u00b7 ' + psn;
+  geodeNormalizeReminderPrefs();
+  var r = S.reminderPrefs;
+  var remSub = r.enabled ? 'On' : 'Off';
+  var profileSub = p.name && String(p.name).trim() ? String(p.name).trim() : 'Name and profile message';
+  var accessSub = (S.beyondApiKey ? 'AI key on' : 'AI key off') + ' \u00b7 Lock \u00b7 Dark mode';
+  var displayName = p.name && String(p.name).trim() ? String(p.name).trim() : '';
+  var identityTitle = displayName || 'Your Beynd setup';
+  var h = '';
+  h +=
+    '<div style="display:flex;align-items:flex-start;gap:10px;padding:12px;margin-bottom:12px;border-radius:14px;border:1px solid var(--bd);background:var(--bg-surface);min-width:0;box-sizing:border-box">' +
+    '<div style="width:40px;height:40px;flex-shrink:0;border-radius:50%;overflow:hidden;background:var(--bg-raised);display:flex;align-items:center;justify-content:center;border:1px solid var(--bd);box-sizing:border-box">';
+  if (p.photo) {
+    h += '<img src="' + p.photo + '" alt="" style="width:100%;height:100%;object-fit:cover;display:block" />';
+  } else {
+    h +=
+      '<span style="font-size:8px;font-weight:800;letter-spacing:0.05em;line-height:1.05;text-align:center;display:block;padding:0 3px;background:linear-gradient(135deg,#c4abff,#e87ca0);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">BEYND</span>';
+  }
+  h += '</div>';
+  h +=
+    '<div style="min-width:0;flex:1;align-self:center">' +
+    '<div style="font-size:15px;font-weight:600;color:var(--tx-1);line-height:1.25;word-wrap:break-word;overflow-wrap:anywhere">' +
+    identityTitle +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--tx-3);line-height:1.4;margin-top:3px;word-wrap:break-word;overflow-wrap:anywhere">Manage your plan setup, data, access, reminders, and help.</div>' +
+    '</div></div>';
+  h += '<div class="sh" style="margin-bottom:12px">Settings</div>';
+  h += '<div class="card" style="margin-bottom:14px;padding:0;overflow:hidden">';
+  h += geodeSettingsLandingRow('Your profile', profileSub, 'profile', '');
+  h += geodeSettingsLandingRow('Plan & money', planSub, 'plan', '');
+  h += geodeSettingsLandingRow('Data, privacy & backup', 'Local-first \u00b7 Export \u00b7 Backup', 'data', '');
+  h += geodeSettingsLandingRow('Access & security', accessSub, 'access', '');
+  h += geodeSettingsLandingRow('Reminders', remSub, 'reminders', '');
+  h += geodeSettingsLandingRow('Guide & legal', 'Guide \u00b7 Terms \u00b7 Privacy', 'guide', '');
+  h += geodeSettingsLandingRow('Danger zone', 'Reset all data', 'danger', '');
+  h += '</div><div style="height:10px"></div>';
+  return h;
+}
+
+function geodeBuildSettingsProfileDrillHtml() {
+  var p = S.profile;
+  var h = geodeSettingsBackHeader('Your profile', 'Name, photo, and profile message.');
+  h += '<div class="card" style="margin-bottom:12px;padding:12px 14px">';
+  h += '<div style="display:flex;align-items:center;gap:12px">';
+  h +=
+    '<div onclick="pickPhoto()" style="width:52px;height:52px;flex-shrink:0;border-radius:50%;border:2px solid rgba(155,127,232,0.45);overflow:hidden;cursor:pointer;background:var(--bg-raised);display:flex;align-items:center;justify-content:center;position:relative">';
+  h +=
+    p.photo
+      ? '<img src="' + p.photo + '" style="width:100%;height:100%;object-fit:cover" />'
+      : '<span class="ic" style="width:26px;height:26px;color:var(--tx-3)">' + geodeSvg('user') + '</span>';
+  h += '</div><input type="file" id="ph-in" accept="image/*" style="display:none" onchange="onPhoto(event)" />';
+  h += '<div style="min-width:0;flex:1">';
+  h +=
+    '<div style="font-size:16px;font-weight:600;color:var(--tx-1);line-height:1.25">' +
+    (p.name || 'Your name') +
+    '</div>';
+  h += '<div style="font-size:11px;color:var(--tx-3);margin-top:4px;line-height:1.35">Tap photo to change</div>';
+  if (p.bio) {
+    h +=
+      '<div style="font-size:12px;color:var(--tx-2);margin-top:8px;line-height:1.45;font-style:italic">&ldquo;' +
+      p.bio +
+      '&rdquo;</div>';
+  }
+  h += '</div></div></div>';
+  h += '<div class="card"><div class="card-title">Edit Profile</div>';
+  h +=
+    '<div class="field"><label>Name</label><input id="pr-n" class="fi" value="' +
+    (p.name || '') +
+    '" placeholder="Your full name" /></div>';
+  h +=
+    '<div class="field"><label>Profile Message</label><textarea id="pr-b" class="fi" placeholder="e.g. Building my future one day at a time">' +
+    (p.bio || '') +
+    '</textarea></div>';
+  h += '<button class="btn btn-p" onclick="saveProfile()">Save Profile</button></div>';
+  h += '<div style="height:10px"></div>';
+  return h;
+}
+
+function geodeBuildSettingsDataDrillHtml() {
+  var h = geodeSettingsBackHeader('Data, privacy & backup', 'Local data, exports, and backup files.');
+  h += '<div class="card" style="margin-bottom:12px;border-color:rgba(155,127,232,0.14)">';
+  h +=
+    '<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">' +
+    '<svg width="14" height="14" viewBox="0 0 20 20" fill="none">' +
+    '<path d="M10 2L3 5v5c0 4.4 3 8.1 7 9 4-0.9 7-4.6 7-9V5L10 2z" stroke="#34d5a0" stroke-width="1.5" stroke-linejoin="round"/>' +
+    '</svg><span style="font-size:10px;font-weight:600;color:#34d5a0;letter-spacing:0.02em">Your privacy</span></div>';
+  h +=
+    '<div style="font-size:13px;color:var(--tx-1);font-weight:600;margin-bottom:6px;line-height:1.4">Beynd stores your app data locally on this device. Downloaded backups are files you control \u2014 keep them private.</div>';
+  h +=
+    '<div style="font-size:11px;color:var(--tx-2);line-height:1.45">No account. No server sync. Nothing uploaded or sold.</div>';
+  h += '</div>';
+  h += '<div class="card">';
+  h += geodeMeSub('Export &amp; backup');
+  h += geodeMeRow('Export CSV', 'Spreadsheet summary. Not a full restore file.', 'exportCSV()', 'Export');
   h += geodeMeRow(
     'Download backup',
-    'Redacted JSON backup. Contains sensitive financial data; API key and lock details are excluded.',
+    'Redacted JSON backup. Contains sensitive financial data.',
     'exportJSONBackup()',
     'Download'
   );
-  h += geodeMeSub('Access &amp; tools');
+  h += '<div style="height:2px"></div></div>';
+  h += '<div style="font-size:11px;color:var(--tx-3);line-height:1.45;margin:10px 0 6px">';
+  h +=
+    '<a href="https://withbeynd.com/#terms" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Terms</a>' +
+    ' &middot; ' +
+    '<a href="https://withbeynd.com/#privacy" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Privacy</a>';
+  h += '</div>';
+  h += '<div style="font-size:11px;color:var(--tx-3);line-height:1.4">Backup files are private financial documents. Store them carefully.</div>';
+  h += '<div style="height:10px"></div>';
+  return h;
+}
+
+function geodeBuildSettingsAccessDrillHtml() {
+  var h = geodeSettingsBackHeader('Access & security', 'AI key, lock, PIN/password, and appearance.');
+  h += '<div class="sh">Security</div><div class="card">';
+  h +=
+    '<div class="field"><label>New PIN (4 digits)</label><input type="password" id="np" class="fi" placeholder="Leave blank to keep current" maxlength="4" inputmode="numeric" /></div>';
+  h +=
+    '<div class="field"><label>New Password</label><input type="password" id="npw" class="fi" placeholder="Leave blank to keep current" /></div>';
+  h += '<button class="btn btn-p" onclick="saveSec()">Update Security</button></div>';
+  h += '<div class="sh">Access &amp; tools</div>';
+  h += '<div class="card">';
   h += geodeMeRow(
     'Beynd AI key',
     S.beyondApiKey ? 'Active — Ask Beynd can respond' : 'Not set — Ask Beynd is disabled',
@@ -18542,35 +18686,81 @@ function rMe() {
     '</div>' +
     '<div style="font-size:11px;color:var(--tx-3);margin-top:4px;line-height:1.4">Dark mode only for now — light mode is being redesigned.</div>' +
     '</div>';
-  h+='<div style="height:2px"></div></div>';
-  h+='<div style="font-size:11px;color:var(--tx-3);line-height:1.4;margin:8px 0 4px">Data is stored locally on this device.</div>';
-  h+='<div style="font-size:11px;color:var(--tx-3);line-height:1.4;margin:0 0 8px">Saving a backup copies data to a file. Keep it private.</div>';
-  h +=
-    '<div style="font-size:11px;color:var(--tx-3);line-height:1.45;margin:0 0 14px">' +
-    '<a href="https://withbeynd.com/#terms" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Terms</a>' +
-    ' &middot; ' +
-    '<a href="https://withbeynd.com/#privacy" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Privacy</a>' +
-    '</div>';
-  h+='<div class=\"sh\" id=\"geode-settings-guide\">Guide & Help</div>';
-  h+='<div class=\"card\" style=\"margin-bottom:14px;padding:0;overflow:hidden\">';
-  h+=geodeBuildUserGuideHtml();
-  h+='</div>';
-  h+='<div class="sh">About</div>';
-  h+='<div class="card" style="margin-bottom:14px">';
-  h+='<div style="font-size:14px;font-weight:700;color:var(--tx-1);margin-bottom:2px">Beynd</div>';
-  h+='<div style="font-size:11px;color:var(--tx-3);margin-bottom:10px">Financial Decision Coaching &middot; Version 2.0 &middot; &copy; 2026 Beynd Ltd</div>';
-  h+='<div style="font-size:11px;color:var(--tx-2);line-height:1.6;margin-bottom:10px">Beynd is a personal finance tool, not a financial adviser. Nothing in the app is regulated financial advice. Your data stays on this device. No account. No server.</div>';
-  h+='<div style="display:flex;flex-direction:column;gap:5px;font-size:11px">';
-  h+='<a href="https://withbeynd.com/#terms" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Terms of Service</a>';
-  h+='<a href="https://withbeynd.com/#privacy" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Privacy Policy</a>';
-  h+='<a href="mailto:hello@withbeynd.com" style="color:#9b7fe8;text-decoration:none">hello@withbeynd.com</a>';
-  h+='</div></div>';
-  h+='<div class="sh" style="color:#f07070">Danger Zone</div><div class="card" style="border-color:rgba(240,112,112,0.12)">';
-  h+='<div style="font-size:11px;color:var(--tx-3);margin-bottom:11px">Permanently deletes all Beynd data from this device.</div>';
-  h+='<button onclick="resetAll()" style="width:100%;background:rgba(240,112,112,0.1);border:1px solid rgba(240,112,112,0.18);border-radius:11px;padding:11px;color:#f07070;font-size:13px;font-weight:700;cursor:pointer;font-family:-apple-system,sans-serif">Reset All Data</button></div>';
-  h+='<div style="height:10px"></div>';
-  c.innerHTML=h;
+  h += '<div style="height:2px"></div></div>';
+  h += '<div style="height:10px"></div>';
+  return h;
 }
+
+function geodeBuildSettingsRemindersDrillHtml() {
+  return (
+    geodeSettingsBackHeader('Reminders', 'Optional reminders for check-ins and follow-through.') +
+    geodeRenderReminderSectionHtml(true)
+  );
+}
+
+function geodeBuildSettingsGuideDrillHtml() {
+  var h = geodeSettingsBackHeader('Guide & legal', 'How Beynd works, policies, and support.');
+  h += '<div class="sh" id="geode-settings-guide">Guide & Help</div>';
+  h += '<div class="card" style="margin-bottom:14px;padding:0;overflow:hidden">';
+  h += geodeBuildUserGuideHtml();
+  h += '</div>';
+  h += '<div class="sh">About</div>';
+  h += '<div class="card" style="margin-bottom:14px">';
+  h += '<div style="font-size:14px;font-weight:700;color:var(--tx-1);margin-bottom:2px">Beynd</div>';
+  h +=
+    '<div style="font-size:11px;color:var(--tx-3);margin-bottom:10px">Financial Decision Coaching &middot; Version 2.0 &middot; &copy; 2026 Beynd Ltd</div>';
+  h +=
+    '<div style="font-size:11px;color:var(--tx-2);line-height:1.6;margin-bottom:10px">Beynd is a personal finance tool, not a financial adviser. Nothing in the app is regulated financial advice. Your data stays on this device. No account. No server.</div>';
+  h += '<div style="display:flex;flex-direction:column;gap:5px;font-size:11px">';
+  h +=
+    '<a href="https://withbeynd.com/#terms" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Terms of Service</a>';
+  h +=
+    '<a href="https://withbeynd.com/#privacy" style="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Privacy Policy</a>';
+  h += '<a href="mailto:hello@withbeynd.com" style="color:#9b7fe8;text-decoration:none">hello@withbeynd.com</a>';
+  h += '</div></div>';
+  h += '<div style="height:10px"></div>';
+  return h;
+}
+
+function geodeBuildSettingsDangerDrillHtml() {
+  var h = geodeSettingsBackHeader('Danger zone', 'Reset all data on this device.');
+  h += '<div class="card" style="border-color:rgba(240,112,112,0.12)">';
+  h +=
+    '<button onclick="resetAll()" style="width:100%;background:rgba(240,112,112,0.1);border:1px solid rgba(240,112,112,0.18);border-radius:11px;padding:11px;color:#f07070;font-size:13px;font-weight:700;cursor:pointer;font-family:-apple-system,sans-serif">Reset All Data</button></div>';
+  h += '<div style="height:10px"></div>';
+  return h;
+}
+
+function rMe() {
+  var c = document.getElementById('content');
+  if (typeof window._geodeSettingsSection !== 'string') window._geodeSettingsSection = '';
+  var sec = window._geodeSettingsSection;
+  var valid = { '': 1, profile: 1, plan: 1, data: 1, access: 1, reminders: 1, guide: 1, danger: 1 };
+  if (!valid[sec]) sec = '';
+  window._geodeSettingsSection = sec;
+  if (sec === '') {
+    c.innerHTML = geodeBuildSettingsLandingHtml();
+  } else if (sec === 'profile') {
+    c.innerHTML = geodeBuildSettingsProfileDrillHtml();
+  } else if (sec === 'plan') {
+    c.innerHTML =
+      geodeSettingsBackHeader('Plan & money', 'Currency, income, region, and plan style.') + geodeBuildSettingsPlanBodyHtml();
+  } else if (sec === 'data') {
+    c.innerHTML = geodeBuildSettingsDataDrillHtml();
+  } else if (sec === 'access') {
+    c.innerHTML = geodeBuildSettingsAccessDrillHtml();
+  } else if (sec === 'reminders') {
+    c.innerHTML = geodeBuildSettingsRemindersDrillHtml();
+  } else if (sec === 'guide') {
+    c.innerHTML = geodeBuildSettingsGuideDrillHtml();
+  } else if (sec === 'danger') {
+    c.innerHTML = geodeBuildSettingsDangerDrillHtml();
+  } else {
+    window._geodeSettingsSection = '';
+    c.innerHTML = geodeBuildSettingsLandingHtml();
+  }
+}
+
 
 function openRegionModal() {
   var opts = [['UK','United Kingdom'],['US','United States'],['EU','Europe'],['Other','Other']];
