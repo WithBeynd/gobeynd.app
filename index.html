@@ -11047,7 +11047,7 @@ function geodeOverBudgetPlanBlockHtml(left) {
   return h;
 }
 
-/** Plan tab: full-screen-style step detail shell (display-only; layout 21B, debt impact 22B). */
+/** Plan tab: full-screen-style step detail shell (display-only; layout 21B, debt 22B, buffer 23B, goal 23E, invest 24B). */
 function geodePlanStepDetailPageHtml(plan, ix) {
   plan = plan || {};
   var steps = plan.steps || [];
@@ -11081,6 +11081,50 @@ function geodePlanStepDetailPageHtml(plan, ix) {
   var stepX = ix + 1;
   var whySrc = geodePlanPagePlainStepText(step.why);
   var detailDebt = geodePlanDetailDebtFromStep(step);
+  var detailBuffer = step.label === 'Build your emergency fund';
+  var bufEg = null;
+  var bufMo = 0;
+  var bufThree = 0;
+  var bufHasExp = false;
+  var bufDisp = null;
+  var bufReady = null;
+  if (detailBuffer) {
+    bufEg = getFirstEmergencyGoal(S);
+    bufMo = geodeMonthlyExpenseTotal(S);
+    bufThree = bufMo * 3;
+    bufHasExp = geodeHasMeaningfulMonthlyExpenses(S);
+    bufDisp = geodePlanBufferStepDisplay(step);
+    bufReady = geodeGetBufferReadinessState(S);
+  }
+  var lbStep = String(step.label || '');
+  var detailGoal =
+    lbStep.indexOf('Restart progress on ') === 0 || lbStep.indexOf('Catch up on ') === 0;
+  var goalObj = null;
+  var goalIntel = null;
+  var goalHasLinkedInv = false;
+  if (detailGoal) {
+    goalObj = geodePlanPageGoalFromStepLabel(step);
+    if (goalObj) {
+      goalIntel = calcGoalIntelligence(goalObj);
+      goalHasLinkedInv = geodeGoalHasPositiveLinkedInvestment(goalObj);
+    }
+  }
+  var detailInvest = lbStep === 'Invest what remains';
+  var invIb = null;
+  var inv0 = null;
+  var invMetaFacts = '';
+  var invCount = 0;
+  var invTotalBal = 0;
+  if (detailInvest) {
+    invIb = geodeGetInvestmentBehaviourState(S);
+    inv0 = geodePrimaryInvestment(S);
+    invMetaFacts = inv0 ? geodeInvMetaKeyFactsLine(inv0) : '';
+    var invListCt = S.investments || [];
+    for (var invIi = 0; invIi < invListCt.length; invIi++) {
+      if (invListCt[invIi]) invCount++;
+    }
+    invTotalBal = geodeTotalInvestmentBalance(S);
+  }
   var whyShort;
   if (detailDebt) {
     var wLead = geodePlanPageDebtWhyLead(step);
@@ -11095,6 +11139,33 @@ function geodePlanStepDetailPageHtml(plan, ix) {
           ? 'Based on what you entered, this debt is where Beynd sees the strongest interest drag right now.'
           : 'Based on what you entered, Beynd is steering spare cash toward this balance in your debt-focused plan.';
     }
+  } else if (detailBuffer) {
+    var bufWhyPlain = geodePlanPagePlainStepText(step.why);
+    if (bufWhyPlain) {
+      whyShort = geodeHomeInsightShortLine(bufWhyPlain, 160);
+    } else {
+      whyShort = 'A buffer gives the plan room before surprises become new debt.';
+    }
+  } else if (detailGoal) {
+    var gsPlain = geodePlanPagePlainStepText(step.goalStatusWhy);
+    var wyGPlain = geodePlanPagePlainStepText(step.why);
+    var goalWhyMerged = '';
+    if (gsPlain && wyGPlain && gsPlain !== wyGPlain) {
+      if (wyGPlain.indexOf(gsPlain.slice(0, Math.min(24, gsPlain.length))) >= 0) goalWhyMerged = wyGPlain;
+      else if (gsPlain.indexOf(wyGPlain.slice(0, Math.min(24, wyGPlain.length))) >= 0) goalWhyMerged = gsPlain;
+      else goalWhyMerged = gsPlain + ' ' + wyGPlain;
+    } else {
+      goalWhyMerged = gsPlain || wyGPlain;
+    }
+    if (goalWhyMerged) {
+      whyShort = geodeHomeInsightShortLine(goalWhyMerged, 160);
+    } else {
+      whyShort =
+        'This step helps close the gap on this goal using this month\u2019s available plan amount — based on what Beynd is reading from your setup.';
+    }
+  } else if (detailInvest) {
+    whyShort =
+      'Beynd shows this after earlier plan steps because debt, buffer, and goal needs are ordered ahead in this month\u2019s sequence. This is a planning prompt to review spare cash — not a recommendation to buy an investment.';
   } else {
     whyShort = whySrc
       ? geodeHomeInsightShortLine(whySrc, 200)
@@ -11220,6 +11291,164 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         }
       }
     }
+  } else if (detailBuffer) {
+    if (prog.suggested > 0) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
+        escHtmlLite(fm(prog.suggested)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Logged this month</span><span>' +
+        escHtmlLite(fm(prog.applied)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Remaining on this step</span><span>' +
+        escHtmlLite(fm(prog.remaining)) +
+        '</span></div>';
+      var pctB = Math.round(Math.min(100, Math.max(0, prog.ratio * 100)));
+      h +=
+        '<div class="geode-plan-detail-pbar" role="progressbar" aria-valuenow="' +
+        pctB +
+        '" aria-valuemin="0" aria-valuemax="100">';
+      h += '<div class="geode-plan-detail-pfill" style="width:' + pctB + '%"></div></div>';
+    } else {
+      h +=
+        '<div class="geode-plan-detail-muted">' +
+        escHtmlLite('No plan amount on this step — buffer context below is still based on what you entered.') +
+        '</div>';
+    }
+    if (bufEg) {
+      var bufSaved = geodeGoalEffectiveSaved(bufEg);
+      var bufTgt = toNum(bufEg.amount);
+      h +=
+        '<div class="geode-plan-detail-metricrow" style="margin-top:10px"><span>Saved toward buffer</span><span>' +
+        escHtmlLite(fm(bufSaved)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Target</span><span>' +
+        escHtmlLite(fm(bufTgt)) +
+        '</span></div>';
+      if (bufTgt > 0) {
+        var bufPctToward = Math.round(Math.min(100, Math.max(0, (bufSaved / bufTgt) * 100)));
+        h +=
+          '<div class="geode-plan-detail-impact-note">' +
+          escHtmlLite('About ' + bufPctToward + '% of this target from what you entered.') +
+          '</div>';
+      }
+    } else if (bufReady !== 'NO_BUFFER_CONTEXT') {
+      h +=
+        '<div class="geode-plan-detail-impact-note">' +
+        escHtmlLite(
+          'Beynd is using about ' +
+            fm(bufMo) +
+            '/month in expenses as a basis — roughly ' +
+            fm(bufThree) +
+            ' for a simple 3-month window (estimated).'
+        ) +
+        '</div>';
+    } else {
+      h +=
+        '<div class="geode-plan-detail-impact-note">' +
+        escHtmlLite('Beynd needs expenses or a buffer goal to size this more clearly.') +
+        '</div>';
+    }
+  } else if (detailGoal) {
+    if (prog.suggested > 0) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
+        escHtmlLite(fm(prog.suggested)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Logged this month</span><span>' +
+        escHtmlLite(fm(prog.applied)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Remaining on this step</span><span>' +
+        escHtmlLite(fm(prog.remaining)) +
+        '</span></div>';
+      var pctG = Math.round(Math.min(100, Math.max(0, prog.ratio * 100)));
+      h +=
+        '<div class="geode-plan-detail-pbar" role="progressbar" aria-valuenow="' +
+        pctG +
+        '" aria-valuemin="0" aria-valuemax="100">';
+      h += '<div class="geode-plan-detail-pfill" style="width:' + pctG + '%"></div></div>';
+    } else {
+      h +=
+        '<div class="geode-plan-detail-muted">' +
+        escHtmlLite('No plan amount on this step — goal context below is still based on what you entered.') +
+        '</div>';
+    }
+    if (goalObj) {
+      var gSaved = geodeGoalEffectiveSaved(goalObj);
+      var gTgt = toNum(goalObj.amount);
+      var gGap = goalIntel ? goalIntel.remaining : Math.max(0, gTgt - gSaved);
+      h +=
+        '<div class="geode-plan-detail-metricrow" style="margin-top:10px"><span>Saved toward goal</span><span>' +
+        escHtmlLite(fm(gSaved)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Target amount</span><span>' +
+        escHtmlLite(fm(gTgt)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Gap to target</span><span>' +
+        escHtmlLite(fm(gGap)) +
+        '</span></div>';
+      if (gTgt > 0) {
+        var gPctToward = Math.round(Math.min(100, Math.max(0, (gSaved / gTgt) * 100)));
+        h +=
+          '<div class="geode-plan-detail-impact-note">' +
+          escHtmlLite('About ' + gPctToward + '% of this target from what you entered.') +
+          '</div>';
+      }
+      if (goalObj.targetDate) {
+        h +=
+          '<div class="geode-plan-detail-metricrow"><span>Target date</span><span>' +
+          escHtmlLite(fd(goalObj.targetDate)) +
+          '</span></div>';
+      }
+    } else {
+      h +=
+        '<div class="geode-plan-detail-impact-note">' +
+        escHtmlLite(
+          'Beynd couldn\u2019t match this step to a goal name in your list based on what you entered.'
+        ) +
+        '</div>';
+    }
+  } else if (detailInvest) {
+    if (prog.suggested > 0) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
+        escHtmlLite(fm(prog.suggested)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Logged this month</span><span>' +
+        escHtmlLite(fm(prog.applied)) +
+        '</span></div>';
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Remaining on this step</span><span>' +
+        escHtmlLite(fm(prog.remaining)) +
+        '</span></div>';
+      var pctInv = Math.round(Math.min(100, Math.max(0, prog.ratio * 100)));
+      h +=
+        '<div class="geode-plan-detail-pbar" role="progressbar" aria-valuenow="' +
+        pctInv +
+        '" aria-valuemin="0" aria-valuemax="100">';
+      h += '<div class="geode-plan-detail-pfill" style="width:' + pctInv + '%"></div></div>';
+    } else {
+      h +=
+        '<div class="geode-plan-detail-muted">' +
+        escHtmlLite(
+          'No fixed amount on this step. When you act, Beynd tracks what you log against what the plan suggested.'
+        ) +
+        '</div>';
+    }
+    h +=
+      '<div class="geode-plan-detail-impact-note">' +
+      escHtmlLite(
+        'This is the amount left for review after earlier plan steps — based on what you entered, not a forecast.'
+      ) +
+      '</div>';
   } else {
     if (prog.suggested > 0) {
       h +=
@@ -11251,6 +11480,157 @@ function geodePlanStepDetailPageHtml(plan, ix) {
   }
   h += '</div>';
 
+  if (detailBuffer) {
+    h += '<div class="geode-plan-detail-card">';
+    h += '<div class="geode-plan-detail-card-h">Buffer facts</div>';
+    if (bufHasExp) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Monthly expenses</span><span>' +
+        escHtmlLite(fm(bufMo)) +
+        '</span></div>';
+    }
+    if (!bufEg && bufHasExp) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Target basis</span><span>' +
+        escHtmlLite('About 3 months of expenses (~' + fm(bufThree) + ' estimate)') +
+        '</span></div>';
+    }
+    if (!bufEg && bufHasExp && bufDisp && bufDisp.amountCaption) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>How Beynd sized this</span><span>' +
+        escHtmlLite(bufDisp.amountCaption) +
+        '</span></div>';
+    }
+    if (bufEg && !bufHasExp) {
+      h +=
+        '<div class="geode-plan-detail-muted">' +
+        escHtmlLite(
+          'You have an emergency buffer goal in your list. Adding monthly expenses could give Beynd a clearer spending basis alongside it.'
+        ) +
+        '</div>';
+    }
+    if (bufReady === 'NO_BUFFER_CONTEXT') {
+      h +=
+        '<div class="geode-plan-detail-muted">' +
+        escHtmlLite('Add monthly expenses or an emergency buffer goal so Beynd can show clearer targets.') +
+        '</div>';
+    }
+    h += '</div>';
+  }
+
+  if (detailGoal) {
+    h += '<div class="geode-plan-detail-card">';
+    h += '<div class="geode-plan-detail-card-h">Goal check</div>';
+    if (!goalObj) {
+      h +=
+        '<div class="geode-plan-detail-muted">' +
+        escHtmlLite(
+          'Beynd couldn\u2019t match this step to a goal in your list by name — check the goal name matches what you entered.'
+        ) +
+        '</div>';
+    } else {
+      var gfTgt = toNum(goalObj.amount);
+      if (gfTgt <= 0) {
+        h +=
+          '<div class="geode-plan-detail-muted">' +
+          escHtmlLite(
+            'A target amount could help Beynd\u2019s simple check read more clearly from what you entered.'
+          ) +
+          '</div>';
+      }
+      if (!goalObj.targetDate) {
+        h +=
+          '<div class="geode-plan-detail-metricrow"><span>Timing</span><span>' +
+          escHtmlLite(
+            'Target date would make timing clearer based on what you entered.'
+          ) +
+          '</span></div>';
+      }
+      if (goalIntel && gfTgt > 0) {
+        var paceLine = '';
+        if (goalObj.targetDate && goalIntel.remaining <= 0) {
+          paceLine =
+            'Beynd\u2019s simple check: based on what you entered, the target amount may already be covered — progress can still move if balances change.';
+        } else if (goalObj.targetDate && goalIntel.status === 'overdue') {
+          paceLine =
+            'Beynd\u2019s simple check: Beynd is reading this goal as past its target date with amount still open — based on what you entered.';
+        } else if (goalObj.targetDate && goalIntel.status === 'on track') {
+          paceLine =
+            'Beynd\u2019s simple check: based on what you entered, this goal looks roughly on pace.';
+        } else if (goalObj.targetDate && goalIntel.status === 'at risk') {
+          paceLine =
+            'Beynd\u2019s simple check: this goal may need more room to stay on pace based on what you entered.';
+        } else if (goalObj.targetDate && goalIntel.status === 'off track') {
+          paceLine =
+            'Beynd\u2019s simple check: Beynd reads this goal as needing attention based on what you entered.';
+        } else if (
+          goalObj.targetDate &&
+          goalIntel.remaining > 0 &&
+          goalIntel.requiredMonthly != null &&
+          isFinite(goalIntel.requiredMonthly) &&
+          goalIntel.requiredMonthly > 0
+        ) {
+          paceLine =
+            'Beynd\u2019s simple check: about ' +
+            fm(goalIntel.requiredMonthly) +
+            '/month toward the remaining gap based on what you entered — a guide, not a promise about finishing.';
+        }
+        if (paceLine) {
+          h +=
+            '<div class="geode-plan-detail-metricrow"><span>Pace check</span><span>' +
+            escHtmlLite(paceLine) +
+            '</span></div>';
+        }
+      }
+    }
+    h += '</div>';
+  }
+
+  if (detailInvest) {
+    h += '<div class="geode-plan-detail-card">';
+    h += '<div class="geode-plan-detail-card-h">Investment context</div>';
+    h +=
+      '<div class="geode-plan-detail-metricrow"><span>Tracked investments</span><span>' +
+      escHtmlLite(invCount ? String(invCount) + (invCount === 1 ? ' account' : ' accounts') : 'None added yet') +
+      '</span></div>';
+    h +=
+      '<div class="geode-plan-detail-metricrow"><span>Tracked balance</span><span>' +
+      escHtmlLite(fm(invTotalBal)) +
+      '</span></div>';
+    if (inv0 && String(inv0.name || '').trim()) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Primary account</span><span>' +
+        escHtmlLite(String(inv0.name).trim()) +
+        '</span></div>';
+    }
+    if (invMetaFacts) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>From your entries</span><span>' +
+        escHtmlLite(invMetaFacts) +
+        '</span></div>';
+    }
+    if (invDisp && invDisp.amountCaption) {
+      h +=
+        '<div class="geode-plan-detail-metricrow"><span>Plan note</span><span>' +
+        escHtmlLite(invDisp.amountCaption) +
+        '</span></div>';
+    }
+    var invActRead = '';
+    if (invIb === 'NO_INVESTMENT_CONTEXT') {
+      invActRead = 'No portfolio entries in Beynd yet based on what you entered.';
+    } else if (invIb === 'INVESTMENT_WITH_PRESSURE') {
+      invActRead =
+        'Beynd reads tighter cash or stability context alongside investing — review carefully based on what you entered.';
+    } else {
+      invActRead = 'Beynd sees balances or recent invest-linked flows from what you entered.';
+    }
+    h +=
+      '<div class="geode-plan-detail-metricrow"><span>Activity read</span><span>' +
+      escHtmlLite(invActRead) +
+      '</span></div>';
+    h += '</div>';
+  }
+
   if (detailDebt) {
     h += '<div class="geode-plan-detail-card">';
     h += '<div class="geode-plan-detail-card-h">Debt facts</div>';
@@ -11274,11 +11654,14 @@ function geodePlanStepDetailPageHtml(plan, ix) {
   }
 
   h += '<div class="geode-plan-detail-card">';
-  h += '<div class="geode-plan-detail-card-h">Why this step</div>';
+  h +=
+    '<div class="geode-plan-detail-card-h">' +
+    escHtmlLite(detailInvest ? 'Why this appears' : 'Why this step') +
+    '</div>';
   h += '<div class="geode-plan-detail-why">' + escHtmlLite(whyShort) + '</div>';
   h += '</div>';
 
-  if (!detailDebt) {
+  if (!detailDebt && !detailBuffer && !detailGoal && !detailInvest) {
     h += '<div class="geode-plan-detail-card">';
     h += '<div class="geode-plan-detail-card-h">What Beynd used</div>';
     h += '<div class="geode-plan-detail-chiprow">';
@@ -11315,6 +11698,78 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     h +=
       '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
       escHtmlLite('Beynd used your income, spending, debt details, and plan style.') +
+      '</div>';
+    h += '</div>';
+  } else if (detailBuffer) {
+    h += '<div class="geode-plan-detail-card geode-plan-detail-card-assume">';
+    h += '<div class="geode-plan-detail-card-h">Assumptions</div>';
+    h +=
+      '<div class="geode-plan-detail-muted">' +
+      escHtmlLite(
+        'This is based on the expenses and buffer information you entered. Beynd does not see cash or emergency funds held outside the app.'
+      ) +
+      '</div>';
+    if (bufReady === 'BUFFER_ESTIMATABLE' || bufReady === 'BUFFER_IN_PROGRESS_ESTIMATED') {
+      h +=
+        '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
+        escHtmlLite(
+          'When Beynd shows a 3-month window from expenses, it is an estimate — not a promise about how long cash would last.'
+        ) +
+        '</div>';
+    }
+    h +=
+      '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
+      escHtmlLite('Beynd used your spending, buffer details, and plan style.') +
+      '</div>';
+    h += '</div>';
+  } else if (detailGoal) {
+    h += '<div class="geode-plan-detail-card geode-plan-detail-card-assume">';
+    h += '<div class="geode-plan-detail-card-h">Assumptions</div>';
+    h +=
+      '<div class="geode-plan-detail-muted">' +
+      escHtmlLite(
+        'This is based on the goal amount, saved amount, target date, and linked progress you entered. Beynd does not see accounts or balances outside the app unless you add them.'
+      ) +
+      '</div>';
+    if (goalObj && !goalObj.targetDate) {
+      h +=
+        '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
+        escHtmlLite(
+          'Without a target date, timing is harder to assess from what you entered — pace lines stay simple and cautious.'
+        ) +
+        '</div>';
+    }
+    if (goalHasLinkedInv && goalObj) {
+      h +=
+        '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
+        escHtmlLite(
+          'Linked investment balances can move, so goal progress may change if that balance changes.'
+        ) +
+        '</div>';
+    }
+    h +=
+      '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
+      escHtmlLite('Beynd used your goal details, saved progress, linked progress, and plan style.') +
+      '</div>';
+    h += '</div>';
+  } else if (detailInvest) {
+    h += '<div class="geode-plan-detail-card geode-plan-detail-card-assume">';
+    h += '<div class="geode-plan-detail-card-h">Limits</div>';
+    h +=
+      '<div class="geode-plan-detail-muted">' +
+      escHtmlLite(
+        'This is a planning prompt, not investment advice. Beynd does not assess product suitability, risk tolerance, fees, tax position, or market performance.'
+      ) +
+      '</div>';
+    h +=
+      '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
+      escHtmlLite('Review your situation before acting.') +
+      '</div>';
+    h +=
+      '<div class="geode-plan-detail-muted" style="margin-top:8px">' +
+      escHtmlLite(
+        'Beynd used your income, spending, debts, goals, investments, and plan style.'
+      ) +
       '</div>';
     h += '</div>';
   }
