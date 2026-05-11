@@ -15485,6 +15485,59 @@ function rDash() {
   setTimeout(drawChart, 50);
 }
 
+/** Stage 64B: chart palette helper.
+ *  Reads document.documentElement.dataset.beyndAppearance and returns a dark or off-white palette.
+ *  Side-effect free; does not touch S, save/load, S.theme, applyTheme, toggleTheme, body.light, or Settings UI.
+ *  The dark palette values are byte-identical to the pre-tokenisation literals so dark rendering is unchanged. */
+function geodeGetChartPalette() {
+  var off = false;
+  try {
+    off = (document.documentElement && document.documentElement.dataset && document.documentElement.dataset.beyndAppearance === 'offwhite');
+  } catch (e) { off = false; }
+  if (off) {
+    return {
+      mode: 'offwhite',
+      emptyText: 'rgba(28,28,32,0.45)',
+      axisText: 'rgba(28,28,32,0.82)',
+      mutedText: 'rgba(28,28,32,0.62)',
+      mainValueText: 'rgba(28,28,32,0.72)',
+      netValueText: 'rgba(28,28,32,0.55)',
+      netLabel: 'rgba(124,92,191,0.85)',
+      legendText: 'rgba(28,28,32,0.62)',
+      sliceStroke: '#ffffff',
+      bars: ['#9b7fe8','#34d5a0','#e87ca0','#60a5fa','#f5c234','#f07070'],
+      positive: '#34d5a0',
+      negative: '#f07070',
+      brand: '#9b7fe8',
+      warning: '#f5c234',
+      info: '#60a5fa',
+      cats: {food:'#b4710a',transport:'#0f9d72',utilities:'#7c5cbf',entertainment:'#c43d6b',health:'#c14848',shopping:'#3b82d2',subs:'#0f9d72',other:'#706a90'},
+      trackFor: function(c){ return 'rgba(15,23,42,0.06)'; },
+      barLabelOnBar: function(c){ return 'rgba(28,28,32,0.82)'; }
+    };
+  }
+  return {
+    mode: 'dark',
+    emptyText: 'rgba(255,255,255,0.2)',
+    axisText: 'rgba(255,255,255,0.75)',
+    mutedText: 'rgba(255,255,255,0.55)',
+    mainValueText: 'rgba(255,255,255,0.6)',
+    netValueText: 'rgba(255,255,255,0.45)',
+    netLabel: 'rgba(237,234,255,0.55)',
+    legendText: 'rgba(255,255,255,0.5)',
+    sliceStroke: '#05050f',
+    bars: ['#9b7fe8','#34d5a0','#e87ca0','#60a5fa','#f5c234','#f07070'],
+    positive: '#34d5a0',
+    negative: '#f07070',
+    brand: '#9b7fe8',
+    warning: '#f5c234',
+    info: '#60a5fa',
+    cats: {food:'#f5c234',transport:'#34d5a0',utilities:'#c4abff',entertainment:'#e87ca0',health:'#f07070',shopping:'#60a5fa',subs:'#34d5a0',other:'#706a90'},
+    trackFor: function(c){ return c + '33'; },
+    barLabelOnBar: function(c){ return c; }
+  };
+}
+
 function drawChart() {
   var cv = document.getElementById('dc'); if (!cv) return;
   var ctx = cv.getContext('2d');
@@ -15494,17 +15547,18 @@ function drawChart() {
   ctx.scale(window.devicePixelRatio||1, window.devicePixelRatio||1);
   ctx.clearRect(0,0,W,H);
 
-  function empty(msg) { ctx.fillStyle='rgba(255,255,255,0.2)'; ctx.font='13px -apple-system,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(msg,W/2,H/2); }
+  var pal = geodeGetChartPalette();
+  function empty(msg) { ctx.fillStyle=pal.emptyText; ctx.font='13px -apple-system,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(msg,W/2,H/2); }
 
   var figC2 = computeSnapshotFigures();
   var tDebt = figC2.totalDebt;
   var tGS = figC2.totalSaved;
   var tInv = figC2.totalInvestments;
   var assets = tGS + tInv, net = figC2.netWorth;
-  var COLS = ['#9b7fe8','#34d5a0','#e87ca0','#60a5fa','#f5c234','#f07070'];
+  var COLS = pal.bars;
 
   if (dchart === 'nw') {
-    var bars = [{lb:'Assets',v:assets,c:'#34d5a0',em:'main'},{lb:'Debts',v:tDebt,c:'#f07070',em:'main'},{lb:'Net',v:Math.abs(net),c:net>=0?'#9b7fe8':'#f07070',em:'net'}];
+    var bars = [{lb:'Assets',v:assets,c:pal.positive,em:'main'},{lb:'Debts',v:tDebt,c:pal.negative,em:'main'},{lb:'Net',v:Math.abs(net),c:net>=0?pal.brand:pal.negative,em:'net'}];
     var mx = Math.max(bars[0].v, bars[1].v, bars[2].v, 1);
     var gap = 14;
     var bwMain = Math.floor((W - 40 - gap * 2) / 3) - 2;
@@ -15519,10 +15573,10 @@ function drawChart() {
       ctx.globalAlpha = bars[i].em === 'net' ? 0.55 : 1;
       ctx.fillStyle=gr; ctx.beginPath(); ctx.rect(x,y,bw,bh); ctx.fill();
       ctx.globalAlpha = 1;
-      ctx.fillStyle=bars[i].em === 'net' ? 'rgba(237,234,255,0.55)' : bars[i].c;
+      ctx.fillStyle=bars[i].em === 'net' ? pal.netLabel : pal.barLabelOnBar(bars[i].c);
       ctx.font = bars[i].em === 'net' ? 'bold 8px sans-serif' : 'bold 9px sans-serif';
       ctx.textAlign='center'; ctx.fillText(bars[i].lb,x+bw/2,H-9);
-      ctx.fillStyle=bars[i].em === 'net' ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.6)';
+      ctx.fillStyle=bars[i].em === 'net' ? pal.netValueText : pal.mainValueText;
       ctx.font='9px sans-serif'; ctx.fillText(fm(bars[i].v),x+bw/2,y-5);
       x += bw + gap;
     }
@@ -15534,32 +15588,32 @@ function drawChart() {
     var rHd = (H - 10) / Math.max(1, dlist.length);
     for (var dj = 0; dj < dlist.length; dj++) {
       var dbal = toNum(dlist[dj].balance), yd = 5 + dj * rHd, bwd = Math.max(4, (dbal / mxD) * (W - 88));
-      ctx.fillStyle = '#f0707033';
+      ctx.fillStyle = pal.trackFor(pal.negative);
       ctx.fillRect(84, yd + 3, W - 88, rHd - 7);
-      ctx.fillStyle = '#f07070';
+      ctx.fillStyle = pal.negative;
       ctx.fillRect(84, yd + 3, bwd, rHd - 7);
-      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.fillStyle = pal.mutedText;
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.fillText(String(dlist[dj].name || 'Debt').slice(0, 14), 2, yd + rHd / 2);
       ctx.textAlign = 'right';
-      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillStyle = pal.axisText;
       ctx.fillText(fm(dbal), W - 2, yd + rHd / 2);
     }
   } else if (dchart === 'spend') {
-    var cats={}, ECols={food:'#f5c234',transport:'#34d5a0',utilities:'#c4abff',entertainment:'#e87ca0',health:'#f07070',shopping:'#60a5fa',subs:'#34d5a0',other:'#706a90'};
+    var cats={}, ECols=pal.cats;
     S.expenses.forEach(function(e){ cats[e.cat]=(cats[e.cat]||0)+Number(e.amount); });
     var ents=Object.entries(cats).sort(function(a,b){ return b[1]-a[1]; }).slice(0,5);
     if (!ents.length) { empty('Add expenses to compare spending month to month.'); return; }
     var mx2=ents[0][1], rH=(H-10)/ents.length;
     for (var i=0; i<ents.length; i++) {
       var cat=ents[i][0], amt=ents[i][1], y2=5+i*rH, bw2=Math.max(4,(amt/mx2)*(W-88));
-      ctx.fillStyle=(ECols[cat]||'#706a90')+'33'; ctx.fillRect(84,y2+3,W-88,rH-7);
-      ctx.fillStyle=ECols[cat]||'#706a90'; ctx.fillRect(84,y2+3,bw2,rH-7);
-      ctx.fillStyle='rgba(255,255,255,0.55)'; ctx.font='10px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='middle';
+      ctx.fillStyle=pal.trackFor(ECols[cat] || pal.cats.other); ctx.fillRect(84,y2+3,W-88,rH-7);
+      ctx.fillStyle=ECols[cat] || pal.cats.other; ctx.fillRect(84,y2+3,bw2,rH-7);
+      ctx.fillStyle=pal.mutedText; ctx.font='10px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='middle';
       ctx.fillText((EXP_LABELS[cat] || cat), 2, y2+rH/2);
-      ctx.textAlign='right'; ctx.fillStyle='rgba(255,255,255,0.75)';       ctx.fillText(fm(amt),W-2,y2+rH/2);
+      ctx.textAlign='right'; ctx.fillStyle=pal.axisText;       ctx.fillText(fm(amt),W-2,y2+rH/2);
     }
   } else if (dchart === 'inv') {
     if (!S.investments.length) { empty('Start by adding savings or investments — this builds your net worth.'); return; }
@@ -15568,12 +15622,12 @@ function drawChart() {
     S.investments.forEach(function(e,i){
       var sl2=(Number(e.balance)/tot)*Math.PI*2;
       ctx.beginPath(); ctx.moveTo(cx2,cy2); ctx.arc(cx2,cy2,r2,ang2,ang2+sl2); ctx.closePath();
-      ctx.fillStyle=COLS[i%COLS.length]; ctx.fill(); ctx.strokeStyle='#05050f'; ctx.lineWidth=2; ctx.stroke(); ang2+=sl2;
+      ctx.fillStyle=COLS[i%COLS.length]; ctx.fill(); ctx.strokeStyle=pal.sliceStroke; ctx.lineWidth=2; ctx.stroke(); ang2+=sl2;
     });
     ctx.textAlign='left'; ctx.textBaseline='middle';
     S.investments.slice(0,4).forEach(function(e,i){
       ctx.fillStyle=COLS[i%COLS.length]; ctx.fillRect(4,H-54+i*14,9,9);
-      ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.font='9px sans-serif';
+      ctx.fillStyle=pal.legendText; ctx.font='9px sans-serif';
       ctx.fillText(e.name.slice(0,10)+' '+(Number(e.balance)/tot*100).toFixed(0)+'%',16,H-50+i*14);
     });
   }
