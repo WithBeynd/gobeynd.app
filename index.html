@@ -20,6 +20,103 @@
   --ok:#34d5a0;--warn:#f5c234;--danger:#f07070;--info:#60a5fa;
   --radius:16px;
 }
+/* Inactive off-white appearance token draft.
+   Do not activate in production yet.
+   This is for future Appearance redesign testing only. */
+html[data-beynd-appearance="offwhite"]{
+  --bg-base:#f5f4f1;--bg-surface:#faf9f6;--bg-card:#ffffff;--bg-raised:#edeae6;
+  --bd:rgba(15,23,42,0.09);--bd-em:rgba(15,23,42,0.15);
+  --tx-1:#15151a;--tx-2:rgba(21,21,26,0.82);--tx-3:#5e6470;--tx-4:rgba(21,21,26,0.42);
+  --gem:#7254b8;--gem-l:#8b6fd0;
+  --ok:#047857;--warn:#b45309;--danger:#b91c1c;--info:#2563eb;
+  --on-accent:#ffffff;--scrim:rgba(15,23,42,0.48);
+  --radius:16px;
+}
+/* Off-white preview contrast guards.
+   Preview-only. Do not activate as user-facing Appearance yet. */
+html[data-beynd-appearance="offwhite"] .fi{background:var(--bg-card);border-color:var(--bd);color:var(--tx-1)}
+html[data-beynd-appearance="offwhite"] .fi::placeholder{color:var(--tx-3);opacity:1}
+html[data-beynd-appearance="offwhite"] .fi:focus{border-color:var(--gem)}
+html[data-beynd-appearance="offwhite"] .tab-ic{color:var(--tx-3)}
+html[data-beynd-appearance="offwhite"] .tab-lb{color:var(--tx-3)}
+html[data-beynd-appearance="offwhite"] .tab.on .tab-ic{color:var(--gem)}
+html[data-beynd-appearance="offwhite"] .tab.on .tab-lb{color:var(--gem)}
+html[data-beynd-appearance="offwhite"] .pill{background:var(--bg-raised);border-color:var(--bd);color:var(--tx-2)}
+html[data-beynd-appearance="offwhite"] .pill.ac{border-color:var(--bd-em);color:var(--gem)}
+html[data-beynd-appearance="offwhite"] .btn-s{background:var(--bg-raised);border-color:var(--bd-em);color:var(--tx-2)}
+html[data-beynd-appearance="offwhite"] .sh{color:var(--tx-3)}
+html[data-beynd-appearance="offwhite"] .sh::after{background:var(--bd)}
+html[data-beynd-appearance="offwhite"] .empty{color:var(--tx-3)}
+html[data-beynd-appearance="offwhite"] .prog{background:var(--bd)}
+html[data-beynd-appearance="offwhite"] .tip-txt{color:var(--tx-1)}
+html[data-beynd-appearance="offwhite"] .ct{background:var(--bg-raised);border-color:var(--bd);color:var(--tx-2)}
+html[data-beynd-appearance="offwhite"] .ct.on{background:var(--gem);border-color:var(--gem);color:var(--on-accent,#fff)}
+html[data-beynd-appearance="offwhite"] [style*="color:#edeaff"],
+html[data-beynd-appearance="offwhite"] [style*="color:rgba(237,234,255"]{color:var(--tx-1) !important}
+html[data-beynd-appearance="offwhite"] [style*="color:rgba(189,183,220"],
+html[data-beynd-appearance="offwhite"] [style*="color:rgba(255,255,255"]{color:var(--tx-2) !important}
+html[data-beynd-appearance="offwhite"] [style*="color:#9b93b8"],
+html[data-beynd-appearance="offwhite"] [style*="color:#706a90"]{color:var(--tx-3) !important}
+html[data-beynd-appearance="offwhite"] [style*="color:#c4abff"]{color:var(--gem) !important}
+html[data-beynd-appearance="offwhite"] [style*="border:1px solid rgba(255,255,255"]{border-color:var(--bd) !important}
+html[data-beynd-appearance="offwhite"] [style*="background:rgba(255,255,255,0.02"],
+html[data-beynd-appearance="offwhite"] [style*="background:rgba(255,255,255,0.03"],
+html[data-beynd-appearance="offwhite"] [style*="background:rgba(255,255,255,0.04"]{background:rgba(15,23,42,0.035) !important}
+html[data-beynd-appearance="offwhite"] [style*="background:#181830"],
+html[data-beynd-appearance="offwhite"] [style*="background:#101020"]{background:var(--bg-raised) !important}
+html[data-beynd-appearance="offwhite"] [style*="background:#141428"],
+html[data-beynd-appearance="offwhite"] [style*="background:#151528"]{background:var(--bg-card) !important}
+/* Off-white preview surface-specific contrast fixes.
+   Preview-only. Keeps intentionally dark surfaces readable. */
+html[data-beynd-appearance="offwhite"] .btn-sm{background:rgba(114,84,184,0.10);border-color:rgba(114,84,184,0.16);color:var(--gem)}
+html[data-beynd-appearance="offwhite"] .tile-lb{color:var(--tx-3)}
+html[data-beynd-appearance="offwhite"] .link-like,
+html[data-beynd-appearance="offwhite"] .ic-tip{color:var(--gem)}
+html[data-beynd-appearance="offwhite"] .ob-h,
+html[data-beynd-appearance="offwhite"] .fr-h{color:#edeaff}
+html[data-beynd-appearance="offwhite"] .ob-h em,
+html[data-beynd-appearance="offwhite"] .fr-h em{color:#c4abff}
+html[data-beynd-appearance="offwhite"] .ob-p,
+html[data-beynd-appearance="offwhite"] .fr-p{color:rgba(189,183,220,0.82)}
+html[data-beynd-appearance="offwhite"] .ob-ey,
+html[data-beynd-appearance="offwhite"] .fr-ey{background:rgba(155,127,232,0.10);border-color:rgba(155,127,232,0.22);color:#c4abff}
+html[data-beynd-appearance="offwhite"] .hero [style*="color:rgba(255,255,255"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:rgba(255,255,255"]{color:rgba(255,255,255,0.92) !important}
+html[data-beynd-appearance="offwhite"] .hero [style*="color:#edeaff"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#edeaff"],
+html[data-beynd-appearance="offwhite"] .hero [style*="color:rgba(237,234,255"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:rgba(237,234,255"]{color:#edeaff !important}
+html[data-beynd-appearance="offwhite"] .hero [style*="color:#c4abff"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#c4abff"]{color:#c4abff !important}
+/* Off-white preview final contrast polish.
+   Preview-only. Keeps dark preview surfaces legible. */
+html[data-beynd-appearance="offwhite"] #ob-it-stable,
+html[data-beynd-appearance="offwhite"] #ob-it-irregular,
+html[data-beynd-appearance="offwhite"] #ob-it-none{background:rgba(255,255,255,0.03) !important;border-color:rgba(255,255,255,0.10) !important}
+html[data-beynd-appearance="offwhite"] #ob-it-stable > div:first-child,
+html[data-beynd-appearance="offwhite"] #ob-it-irregular > div:first-child,
+html[data-beynd-appearance="offwhite"] #ob-it-none > div:first-child{color:rgba(237,234,255,0.92) !important}
+html[data-beynd-appearance="offwhite"] #ob-it-stable > div + div,
+html[data-beynd-appearance="offwhite"] #ob-it-irregular > div + div,
+html[data-beynd-appearance="offwhite"] #ob-it-none > div + div{color:rgba(189,183,220,0.82) !important}
+html[data-beynd-appearance="offwhite"] #ob-it-stable[style*="rgba(155,127,232,0.15)"],
+html[data-beynd-appearance="offwhite"] #ob-it-irregular[style*="rgba(155,127,232,0.15)"],
+html[data-beynd-appearance="offwhite"] #ob-it-none[style*="rgba(155,127,232,0.15)"],
+html[data-beynd-appearance="offwhite"] #ob-it-stable[style*="rgba(155, 127, 232, 0.15)"],
+html[data-beynd-appearance="offwhite"] #ob-it-irregular[style*="rgba(155, 127, 232, 0.15)"],
+html[data-beynd-appearance="offwhite"] #ob-it-none[style*="rgba(155, 127, 232, 0.15)"]{background:rgba(155,127,232,0.15) !important;border-color:#9b7fe8 !important}
+html[data-beynd-appearance="offwhite"] #ob-it-stable[style*="rgba(155,127,232,0.15)"] > div:first-child,
+html[data-beynd-appearance="offwhite"] #ob-it-irregular[style*="rgba(155,127,232,0.15)"] > div:first-child,
+html[data-beynd-appearance="offwhite"] #ob-it-none[style*="rgba(155,127,232,0.15)"] > div:first-child,
+html[data-beynd-appearance="offwhite"] #ob-it-stable[style*="rgba(155, 127, 232, 0.15)"] > div:first-child,
+html[data-beynd-appearance="offwhite"] #ob-it-irregular[style*="rgba(155, 127, 232, 0.15)"] > div:first-child,
+html[data-beynd-appearance="offwhite"] #ob-it-none[style*="rgba(155, 127, 232, 0.15)"] > div:first-child{color:#c4abff !important}
+html[data-beynd-appearance="offwhite"] .hero [style*="color:rgba(189,183,220"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:rgba(189,183,220"]{color:rgba(189,183,220,0.82) !important}
+html[data-beynd-appearance="offwhite"] .hero [style*="color:#9b93b8"],
+html[data-beynd-appearance="offwhite"] .hero [style*="color:#706a90"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#9b93b8"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#706a90"]{color:rgba(189,183,220,0.82) !important}
 body.light{
   color-scheme:light;
   --bg-base:#f6f6f5;--bg-surface:#ffffff;--bg-raised:#ececea;--bg-card:#ffffff;
@@ -577,6 +674,18 @@ canvas{display:block}
 </div>
 
 <script>
+// ── DEV-ONLY OFF-WHITE PREVIEW GUARD ─────────────
+// Stage 54B: non-persistent, session-scoped preview of the inactive
+// html[data-beynd-appearance="offwhite"] token block. Does not touch
+// S.theme, applyTheme, body.light, save/load, or service worker.
+// Refreshing without the query param leaves the attribute unset.
+try {
+  var __beyndPreviewParams = new URLSearchParams(window.location.search || '');
+  if (__beyndPreviewParams.get('appearancePreview') === 'offwhite') {
+    document.documentElement.dataset.beyndAppearance = 'offwhite';
+  }
+} catch (e) {}
+
 // ── DATA ──────────────────────────────────────────
 var KEY = 'geode_v6';
 /** Local persisted-state schema marker for backup/restore validation (bump when structure changes). */
