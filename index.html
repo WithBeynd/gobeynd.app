@@ -117,6 +117,29 @@ html[data-beynd-appearance="offwhite"] .hero [style*="color:#9b93b8"],
 html[data-beynd-appearance="offwhite"] .hero [style*="color:#706a90"],
 html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#9b93b8"],
 html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#706a90"]{color:rgba(189,183,220,0.82) !important}
+/* Off-white preview semantic + off-hero polish.
+   Preview-only. Keeps Add/Del buttons AA and dark inline-gradient cards legible. */
+html[data-beynd-appearance="offwhite"] .btn-add{
+  background:rgba(4,120,87,0.10);
+  border-color:rgba(4,120,87,0.28);
+  color:var(--ok);
+}
+html[data-beynd-appearance="offwhite"] .btn-del{
+  background:rgba(185,28,28,0.10);
+  color:var(--danger);
+}
+html[data-beynd-appearance="offwhite"] [style*="linear-gradient(135deg,#0e0a20"] .card-title,
+html[data-beynd-appearance="offwhite"] [style*="linear-gradient(155deg,#081820"] .card-title{
+  color:rgba(189,183,220,0.62) !important;
+}
+html[data-beynd-appearance="offwhite"] [style*="linear-gradient(135deg,#0e0a20"] [style*="color:var(--tx-3)"],
+html[data-beynd-appearance="offwhite"] [style*="linear-gradient(155deg,#081820"] [style*="color:var(--tx-3)"]{
+  color:rgba(189,183,220,0.62) !important;
+}
+html[data-beynd-appearance="offwhite"] [style*="linear-gradient(135deg,#0e0a20"] [style*="color:rgba(189,183,220"],
+html[data-beynd-appearance="offwhite"] [style*="linear-gradient(155deg,#081820"] [style*="color:rgba(189,183,220"]{
+  color:rgba(189,183,220,0.82) !important;
+}
 body.light{
   color-scheme:light;
   --bg-base:#f6f6f5;--bg-surface:#ffffff;--bg-raised:#ececea;--bg-card:#ffffff;
