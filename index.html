@@ -931,6 +931,17 @@ function applyAppearance(value){
     }
   } catch (e) {}
 }
+/** Stage 65B: user-facing appearance setter.
+ *  Validates input, persists S.appearance via save(), and re-renders so the Settings chip
+ *  and chart palette refresh. Never touches S.theme, applyTheme, toggleTheme, body.light,
+ *  localStorage directly, the service worker, or any business logic. */
+function setAppearance(v) {
+  if (v !== 'dark' && v !== 'offwhite') return;
+  S.appearance = v;
+  applyAppearance(v);
+  try { save(); } catch (e) {}
+  try { render(); } catch (e) {}
+}
 function load() {
   try {
     var d = localStorage.getItem(KEY);
@@ -19046,14 +19057,19 @@ function geodeBuildSettingsAccessDrillHtml() {
     geodeMeChip(S.beyondApiKey ? 'Active' : 'Not set', S.beyondApiKey ? 'good' : 'muted')
   );
   h += geodeMeRow('Lock app', 'PIN screen; data stays on this device', 'lockApp()', 'Lock');
-  h +=
-    '<div style="padding:10px 0 0;margin-top:2px;border-top:1px solid var(--bd)">' +
-    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
-    '<span style="font-size:13px;font-weight:500">Appearance</span>' +
-    geodeMeChip('Dark only', 'muted') +
-    '</div>' +
-    '<div style="font-size:11px;color:var(--tx-3);margin-top:4px;line-height:1.4">Dark mode only for now — light mode is being redesigned.</div>' +
-    '</div>';
+  var _appCurrent = (S.appearance === 'offwhite') ? 'offwhite' : 'dark';
+  var _appLabel = _appCurrent === 'offwhite' ? 'Off-white' : 'Dark';
+  var _appNext = _appCurrent === 'offwhite' ? 'dark' : 'offwhite';
+  var _appHelper = _appCurrent === 'offwhite'
+    ? 'Off-white preview is on. Tap Switch to return to Dark.'
+    : 'Currently Dark. Tap Switch to try the new off-white look.';
+  h += geodeMeRow(
+    'Appearance',
+    _appHelper,
+    "setAppearance('" + _appNext + "')",
+    'Switch',
+    geodeMeChip(_appLabel, _appCurrent === 'offwhite' ? 'good' : 'muted')
+  );
   h += '<div style="height:2px"></div></div>';
   h += '<div style="height:10px"></div>';
   return h;
