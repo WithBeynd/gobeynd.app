@@ -140,6 +140,37 @@ html[data-beynd-appearance="offwhite"] [style*="linear-gradient(135deg,#0e0a20"]
 html[data-beynd-appearance="offwhite"] [style*="linear-gradient(155deg,#081820"] [style*="color:rgba(189,183,220"]{
   color:rgba(189,183,220,0.82) !important;
 }
+/* Off-white preview warning + status + progress polish.
+   Preview-only. Restores AA for warn copy, status chips and detail bars. */
+html[data-beynd-appearance="offwhite"] [style*="color:#f5c234"],
+html[data-beynd-appearance="offwhite"] [style*="color:rgba(245,194,52"]{
+  color:var(--warn) !important;
+}
+html[data-beynd-appearance="offwhite"] .hero [style*="color:#f5c234"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#f5c234"],
+html[data-beynd-appearance="offwhite"] .hero [style*="color:rgba(245,194,52"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:rgba(245,194,52"]{
+  color:#f5c234 !important;
+}
+html[data-beynd-appearance="offwhite"] .pl-status{
+  background:var(--bg-raised);
+  border-color:var(--bd);
+  color:var(--tx-2);
+}
+html[data-beynd-appearance="offwhite"] .pl-status.done{
+  background:rgba(4,120,87,0.10);
+  border-color:rgba(4,120,87,0.28);
+  color:var(--ok);
+}
+html[data-beynd-appearance="offwhite"] .pl-status.inp{
+  background:rgba(180,83,9,0.10);
+  border-color:rgba(180,83,9,0.28);
+  color:var(--warn);
+}
+html[data-beynd-appearance="offwhite"] .geode-plan-detail-pbar,
+html[data-beynd-appearance="offwhite"] .geode-debt-impact-bar{
+  background:var(--bd);
+}
 body.light{
   color-scheme:light;
   --bg-base:#f6f6f5;--bg-surface:#ffffff;--bg-raised:#ececea;--bg-card:#ffffff;
