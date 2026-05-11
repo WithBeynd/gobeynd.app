@@ -733,9 +733,14 @@ canvas{display:block}
 // html[data-beynd-appearance="offwhite"] token block. Does not touch
 // S.theme, applyTheme, body.light, save/load, or service worker.
 // Refreshing without the query param leaves the attribute unset.
+// Stage 63D: also raise a session-scoped flag so load() can re-assert the preview
+// after applyAppearance(S.appearance) would otherwise revert to the saved value.
+// The flag is in-memory only; refresh without the query param drops it.
+var __beyndAppearancePreview = null;
 try {
   var __beyndPreviewParams = new URLSearchParams(window.location.search || '');
   if (__beyndPreviewParams.get('appearancePreview') === 'offwhite') {
+    __beyndAppearancePreview = 'offwhite';
     document.documentElement.dataset.beyndAppearance = 'offwhite';
   }
 } catch (e) {}
@@ -807,6 +812,8 @@ var S = {
   /** Stage 5: goal ids the user has acknowledged as reached. { [goalId]: true } */
   completedGoalAcknowledged: {},
   theme: 'dark',
+  /** Stage 63B: user-facing appearance switch field. Allowed values: 'dark' | 'offwhite'. Independent of legacy S.theme. */
+  appearance: 'dark',
   /** Persisted schema version for backups and future migrations; see GEODE_SCHEMA_VERSION. */
   _schemaVersion: GEODE_SCHEMA_VERSION,
   beyondApiKey: ''
@@ -912,6 +919,18 @@ function toggleTheme(){
     save();
   } catch (e) {}
 }
+/** Stage 63B: applies the off-white preview attribute to <html> for the given appearance value.
+ *  Does not mutate S, does not call save(), does not touch body.light, applyTheme, or toggleTheme.
+ *  Only allowed value that activates the preview is 'offwhite'; anything else removes the attribute. */
+function applyAppearance(value){
+  try {
+    if (value === 'offwhite') {
+      document.documentElement.dataset.beyndAppearance = 'offwhite';
+    } else {
+      delete document.documentElement.dataset.beyndAppearance;
+    }
+  } catch (e) {}
+}
 function load() {
   try {
     var d = localStorage.getItem(KEY);
@@ -1011,6 +1030,11 @@ function load() {
       save();
     } catch (eTh) {}
   }
+  if (S.appearance !== 'dark' && S.appearance !== 'offwhite') {
+    S.appearance = 'dark';
+  }
+  applyAppearance(S.appearance);
+  if (__beyndAppearancePreview === 'offwhite') applyAppearance('offwhite');
 }
 function save() {
   geodeNormalizeIncomeTypeFields();
