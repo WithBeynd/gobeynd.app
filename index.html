@@ -4281,6 +4281,78 @@ function geodeReplaceMoPanelHtml(html) {
   mo.innerHTML = html;
   return true;
 }
+
+function geodeMoPanelPrefersReducedMotion() {
+  try {
+    return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch (_prm) {
+    return false;
+  }
+}
+
+/** Afford gate → Reality Check only: same #modal shell; keep sheet height ≥ afford height so the top edge does not jump when RC is shorter (no closeModal, no delayed remove). */
+function geodeAffordGateMoToRealityCheckHandoff(html) {
+  var bg = document.getElementById('modal');
+  if (!bg || !bg.classList || !bg.classList.contains('mo-bg')) return false;
+  var mo = bg.firstElementChild;
+  if (!mo || !mo.classList || !mo.classList.contains('mo')) return false;
+  try {
+    mo.scrollTop = 0;
+  } catch (_st) {}
+  var H0 = Math.ceil(mo.getBoundingClientRect().height || mo.offsetHeight);
+  if (H0 < 48) H0 = Math.ceil(mo.offsetHeight) || 280;
+  var maxH = Math.max(120, Math.floor(window.innerHeight * 0.9));
+
+  mo.style.transition = 'none';
+  mo.style.minHeight = H0 + 'px';
+  mo.style.height = H0 + 'px';
+  mo.style.overflow = 'hidden';
+
+  try {
+    mo.innerHTML = html;
+  } catch (_ih) {
+    try {
+      mo.style.minHeight = '';
+      mo.style.height = '';
+      mo.style.overflow = '';
+      mo.style.transition = '';
+    } catch (_ih2) {}
+    return false;
+  }
+
+  var H1 = Math.ceil(mo.scrollHeight);
+  if (H1 > maxH) H1 = maxH;
+  var Hlock = H1 > H0 ? Math.min(H1, maxH) : H0;
+  mo.style.height = Hlock + 'px';
+  mo.style.minHeight = H0 + 'px';
+  mo.style.overflowY = 'auto';
+  mo.style.overflowX = 'hidden';
+
+  if (!geodeMoPanelPrefersReducedMotion()) {
+    mo.style.transition = 'opacity 170ms ease-out';
+    mo.style.opacity = '0.93';
+    void mo.offsetHeight;
+    requestAnimationFrame(function () {
+      try {
+        mo.style.opacity = '1';
+      } catch (_o) {}
+    });
+    window.setTimeout(function () {
+      try {
+        if (mo && mo.parentNode) {
+          mo.style.transition = '';
+          mo.style.opacity = '';
+        }
+      } catch (_t) {}
+    }, 240);
+  } else {
+    try {
+      mo.style.transition = '';
+    } catch (_tr) {}
+  }
+
+  return true;
+}
 function closeModal() {
   if (window._geodeQS) {
     geodeQuickSetupExit();
@@ -13534,6 +13606,10 @@ function geodeApplyAdaptiveTierToMainActionDisplay(tier, title, sub, fam) {
 
 /** Pass true when Home renders the yellow renewal card — subscription anticipation footer is skipped so the same line does not appear twice. */
 function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
+  try {
+    window._geodeMainActionGate = null;
+    window._geodeMainActionRun = null;
+  } catch (_eClrMa) {}
   var a = geodeGetMainAction(S) || null;
   if (!a) return '';
   var cleared = false;
@@ -13762,6 +13838,47 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
       _homeVarTap = true;
     }
   } catch (_eHt) {}
+
+  // Reality Check Lite: sessionStorage gate before payment modal (see geodeRunMainAction).
+  try {
+    window._geodeMainActionGate = null;
+    var _fnAff = window._geodeMainActionRun;
+    if (typeof _fnAff === 'function' && showAmt) {
+      var _ctaAff = String(cta || '').trim();
+      var _moneyCta =
+        _ctaAff === 'Schedule payment' ||
+        _ctaAff === 'Plan a buffer contribution' ||
+        _ctaAff === 'Schedule contribution' ||
+        _ctaAff === 'Begin contributing' ||
+        _ctaAff === 'Schedule investment' ||
+        (_ctaAff === 'Add investment' && Math.round(amt) >= 1);
+      if (_moneyCta) {
+        var _sigFam = '';
+        try {
+          _sigFam = _ftFam ? String(_ftFam).trim() : '';
+        } catch (_eSf) {
+          _sigFam = '';
+        }
+        var _sigRaw =
+          currentYM() + '|' + _ctaAff + '|' + Math.round(amt) + (_sigFam ? '|' + _sigFam : '');
+        var _sigH = 0;
+        for (var _si = 0; _si < _sigRaw.length; _si++) {
+          _sigH = ((_sigH << 5) - _sigH + _sigRaw.charCodeAt(_si)) | 0;
+        }
+        var _sigKey = 'v1_' + currentYM() + '_' + (_sigH >>> 0).toString(16);
+        window._geodeMainActionGate = {
+          needsAffordGate: true,
+          amount: amt,
+          cta: _ctaAff,
+          sig: _sigKey
+        };
+      }
+    }
+  } catch (_eFg) {
+    try {
+      window._geodeMainActionGate = null;
+    } catch (_eFg2) {}
+  }
 
   // Behaviour-response line (cross-family conflicts only): display-only.
   // Suppressed while the short-lived completion note is active, and when sub
@@ -14271,10 +14388,153 @@ function geodeHomeNoteRecentCompletion(kind) {
   } catch (e0) {}
 }
 
+/** sessionStorage key helper for Reality Check Lite (Main Action gate). */
+function geodeAffordGateStoragePrefix(kind, sigKey) {
+  return 'geode_aff_' + String(kind || '') + '_' + String(sigKey || '');
+}
+
+/** Display-only: one afford-modal line from Reality Check state (no plan or gate changes). */
+function geodeAffordabilityRealityLine() {
+  var fallback = 'This is from your plan, not a live balance check.';
+  try {
+    var rs = geodeRealityStatus();
+    if (!rs || !rs.hasData) {
+      return fallback;
+    }
+    var daysOld = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
+    if (daysOld > 3) {
+      return 'Your last balance check may be out of date.';
+    }
+    if (rs.activitySinceCheck) {
+      return 'Things may have moved since your last balance check.';
+    }
+    return 'Your latest balance check helps Beynd sense-check this step.';
+  } catch (_eAr) {
+    return fallback;
+  }
+}
+
+function geodeOpenAffordabilityGateModal() {
+  var p = window._geodeAffordGatePending;
+  if (!p || typeof p.fn !== 'function' || !p.gate || !p.gate.needsAffordGate) return;
+  var g = p.gate;
+  var amtStr = '';
+  try {
+    amtStr = fm(g.amount);
+  } catch (_eAm) {
+    amtStr = String(g.amount);
+  }
+  var paused = false;
+  try {
+    paused = sessionStorage.getItem(geodeAffordGateStoragePrefix('pause', g.sig)) === '1';
+  } catch (_ePau) {}
+  var h = mh('Before you schedule');
+  h +=
+    '<div style="font-size:12px;color:var(--tx-2);line-height:1.55;margin:-4px 0 10px">' +
+    escHtmlLite(
+      'Your plan suggests ' +
+        amtStr +
+        '. Take a moment to check this still feels right before you schedule.'
+    ) +
+    '</div>';
+  h +=
+    '<div style="font-size:11px;color:rgba(189,183,220,0.82);line-height:1.5;margin-bottom:8px">' +
+    escHtmlLite(geodeAffordabilityRealityLine()) +
+    '</div>';
+  h +=
+    '<div style="font-size:10px;color:rgba(189,183,220,0.65);line-height:1.45;margin-bottom:14px">' +
+    escHtmlLite('You can still edit the amount before saving.') +
+    '</div>';
+  if (paused) {
+    h +=
+      '<div style="font-size:10px;color:rgba(245,194,52,0.65);line-height:1.45;margin-bottom:12px">' +
+      escHtmlLite('You had paused this suggestion. Choose again when it feels right.') +
+      '</div>';
+  }
+  h += '<div style="display:flex;flex-direction:column;gap:8px">';
+  h +=
+    '<button type="button" class="btn btn-p" onclick="geodeAffordGateYes()">' +
+    escHtmlLite('Yes, this is affordable') +
+    '</button>';
+  h +=
+    '<button type="button" class="btn btn-s" onclick="geodeAffordGateNotSure()">' +
+    escHtmlLite('Not sure, I\u2019ll check first') +
+    '</button>';
+  h +=
+    '<button type="button" class="btn btn-s" style="opacity:0.95" onclick="geodeAffordGatePause()">' +
+    escHtmlLite(paused ? 'Keep paused for now' : 'No, pause this for now') +
+    '</button>';
+  h += '</div>';
+  openModal(h);
+}
+
+function geodeAffordGateYes() {
+  try {
+    var p = window._geodeAffordGatePending;
+    window._geodeAffordGatePending = null;
+    // Immediate teardown: closeModal() schedules removeModalDom(165ms) and would
+    // delete the next modal openPayModal/openModal creates on the same #modal id.
+    removeModalDom();
+    if (!p || typeof p.fn !== 'function' || !p.skOk || !p.skPause) return;
+    try {
+      sessionStorage.setItem(p.skOk, '1');
+      sessionStorage.removeItem(p.skPause);
+    } catch (_eS) {}
+    p.fn();
+  } catch (_eY) {}
+}
+
+function geodeAffordGateNotSure() {
+  try {
+    window._geodeAffordGatePending = null;
+    // Same #modal shell: lock height → swap → animate height to new content (bottom sheet, no snap).
+    if (geodeAffordGateMoToRealityCheckHandoff(geodeRealityCheckModalInnerHtml())) {
+      return;
+    }
+  } catch (_eN) {}
+  try {
+    removeModalDom();
+  } catch (_eN0) {}
+  try {
+    geodeOpenRealityCheckModal();
+  } catch (_eN2) {}
+}
+
+function geodeAffordGatePause() {
+  try {
+    var p = window._geodeAffordGatePending;
+    window._geodeAffordGatePending = null;
+    removeModalDom();
+    if (!p || !p.skOk || !p.skPause) return;
+    try {
+      sessionStorage.setItem(p.skPause, '1');
+      sessionStorage.removeItem(p.skOk);
+    } catch (_eS2) {}
+    if (typeof tab !== 'undefined' && tab === 'home' && typeof render === 'function') render();
+  } catch (_eP) {}
+}
+
 function geodeRunMainAction() {
   try {
     var fn = window._geodeMainActionRun;
-    if (typeof fn === 'function') fn();
+    if (typeof fn !== 'function') return;
+    var gate = window._geodeMainActionGate;
+    if (!gate || !gate.needsAffordGate || !gate.sig) {
+      fn();
+      return;
+    }
+    var skOk = geodeAffordGateStoragePrefix('ok', gate.sig);
+    var skPause = geodeAffordGateStoragePrefix('pause', gate.sig);
+    var okOn = false;
+    try {
+      okOn = sessionStorage.getItem(skOk) === '1';
+    } catch (_eOk) {}
+    if (okOn) {
+      fn();
+      return;
+    }
+    window._geodeAffordGatePending = { fn: fn, gate: gate, skOk: skOk, skPause: skPause };
+    geodeOpenAffordabilityGateModal();
   } catch (e) {}
 }
 
@@ -14481,12 +14741,25 @@ function geodeRealityCheckCardHtml() {
 }
 
 function geodeOpenRealityCheckModal() {
+  openModal(geodeRealityCheckModalInnerHtml());
+}
+
+/** Inner HTML for the Reality Check modal (same content whether opening fresh or swapping from afford gate). */
+function geodeRealityCheckModalInnerHtml() {
   var cur = S.realityCheck && S.realityCheck.ym === currentYM() ? S.realityCheck.amount : '';
   var h = mh('Reality check');
-  h += '<div style="font-size:11px;color:var(--tx-3);line-height:1.45;margin:-4px 0 12px">Enter your latest account balance to compare your monthly plan with reality.</div>';
-  h += '<div class="field"><label>Current balance (' + S.cur.code + ')</label><input type="number" id="rc_amount" class="fi" value="' + (cur !== '' ? cur : '') + '" placeholder="e.g. 1200" style="font-size:22px;font-weight:700"/></div>';
+  h +=
+    '<div style="font-size:11px;color:var(--tx-3);line-height:1.45;margin:-4px 0 12px">' +
+    escHtmlLite('Add your latest balance. Beynd will use it to sense-check your plan before you schedule.') +
+    '</div>';
+  h +=
+    '<div class="field"><label>Current balance (' +
+    S.cur.code +
+    ')</label><input type="number" id="rc_amount" class="fi" value="' +
+    (cur !== '' ? cur : '') +
+    '" placeholder="e.g. 1200" style="font-size:22px;font-weight:700"/></div>';
   h += '<button class="btn btn-p" onclick="geodeSaveRealityCheck()">Save</button>';
-  openModal(h);
+  return h;
 }
 
 function geodeSaveRealityCheck() {
