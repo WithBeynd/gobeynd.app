@@ -10833,7 +10833,7 @@ function geodePlanPageBufferPriorityBodyHtml(step, bufDisp, prog) {
 
   var impact = '';
   if (prog.phase === 'partial' && prog.applied > 0) {
-    impact = geodeHomeInsightShortLine(fm(prog.applied) + ' logged · ' + fm(prog.remaining) + ' left', 90);
+    impact = geodeHomeInsightShortLine(fm(prog.applied) + ' marked complete · ' + fm(prog.remaining) + ' left', 90);
   } else if (st !== 'NO_BUFFER_CONTEXT' && toNum(step.amount) > 0) {
     impact =
       sk === 'growth'
@@ -11024,7 +11024,7 @@ function geodePlanPageGoalPriorityBodyHtml(step, prog) {
   var impact = '';
   if (nt && nt.length < 100) impact = nt;
   else if (prog.phase === 'partial' && prog.applied > 0) {
-    impact = geodeHomeInsightShortLine(fm(prog.applied) + ' logged · ' + fm(prog.remaining) + ' left', 90);
+    impact = geodeHomeInsightShortLine(fm(prog.applied) + ' marked complete · ' + fm(prog.remaining) + ' left', 90);
   }
   if (impact) {
     h +=
@@ -11181,7 +11181,7 @@ function geodePlanPageStatusSectionHtml(optSkipNegDup) {
   } else if (meaningfulCount > 0 && doneCount === meaningfulCount) {
     headline = 'Plan complete for this month';
     col = '#34d5a0';
-    why = 'You\u2019ve logged the suggested amounts for each plan step this month.';
+    why = 'You\u2019ve completed the suggested amounts for each plan step this month.';
   } else if (onlyFirstStepDone) {
     headline = 'First step complete';
     col = '#34d5a0';
@@ -11189,15 +11189,15 @@ function geodePlanPageStatusSectionHtml(optSkipNegDup) {
   } else if (ratio >= 0.72) {
     headline = 'Mostly on track';
     col = '#34d5a0';
-    why = 'About ' + fm(totalA) + ' of ' + fm(totalS) + ' suggested is logged this month.';
+    why = 'About ' + fm(totalA) + ' of ' + fm(totalS) + ' suggested is marked complete this month.';
   } else if (ratio >= 0.38 || (p1p && p1p.phase === 'partial' && p1p.ratio >= 0.4)) {
     headline = 'In progress';
     col = '#f5c234';
-    why = fm(totalA) + ' of ' + fm(totalS) + ' suggested logged so far this month.';
+    why = fm(totalA) + ' of ' + fm(totalS) + ' suggested marked complete so far this month.';
   } else {
     headline = 'Room to catch up';
     col = '#f5c234';
-    why = 'Logging contributions as paid helps keep the plan status accurate.';
+    why = 'Marking contributions as paid helps keep the plan status accurate.';
   }
 
   var whyDetails = why
@@ -11513,7 +11513,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
   } else if (sug > 0 && prog.phase === 'done') {
     amtShown = fm(step.amount);
   }
-  var statusLb = prog.phase === 'done' ? 'Completed' : prog.phase === 'partial' ? 'In progress' : 'Not started';
+  var statusLb = geodePlanStepStatusDisplayLabel(prog);
   var statusCls = prog.phase === 'done' ? 'pl-status done' : prog.phase === 'partial' ? 'pl-status inp' : 'pl-status';
   var stepY = steps.length;
   var stepX = ix + 1;
@@ -11663,7 +11663,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         escHtmlLite(fm(prog.suggested)) +
         '</span></div>';
       h +=
-        '<div class="geode-plan-detail-metricrow"><span>Logged this month</span><span>' +
+        '<div class="geode-plan-detail-metricrow"><span>Marked complete this month</span><span>' +
         escHtmlLite(fm(prog.applied)) +
         '</span></div>';
       h +=
@@ -11690,7 +11690,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         escHtmlLite(fm(prog.suggested)) +
         '</span></div>';
       h +=
-        '<div class="geode-plan-detail-metricrow"><span>Logged this month</span><span>' +
+        '<div class="geode-plan-detail-metricrow"><span>Marked complete this month</span><span>' +
         escHtmlLite(fm(prog.applied)) +
         '</span></div>';
       h +=
@@ -11751,7 +11751,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         escHtmlLite(fm(prog.suggested)) +
         '</span></div>';
       h +=
-        '<div class="geode-plan-detail-metricrow"><span>Logged this month</span><span>' +
+        '<div class="geode-plan-detail-metricrow"><span>Marked complete this month</span><span>' +
         escHtmlLite(fm(prog.applied)) +
         '</span></div>';
       h +=
@@ -11814,7 +11814,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         escHtmlLite(fm(prog.suggested)) +
         '</span></div>';
       h +=
-        '<div class="geode-plan-detail-metricrow"><span>Logged this month</span><span>' +
+        '<div class="geode-plan-detail-metricrow"><span>Marked complete this month</span><span>' +
         escHtmlLite(fm(prog.applied)) +
         '</span></div>';
       h +=
@@ -11831,7 +11831,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
       h +=
         '<div class="geode-plan-detail-muted">' +
         escHtmlLite(
-          'No fixed amount on this step. When you act, Beynd tracks what you log against what the plan suggested.'
+          'No fixed amount on this step. When you act, Beynd tracks what you mark complete against what the plan suggested.'
         ) +
         '</div>';
     }
@@ -11848,7 +11848,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         escHtmlLite(fm(prog.suggested)) +
         '</span></div>';
       h +=
-        '<div class="geode-plan-detail-metricrow"><span>Logged this month</span><span>' +
+        '<div class="geode-plan-detail-metricrow"><span>Marked complete this month</span><span>' +
         escHtmlLite(fm(prog.applied)) +
         '</span></div>';
       h +=
@@ -11865,7 +11865,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
       h +=
         '<div class="geode-plan-detail-muted">' +
         escHtmlLite(
-          'No fixed amount on this step. When you act, Beynd tracks what you log against what the plan suggested.'
+          'No fixed amount on this step. When you act, Beynd tracks what you mark complete against what the plan suggested.'
         ) +
         '</div>';
     }
@@ -12246,14 +12246,14 @@ function geodePlanPagePrioritiesStackHtml(plan) {
       capShown =
         (capShown ? capShown + ' \u2014 ' : '') +
         fm(prog.applied) +
-        ' logged, ' +
+        ' marked complete, ' +
         fm(prog.remaining) +
         ' left on this step';
     } else if (sug > 0 && prog.phase === 'done') {
       amtShown = fm(s.amount);
       capShown = '';
     }
-    var statusLb = prog.phase === 'done' ? 'Completed' : prog.phase === 'partial' ? 'In progress' : 'Not started';
+    var statusLb = geodePlanStepStatusDisplayLabel(prog);
     var statusCls = prog.phase === 'done' ? 'pl-status done' : prog.phase === 'partial' ? 'pl-status inp' : 'pl-status';
     var isLast = i === steps.length - 1;
     h +=
@@ -12780,6 +12780,29 @@ function geodePlanStepProgress(state, step) {
   return out;
 }
 
+/** Display-only plan row status (geodePlanStepProgress unchanged). */
+function geodePlanStepStatusDisplayLabel(prog) {
+  if (!prog) return 'Not started';
+  if (prog.phase === 'done') return 'Completed';
+  if (prog.phase === 'partial') {
+    if (toNum(prog.applied) <= 0) return 'Scheduled';
+    return 'In progress';
+  }
+  return 'Not started';
+}
+
+/** Display-only Home context line from Reality Check (no internal confidence words). */
+function geodeHomeRealityConfDisplayLabel(rs) {
+  if (!rs || !rs.hasData) return 'No balance check on file';
+  if (rs.activitySinceCheck) return 'Things may have moved since your last balance check';
+  if (typeof rs.daysOld === 'number' && rs.daysOld > 3) {
+    return 'Your last balance check may be out of date';
+  }
+  if (rs.confidence === 'high') return 'Balance check on file';
+  if (rs.confidence === 'moderate') return 'Recent check on file';
+  return 'Balance check may be partial';
+}
+
 /** First plan row with amount > 0 that is not done this month (full sequence; Plan + Home). */
 function geodeFirstIncompletePlanStep(plan, state) {
   plan = plan || {};
@@ -12874,10 +12897,10 @@ function geodePlanStepDisplayTitle(step, prog) {
     var nm = lb.replace(/^Reduce high[\u2011\u2010\-]interest /, '').trim();
     if (prog && prog.phase === 'done') {
       return sk === 'growth'
-        ? 'Debt step logged \u2014 growth is next'
+        ? 'Debt step completed \u2014 growth is next'
         : sk === 'debt'
-          ? 'This month\u2019s extra debt payment is logged'
-          : 'Debt plan step logged this month';
+          ? 'This month\u2019s extra debt payment is completed'
+          : 'Debt plan step completed this month';
     }
     if (prog && prog.phase === 'partial') {
       return nm ? nm + ' is costing the most in interest' : 'Your highest-interest debt is the one to watch';
@@ -12887,8 +12910,8 @@ function geodePlanStepDisplayTitle(step, prog) {
   if (lb === 'Build your emergency fund') {
     if (prog && prog.phase === 'done')
       return sk === 'growth'
-        ? 'Buffer step logged \u2014 growth stays next'
-        : 'Buffer plan step logged this month';
+        ? 'Buffer step completed \u2014 growth stays next'
+        : 'Buffer plan step completed this month';
     if (prog && prog.phase === 'partial') return 'Your buffer is a layer of stability worth building';
     return sk === 'debt' ? 'Your buffer may be the next layer of stability' : 'Your buffer may be the next layer of stability';
   }
@@ -12905,8 +12928,8 @@ function geodePlanStepDisplayTitle(step, prog) {
     if (stInv === 'NOT_STARTED') return 'Invest what remains';
     if (prog && prog.phase === 'done')
       return sk === 'growth'
-        ? 'Invest step logged this month'
-        : 'Invest plan step logged this month';
+        ? 'Invest step completed this month'
+        : 'Invest plan step completed this month';
     if (prog && prog.phase === 'partial') return 'Invest what remains';
     return 'Invest what remains';
   }
@@ -12919,7 +12942,10 @@ function geodeMainActionSubForStep(step, prog, mainKind) {
     return '';
   }
   if (prog && prog.phase === 'partial' && prog.applied > 0 && toNum(prog.remaining) >= 1) {
-    return geodeHomeInsightShortLine(fm(prog.applied) + ' logged \u00b7 ' + fm(prog.remaining) + ' left', 88);
+    return geodeHomeInsightShortLine(
+      fm(prog.applied) + ' marked complete \u00b7 ' + fm(prog.remaining) + ' left on plan target',
+      88
+    );
   }
   if (lb.indexOf('Reduce high') === 0) {
     return 'Extra payments here reduce interest faster than anywhere else in your plan.';
@@ -13307,7 +13333,7 @@ function geodeGetMainAction(state) {
       title: 'Your monthly plan is complete',
       amount: null,
       cta: 'View plan',
-      sub: 'You\u2019ve logged this month\u2019s plan steps. Review or adjust anytime.',
+      sub: 'You\u2019ve completed this month\u2019s plan steps. Review or adjust anytime.',
       _geodeHomeMainActionNoRibbon: true,
       run: function () {
         geodeOpenPlanMonthlyFromHome();
@@ -13624,7 +13650,7 @@ function geodeApplyAdaptiveTierToMainActionDisplay(tier, title, sub, fam) {
     buffer: 'Even a modest buffer step is worth doing \u2014 build toward the full amount over time.'
   };
   var g = gentle[fam] || 'This stays in your plan \u2014 step in when it feels right.';
-  if (su.toLowerCase().indexOf('logged') >= 0) {
+  if (su.toLowerCase().indexOf('marked complete') >= 0 || su.toLowerCase().indexOf('completed') >= 0) {
     return { title: tit, sub: su + ' ' + g };
   }
   return { title: tit, sub: g };
@@ -13896,13 +13922,17 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
 
   // Behaviour-response line (cross-family conflicts only): display-only.
   // Suppressed while the short-lived completion note is active, and when sub
-  // already contains "logged" (the partial-progress line covers that case).
+  // already contains progress copy (the partial-progress line covers that case).
   var _bhvLine = '';
   var _bhvIsConflict = false;
   try {
     var _rcAct = window._geodeHomeRecentCompletion || null;
     var _rcStillActive = _rcAct && _rcAct.ts && (Date.now() - _rcAct.ts < 5200);
-    if (!_rcStillActive && sub.toLowerCase().indexOf('logged') < 0) {
+    if (
+      !_rcStillActive &&
+      sub.toLowerCase().indexOf('marked complete') < 0 &&
+      sub.toLowerCase().indexOf('completed') < 0
+    ) {
       var _mainKind = geodeHomeMainActionInsightKind();
       if (_mainKind !== 'none') {
         var _latestAct = geodeGetLatestActivity(S);
@@ -13955,13 +13985,12 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     _rs.confidence !== 'high' ||
     (typeof _rs.daysOld === 'number' && _rs.daysOld > 3) ||
     !!_rs.activitySinceCheck;
-  var _rcConf = _rs && _rs.confidence ? _rs.confidence : 'estimated';
-  var _confLabel =
-    _rcConf === 'high'
-      ? 'High confidence'
-      : _rcConf === 'moderate'
-        ? 'Moderate confidence'
-        : 'Estimate \u2014 based on partial data';
+  var _confLabel = '';
+  try {
+    _confLabel = geodeHomeRealityConfDisplayLabel(_rs);
+  } catch (_eConfLbl) {
+    _confLabel = 'No balance check on file';
+  }
 
   // Plan source line: only for plan-navigation CTAs (avoid clutter on execution cards).
   var _ctaLc = String(cta || '').toLowerCase();
@@ -14026,9 +14055,18 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   if (_contextLine) {
     h += '<div style="font-size:9px;color:rgba(189,183,220,0.55);margin-bottom:10px;font-weight:600;letter-spacing:0.5px">' + escHtmlLite(_contextLine) + '</div>';
   }
+  var _showPlanTargetFraming = false;
+  try {
+    var _gMaFr = window._geodeMainActionGate;
+    _showPlanTargetFraming = !!(showAmt && _gMaFr && _gMaFr.needsAffordGate);
+  } catch (_ePtf) {}
   h += '<div style="display:flex;flex-direction:column;align-items:stretch;gap:10px">';
   if (showAmt) {
     if (_homeVarTap) {
+      if (_showPlanTargetFraming) {
+        h +=
+          '<div style="font-size:9px;font-weight:700;color:rgba(189,183,220,0.55);letter-spacing:0.6px;text-transform:uppercase">Plan target</div>';
+      }
       h +=
         '<div role="button" tabindex="0" onclick="geodeToggleExplain(\'homeMainVar\')" ' +
         'onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeToggleExplain(\'homeMainVar\');}}catch(__hk){}" ' +
@@ -14058,8 +14096,20 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
             '</div>';
         }
       }
+      if (_showPlanTargetFraming) {
+        h +=
+          '<div style="font-size:9px;color:rgba(189,183,220,0.52);line-height:1.35;margin-top:2px">From your monthly plan</div>';
+      }
     } else {
-      h += '<div style="font-size:18px;font-weight:800;color:#9b7fe8">' + fm(amt) + '</div>';
+      if (_showPlanTargetFraming) {
+        h +=
+          '<div style="font-size:9px;font-weight:700;color:rgba(189,183,220,0.55);letter-spacing:0.6px;text-transform:uppercase">Plan target</div>';
+        h += '<div style="font-size:18px;font-weight:800;color:#9b7fe8">' + fm(amt) + '</div>';
+        h +=
+          '<div style="font-size:9px;color:rgba(189,183,220,0.52);line-height:1.35;margin-top:2px">From your monthly plan</div>';
+      } else {
+        h += '<div style="font-size:18px;font-weight:800;color:#9b7fe8">' + fm(amt) + '</div>';
+      }
     }
   }
   h +=
@@ -14385,11 +14435,11 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
 function geodeHomeNoteRecentCompletion(kind) {
   try {
     var msg = '';
-    if (kind === 'debt') msg = 'Debt payment logged.';
-    else if (kind === 'buffer') msg = 'Buffer contribution logged.';
-    else if (kind === 'invest') msg = 'Investment contribution logged.';
-    else if (kind === 'goal') msg = 'Goal contribution logged.';
-    else msg = 'Logged.';
+    if (kind === 'debt') msg = 'Debt payment marked complete.';
+    else if (kind === 'buffer') msg = 'Buffer contribution marked complete.';
+    else if (kind === 'invest') msg = 'Investment contribution marked complete.';
+    else if (kind === 'goal') msg = 'Goal contribution marked complete.';
+    else msg = 'Marked complete.';
     window._geodeHomeRecentCompletion = { ts: Date.now(), msg: msg };
     setTimeout(function () {
       try {
@@ -17252,7 +17302,15 @@ function rPayments(el) {
     var isPaid = p.status === 'paid';
     var needsConfirm = !isPaid && p.date && geodeIsoDateIsPast(p.date);
     if (needsConfirm) col = '#c4abff';
-    var pillText = isPaid ? 'Completed' : needsConfirm ? 'Needs confirmation' : likely ? 'Likely completed' : 'In progress';
+    var pillText = isPaid
+      ? 'Completed'
+      : needsConfirm
+        ? 'Needs confirmation'
+        : likely
+          ? 'Likely completed'
+          : st === 'upcoming'
+            ? 'Scheduled'
+            : 'In progress';
     var pillBorder = '1px solid rgba(255,255,255,0.06)';
     var pillColor = 'rgba(189,183,220,0.78)';
     var pillBg = 'rgba(255,255,255,0.03)';
@@ -18062,7 +18120,7 @@ function togglePay(id){
         var kGoal = 'geode_goal_saved_note_session';
         if (!sessionStorage.getItem(kGoal)) {
           sessionStorage.setItem(kGoal, '1');
-          toast('Logged — goal progress updated.');
+          toast('Marked complete — goal progress updated.');
         }
       } catch (eGoalNote) {}
     }
@@ -18071,7 +18129,7 @@ function togglePay(id){
         var kInv = 'geode_invest_balance_note_session';
         if (!sessionStorage.getItem(kInv)) {
           sessionStorage.setItem(kInv, '1');
-          toast('Logged — investment balance updated.');
+          toast('Marked complete — investment balance updated.');
         }
       } catch (eInvNote) {}
     }
@@ -18997,7 +19055,7 @@ function geodeBuildUserGuideHtml() {
       body: '<p>The Money tab is where you manage everything Beynd knows about your finances.</p>' +
             '<ul style="padding-left:18px;margin:8px 0;line-height:2">' +
             '<li><strong>Overview</strong> \u2014 your net worth snapshot and quick links to each section.</li>' +
-            '<li><strong>Goals</strong> \u2014 add, edit, and track savings goals. Tap a goal to log a contribution.</li>' +
+            '<li><strong>Goals</strong> \u2014 add, edit, and track savings goals. Tap a goal to mark a contribution complete.</li>' +
             '<li><strong>Spending</strong> \u2014 your monthly expenses. Mark recurring ones so they count every month.</li>' +
             '<li><strong>Debts</strong> \u2014 balances, APR, and minimum payments. Beynd calculates monthly interest automatically.</li>' +
             '<li><strong>Contributions</strong> \u2014 scheduled payments. Confirm them when you\u2019ve made them so your plan stays accurate.</li>' +
