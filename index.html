@@ -15112,7 +15112,9 @@ function geodeRealityPageHtml() {
     '</button>';
 
   h +=
-    '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin:22px 0 10px;line-height:1.3;letter-spacing:0.01em">Today</div>';
+    '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin:22px 0 10px;line-height:1.3;letter-spacing:0.01em">' +
+    escHtmlLite('How today feels') +
+    '</div>';
   h +=
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">';
   h +=
@@ -17609,9 +17611,9 @@ function geodeQuickSetupRender() {
     body+='<button type="button" onclick="geodeQsIT(&apos;stable&apos;)" class="fi" style="flex:1;cursor:pointer;text-align:center;padding:10px 6px;font-size:12px;font-weight:700;'+(stableOn?'border-color:var(--gem);color:var(--gem)':'color:var(--tx-3)')+'">Regular<br><span style="font-size:9px;font-weight:400;opacity:.7">Salary / fixed</span></button>';
     body+='<button type="button" onclick="geodeQsIT(&apos;irregular&apos;)" class="fi" style="flex:1;cursor:pointer;text-align:center;padding:10px 6px;font-size:12px;font-weight:700;'+(!stableOn?'border-color:var(--gem);color:var(--gem)':'color:var(--tx-3)')+'">Variable<br><span style="font-size:9px;font-weight:400;opacity:.7">Freelance / self-employed</span></button>';
     body+='</div></div>';
-    body+='<div class="field"><label>Do you support others financially?</label><div style="display:flex;gap:8px;margin-top:6px">';
+    body+='<div class="field"><label>Does this income support others too?</label><div style="display:flex;gap:8px;margin-top:6px">';
     body+='<button type="button" onclick="geodeQsDeps(false)" class="fi" style="flex:1;cursor:pointer;text-align:center;padding:10px 6px;font-size:13px;font-weight:700;'+(!qd.hasDependants?'border-color:var(--gem);color:var(--gem)':'color:var(--tx-3)')+'">Just me</button>';
-    body+='<button type="button" onclick="geodeQsDeps(true)" class="fi" style="flex:1;cursor:pointer;text-align:center;padding:10px 6px;font-size:13px;font-weight:700;'+(qd.hasDependants?'border-color:var(--gem);color:var(--gem)':'color:var(--tx-3)')+'">Yes, I support others</button>';
+    body+='<button type="button" onclick="geodeQsDeps(true)" class="fi" style="flex:1;cursor:pointer;text-align:center;padding:10px 6px;font-size:13px;font-weight:700;'+(qd.hasDependants?'border-color:var(--gem);color:var(--gem)':'color:var(--tx-3)')+'">Yes, others too</button>';
     body+='</div></div>';
   } else {
     body+='<div style="font-size:15px;font-weight:700;color:var(--tx-1);margin-bottom:4px">Monthly essentials</div>';
@@ -19736,7 +19738,7 @@ function geodeBuildSettingsPlanBodyHtml() {
   var rlb = { UK: 'UK', US: 'US', EU: 'EU', Other: 'Other' }[S.finRegion] || 'UK';
   var psn = planStrategyDisplayName(S.planStrategy);
   var itd = geodeIncomeTypeDisplay();
-  var deps = S.hasDependants ? 'Yes' : 'No';
+  var deps = S.hasDependants ? 'Yes, others too' : 'Just me';
   var incRow =
     geodeHasPositiveIncome()
       ? fm(S.income)
@@ -19749,7 +19751,7 @@ function geodeBuildSettingsPlanBodyHtml() {
   h += geodeMeRow('Currency', S.cur.code + ' (' + S.cur.sym + ')', 'openCurModal()', 'Change');
   h += geodeMeRow('Monthly income', incRow, 'openIncModal()', 'Change');
   h += geodeMeRow('Income type', itd, 'openIncomeTypeModal()', 'Change');
-  h += geodeMeRow('Do you support others financially?', deps, 'openDependantsModal()', 'Change');
+  h += geodeMeRow('Does this income support others too?', deps, 'openDependantsModal()', 'Change');
   h += geodeMeRow('Financial region', rlb, 'openRegionModal()', 'Change');
   h += geodeMeRow('Plan strategy', psn, 'openPlanStrategyModal()', 'Change');
   h += '<div style="height:2px"></div></div>';
@@ -20060,8 +20062,8 @@ function setIncomeType(id) {
 function openDependantsModal() {
   geodeNormalizeIncomeTypeFields();
   var cur = S.hasDependants ? 'yes' : 'no';
-  var html = mh('Do you support others financially?') + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">';
-  var opts = [['yes', 'Yes'], ['no', 'No']];
+  var html = mh('Does this income support others too?') + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">';
+  var opts = [['yes', 'Yes, others too'], ['no', 'Just me']];
   for (var di = 0; di < opts.length; di++) {
     var vid = opts[di][0],
       vlb = opts[di][1],
