@@ -14916,6 +14916,217 @@ function openSuggestedAction(idx) {
 // ── END CRYSTAL INSIGHTS + THIS MONTH'S PLAN ───────────────────────────────── ───────────────────────────────────────────────────────
 
 // ── REALITY CHECK ──────────────────────────────────────────────────────────
+/** Money · Reality surface — no fifth nav tab; keeps tab bar on Money. */
+function geodeNavigateToReality() {
+  try {
+    tab = 'money';
+    msub = 'reality';
+    var btns = document.querySelectorAll('.tab');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].className = 'tab' + (btns[i].dataset.t === 'money' ? ' on' : '');
+    }
+    render();
+  } catch (_eNvR) {}
+}
+
+function geodeExitRealitySurface() {
+  try {
+    msub = 'overview';
+    render();
+  } catch (_eExR) {}
+}
+
+/** Display-only self-report prompts (Stage 9B — not persisted). */
+function geodeRealitySelfReportToast(kind) {
+  try {
+    var m = '';
+    if (kind === 'on_track') {
+      m = 'Good to hear. Optional: refresh your balance when it feels useful.';
+    } else if (kind === 'moved') {
+      m = 'Small shifts happen. Update your balance when you can — no transaction list needed.';
+    } else if (kind === 'slow') {
+      m = 'Useful context. Your plan stays until you change it — slow down at your pace.';
+    } else if (kind === 'unsure') {
+      m = 'That\u2019s okay. A balance check below is optional whenever you\u2019re ready.';
+    } else {
+      return;
+    }
+    toast(m, 'ok', 4200);
+  } catch (_eSrt) {}
+}
+
+function geodeSaveRealityCheckFromPage() {
+  var el = document.getElementById('rc_page_amount');
+  if (!el) return;
+  var val = el.value;
+  if (val === '' || isNaN(Number(val))) {
+    toast('Enter a valid amount.', 'warn');
+    return;
+  }
+  S.realityCheck = { amount: Number(val), ym: currentYM(), date: Date.now() };
+  persistGeodeToLocalStorage();
+  render();
+  toast('Saved.');
+}
+
+/** Lightweight Reality tap-through page (Money · msub reality). */
+function geodeRealityPageHtml() {
+  var left = calcMonthlyLeftover(S);
+  var rs = null;
+  try {
+    rs = geodeRealityStatus();
+  } catch (_eRsPg) {
+    rs = { hasData: false, confidence: 'estimated', daysOld: 0, activitySinceCheck: false, status: 'aligned' };
+  }
+  var statusLabel = '';
+  var statusDetail = '';
+  if (!rs.hasData) {
+    statusLabel = 'Unknown';
+    statusDetail =
+      'No balance check yet this month. Add what you believe is available when you\u2019re ready.';
+  } else if (rs.confidence === 'low' || rs.status !== 'aligned') {
+    statusLabel = 'Worth reviewing';
+    statusDetail =
+      'Today\u2019s check looks different from your monthly estimate. Beynd won\u2019t change anything unless you choose to.';
+  } else if (rs.activitySinceCheck || (typeof rs.daysOld === 'number' && rs.daysOld > 3) || rs.confidence === 'moderate') {
+    statusLabel = 'Needs caution';
+    statusDetail =
+      'Your latest check may be aging, or things may have moved since then. Update when you\u2019re ready.';
+  } else {
+    statusLabel = 'On track';
+    statusDetail =
+      'Latest check lines up with your estimated monthly room (from what you entered).';
+  }
+
+  var curAmt = '';
+  if (S.realityCheck && S.realityCheck.ym === currentYM() && S.realityCheck.amount != null && !isNaN(Number(S.realityCheck.amount))) {
+    curAmt = String(S.realityCheck.amount);
+  }
+
+  var figuresRight = '';
+  if (!rs.hasData) {
+    figuresRight =
+      '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.25;letter-spacing:0.01em">' +
+      escHtmlLite('Latest check') +
+      '</div>' +
+      '<div style="font-size:15px;font-weight:700;color:rgba(189,183,220,0.4);margin-bottom:4px;line-height:1.2">\u2014</div>' +
+      '<div style="font-size:10px;color:var(--tx-3);line-height:1.45;opacity:0.82">Add below when you\u2019re ready.</div>';
+  } else {
+    var daysOld = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
+    var latestShort =
+      daysOld === 0 ? 'Updated today' : daysOld === 1 ? 'Updated yesterday' : 'Updated ' + daysOld + ' days ago';
+    figuresRight =
+      '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.25;letter-spacing:0.01em">' +
+      escHtmlLite('Latest check') +
+      '</div>' +
+      '<div style="font-size:18px;font-weight:800;color:#9b7fe8;line-height:1.2;margin-bottom:6px">' +
+      escHtmlLite(fm(Number(S.realityCheck.amount))) +
+      '</div>' +
+      '<div style="font-size:10px;color:var(--tx-3);line-height:1.45;opacity:0.82">' +
+      escHtmlLite(latestShort) +
+      '</div>';
+  }
+
+  var h = '';
+  h += '<div style="padding:22px 18px 30px">';
+  h +=
+    '<div style="display:flex;justify-content:flex-end;margin-bottom:16px">' +
+    '<button type="button" style="margin:0;padding:4px 0 4px 12px;background:none;border:none;font:inherit;cursor:pointer;font-size:12px;font-weight:500;color:rgba(189,183,220,0.72);letter-spacing:0.02em;-webkit-tap-highlight-color:transparent;line-height:1.3" onclick="geodeExitRealitySurface()">' +
+    escHtmlLite('Done') +
+    '</button>' +
+    '</div>';
+  h +=
+    '<div style="margin-bottom:26px">' +
+    '<div style="font-size:24px;font-weight:800;color:var(--tx-1);letter-spacing:-0.4px;line-height:1.2;max-width:100%">' +
+    escHtmlLite('Reality check') +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--tx-3);margin-top:10px;line-height:1.55;max-width:30em">' +
+    escHtmlLite('A quick sense-check before you act.') +
+    '</div>' +
+    '</div>';
+
+  h +=
+    '<div style="padding:16px 16px;border-radius:14px;background:rgba(155,127,232,0.06);border:1px solid rgba(155,127,232,0.18);margin-bottom:16px">';
+  h +=
+    '<div style="font-size:16px;font-weight:700;color:var(--tx-1);margin-bottom:8px;letter-spacing:-0.25px;line-height:1.25">' +
+    escHtmlLite(statusLabel) +
+    '</div>';
+  h +=
+    '<div style="font-size:12px;color:rgba(237,234,255,0.78);line-height:1.5">' +
+    escHtmlLite(statusDetail) +
+    '</div>';
+  h += '</div>';
+
+  h +=
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px">';
+  h +=
+    '<div style="padding:14px 14px;border-radius:13px;background:rgba(255,255,255,0.03);border:1px solid var(--bd);min-width:0">';
+  h +=
+    '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.25;letter-spacing:0.01em">' +
+    escHtmlLite('Estimated room') +
+    '</div>';
+  h +=
+    '<div style="font-size:18px;font-weight:800;color:' +
+    (left >= 0 ? '#f5c234' : '#f07070') +
+    ';line-height:1.2">' +
+    escHtmlLite(fm(left)) +
+    '</div>';
+  h +=
+    '<div style="font-size:10px;color:var(--tx-3);margin-top:8px;line-height:1.45;opacity:0.82">' +
+    escHtmlLite('From your entries.') +
+    '</div>';
+  h += '</div>';
+  h +=
+    '<div style="padding:14px 14px;border-radius:13px;background:rgba(255,255,255,0.03);border:1px solid var(--bd);min-width:0">' +
+    figuresRight +
+    '</div>';
+  h += '</div>';
+
+  h +=
+    '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.3;letter-spacing:0.01em">Update balance</div>';
+  h +=
+    '<div style="font-size:10px;color:var(--tx-3);line-height:1.5;margin-bottom:12px;opacity:0.78">' +
+    escHtmlLite('Based on what you enter. Not a live bank feed.') +
+    '</div>';
+  h +=
+    '<label style="font-size:11px;font-weight:500;color:var(--tx-3);display:block;margin-bottom:6px">' +
+    escHtmlLite('Available balance') +
+    '</label>';
+  h +=
+    '<input type="number" id="rc_page_amount" class="fi" value="' +
+    escHtmlLite(curAmt) +
+    '" placeholder="e.g. 1200" style="font-size:18px;font-weight:700;margin-bottom:12px;width:100%;box-sizing:border-box"/>';
+  h +=
+    '<button type="button" class="btn btn-p" style="width:100%" onclick="geodeSaveRealityCheckFromPage()">' +
+    escHtmlLite('Save balance check') +
+    '</button>';
+
+  h +=
+    '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin:22px 0 10px;line-height:1.3;letter-spacing:0.01em">Today</div>';
+  h +=
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">';
+  h +=
+    '<button type="button" class="btn btn-s" style="padding:10px 8px;font-size:11px;font-weight:600;text-align:center;line-height:1.3;min-height:48px;display:flex;align-items:center;justify-content:center" onclick="geodeRealitySelfReportToast(\'on_track\')">' +
+    escHtmlLite('Still on track') +
+    '</button>';
+  h +=
+    '<button type="button" class="btn btn-s" style="padding:10px 8px;font-size:11px;font-weight:600;text-align:center;line-height:1.3;min-height:48px;display:flex;align-items:center;justify-content:center" onclick="geodeRealitySelfReportToast(\'moved\')">' +
+    escHtmlLite('Things moved') +
+    '</button>';
+  h +=
+    '<button type="button" class="btn btn-s" style="padding:10px 8px;font-size:11px;font-weight:600;text-align:center;line-height:1.3;min-height:48px;display:flex;align-items:center;justify-content:center" onclick="geodeRealitySelfReportToast(\'slow\')">' +
+    escHtmlLite('Slow down') +
+    '</button>';
+  h +=
+    '<button type="button" class="btn btn-s" style="padding:10px 8px;font-size:11px;font-weight:600;text-align:center;line-height:1.3;min-height:48px;display:flex;align-items:center;justify-content:center" onclick="geodeRealitySelfReportToast(\'unsure\')">' +
+    escHtmlLite('Not sure') +
+    '</button>';
+  h += '</div>';
+
+  h += '</div>';
+  return h;
+}
+
 function geodeRealityCheckCardHtml() {
   var rs = geodeRealityStatus();
   var cardTitle = '';
@@ -15029,7 +15240,7 @@ function geodeSaveRealityCheck() {
   S.realityCheck = { amount: Number(val), ym: currentYM(), date: Date.now() };
   persistGeodeToLocalStorage();
   closeModal();
-  if (typeof tab !== 'undefined' && tab === 'home') render();
+  render();
 }
 /** One-tap balance confirmation: re-saves the existing amount with a fresh date.
  *  Falls back to the full modal when no current-month balance exists.
@@ -15042,7 +15253,7 @@ function geodeQuickConfirmRealityCheck() {
   }
   S.realityCheck = { amount: Number(rc.amount), ym: currentYM(), date: Date.now() };
   persistGeodeToLocalStorage();
-  if (typeof tab !== 'undefined' && tab === 'home') render();
+  render();
   toast('Saved.');
 }
 
@@ -15920,6 +16131,12 @@ function rPlan() {
     h += geodePlanPageStatusSectionHtml(calcMonthlyLeftover(S) < 0);
     h += geodePlanPageStyleSectionHtml();
 
+    h +=
+      '<div tabindex="0" role="button" onclick="geodeNavigateToReality()" onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeNavigateToReality();}}catch(__rp){}" style="margin:0 0 14px;padding:10px 12px;border-radius:11px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);cursor:pointer;outline:none">' +
+      '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:4px;opacity:0.85">Sense-check against reality</div>' +
+      '<div style="font-size:11px;color:rgba(189,183,220,0.72);line-height:1.4">Compare today\u2019s position with this month\u2019s plan \u2192</div>' +
+      '</div>';
+
     var _planLeftover = calcMonthlyLeftover(S);
     if (_planLeftover >= 0) {
       h += geodePlanPageOverviewHtml(plan);
@@ -16592,6 +16809,10 @@ function rInvestInMoney(el) {
 }
 function rMoney() {
   var c = document.getElementById('content');
+  if (msub === 'reality') {
+    c.innerHTML = geodeRealityPageHtml();
+    return;
+  }
   var tDebt=S.debts.reduce(function(s,d){return s+Number(d.balance);},0);
   var tUp=sumPaymentsMonthlyOutflow(S.payments);
   var tEx=sumExpensesMonthly(S.expenses);
@@ -16675,6 +16896,11 @@ function rMoney() {
     '</span>' +
     '</div>' +
     '</div>';
+  h +=
+    '<div tabindex="0" role="button" onclick="geodeNavigateToReality()" onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeNavigateToReality();}}catch(__rk){}" style="margin:0 0 14px;padding:12px 14px;border-radius:13px;border:1px solid rgba(155,127,232,0.22);background:rgba(155,127,232,0.06);cursor:pointer">' +
+    '<div style="font-size:10px;font-weight:700;color:rgba(155,127,232,0.95);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px">Reality check</div>' +
+    '<div style="font-size:12px;color:rgba(237,234,255,0.88);line-height:1.45">Sense-check your plan against today \u2014 one balance, not a bank feed.</div>' +
+    '</div>';
   // Quick Setup lives in initial onboarding only (not shown on Cash Flow).
   h +=
     '<div style="font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:1.1px;text-transform:uppercase;margin:2px 0 6px;opacity:0.72">This month at a glance</div>';
@@ -16712,6 +16938,7 @@ function rMsub() {
   else if (msub==='expenses') rExpenses(el);
   else if (msub==='invest')   rInvestInMoney(el);
   else if (msub==='review')   rReview(el);
+  else if (msub==='reality')  el.innerHTML = geodeRealityPageHtml();
   else rMoneyOverview(el);
 }
 
