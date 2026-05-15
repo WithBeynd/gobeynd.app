@@ -8729,6 +8729,13 @@ function geodeInsightTopicMatchesMainKind(topic, kind) {
   return false;
 }
 
+/** Display-only: spare-cash / allocation insights overlap Main Action when the plan step is investing. */
+function geodeInsightIsInvestMainUnusedCashOverlap(primary, mainInsightKind) {
+  if (!primary || mainInsightKind !== 'invest') return false;
+  var tp = String(primary.topic || '');
+  return tp === 'opportunity' || tp === 'income_allocation_gap';
+}
+
 /** Display-only: insight topics that read as unfinished monthly plan work (not maintenance/risk). */
 function geodeInsightIsMonthlyPlanWorkTopic(topic) {
   topic = String(topic || '');
@@ -8903,6 +8910,104 @@ function geodeInsightPolishBody(topic, msg, vIx) {
 }
 
 /**
+ * Display-only peek: would Home render a non-empty Insight strip this frame? Does not touch S._pendingLastShownHighlightTopics.
+ * Mirrors renderInsights primary/awareness resolution (keep in sync when those filters change).
+ */
+function geodeHomePeekWouldShowInsightStrip() {
+  var _skipOverdueInsight = false;
+  if (geodeIsEmptyState()) return false;
+  if (geodeGetIncomeContext(S) === 'NONE') return false;
+  if (geodeGetIncomeContext(S) !== 'NONE' && !geodeHasMeaningfulMonthlyExpenses(S)) return false;
+
+  if (geodeHasOverdue(S)) {
+    try {
+      _skipOverdueInsight = geodeOverdueItems().length > 0;
+      if (!_skipOverdueInsight) return true;
+    } catch (_eOdPk) {
+      return false;
+    }
+  }
+
+  combineHighlightsNudges(S);
+  var latest = geodeGetLatestActivity(S);
+  var latestKind = geodeLatestActionKind(latest);
+  var pressure = geodeHomePressureLevel();
+  var cache = geodeHighlightFullRankedCache || [];
+  var pool = [];
+  for (var pi = 0; pi < cache.length; pi++) {
+    pool.push(cloneHighlightNudge(cache[pi]));
+  }
+  pool = geodeFilterHighlightPool(pool, latestKind, pressure);
+  pool = geodeFilterNoIncomeHighlightPool(pool);
+  if (_skipOverdueInsight) {
+    pool = pool.filter(function (hn) {
+      return hn && hn.topic !== 'tight_month';
+    });
+  }
+
+  if (isEmptyFinancialProfile(S)) return false;
+
+  var needsScheduledContributionReview = false;
+  try {
+    needsScheduledContributionReview = geodeHasScheduledContributionsNeedingReview(S);
+  } catch (_eNscr) {}
+  var hasPastDueUnconfirmed = false;
+  try {
+    hasPastDueUnconfirmed = geodeHasPastDueUnconfirmedContributions(S);
+  } catch (_ePdu) {}
+
+  var primary = geodeChooseHomePrimary(pool, latest, latestKind, pressure);
+  var mainInsightKind = geodeHomeMainActionInsightKind();
+  if (primary) {
+    primary = geodeInsightPreferAlignedPrimary(pool, primary, mainInsightKind);
+  }
+  var pMsg = '';
+  if (primary) {
+    pMsg = geodeHomeNudgeMessage(primary, latestKind, pressure, { skipWit: true });
+    var sug0 = window._geodeSuggestedActions && window._geodeSuggestedActions[0];
+    var sugTitle = sug0 && sug0.title ? String(sug0.title) : '';
+    var dispT = '';
+    if (sug0 && sug0.type) {
+      dispT = geodeHomeActionCardCopy(sug0).title || '';
+    }
+    if (
+      (sugTitle && geodeWhySkipsGoalRepeat(sugTitle, pMsg) === '') ||
+      (dispT && geodeWhySkipsGoalRepeat(dispT, pMsg) === '')
+    ) {
+      primary = null;
+    }
+    var mainVis = geodeHomeVisibleMainActionTitle();
+    if (primary && mainVis) {
+      if (geodeWhySkipsGoalRepeat(mainVis, pMsg) === '') primary = null;
+      else if (geodeWhySkipsGoalRepeat(mainVis, String(primary.title || '')) === '') primary = null;
+    }
+  }
+  if (primary && !geodeInsightShouldShow(primary, latest)) {
+    primary = null;
+  }
+  if (primary && mainInsightKind !== 'none' && geodeInsightTopicMatchesMainKind(primary.topic, mainInsightKind)) {
+    primary = null;
+  }
+  if (primary && geodeInsightIsInvestMainUnusedCashOverlap(primary, mainInsightKind)) {
+    primary = null;
+  }
+  if (primary && !geodeHasOverdue(S) && geodeHomeMonthlyPlanStepsComplete(S)) {
+    if (geodeInsightIsMonthlyPlanWorkTopic(primary.topic)) {
+      primary = null;
+    }
+  }
+  if (_skipOverdueInsight && primary && primary.topic === 'tight_month') {
+    primary = null;
+  }
+
+  if (primary) return true;
+  if ((!geodeHasOverdue(S) || _skipOverdueInsight) && (hasPastDueUnconfirmed || needsScheduledContributionReview)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Home insight strip (called from rHome only). At most one card; highest-priority primary only.
  * nudgeHistory: append when the displayed topic changes vs S.lastShownNudgeTopics.
  * S.lastShownNudgeTopics is committed after DOM paint in rHome().
@@ -9032,7 +9137,11 @@ function renderInsights() {
   //   buffer  → safety
   //   goal    → goals_behind, priority_goal, goal_habit_gap, priority_goal_gap, goal_action_home
   //   invest  → invest_gap, growth_alignment, invest_habit_gap, cash_in_motion, invest_action_home
+  //             (+ spare-cash overlap via geodeInsightIsInvestMainUnusedCashOverlap)
   if (primary && mainInsightKind !== 'none' && geodeInsightTopicMatchesMainKind(primary.topic, mainInsightKind)) {
+    primary = null;
+  }
+  if (primary && geodeInsightIsInvestMainUnusedCashOverlap(primary, mainInsightKind)) {
     primary = null;
   }
   if (primary && !geodeHasOverdue(S) && geodeHomeMonthlyPlanStepsComplete(S)) {
@@ -13454,6 +13563,18 @@ function geodeHomeVisibleMainActionTitle() {
   return title;
 }
 
+/** Display-only: normalize title/sub for duplicate detection (apostrophe variants, punctuation). */
+function geodeNormalizeHomeMainActionText(str) {
+  return String(str || '')
+    .toLowerCase()
+    .replace(/\u2019|\u2018/g, "'")
+    .replace(/\bwhat's\b/g, 'what is')
+    .replace(/\bwhats\b/g, 'what is')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function geodeHomeMainActionDedupSub(title, sub) {
   var t = String(title || '')
     .replace(/\s+/g, ' ')
@@ -13468,6 +13589,10 @@ function geodeHomeMainActionDedupSub(title, sub) {
   if (s === t) return '';
   if (s.indexOf(t) >= 0) return '';
   if (t.indexOf(s) >= 0 && s.length > 8) return '';
+  var tn = geodeNormalizeHomeMainActionText(title);
+  var sn = geodeNormalizeHomeMainActionText(raw);
+  if (tn && sn && tn === sn) return '';
+  if (tn.length >= 14 && sn.length >= 14 && (sn.indexOf(tn) >= 0 || tn.indexOf(sn) >= 0)) return '';
   return raw;
 }
 
@@ -13733,6 +13858,11 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     recovery = window._geodeRecoveryState;
   } catch (e) {}
   var showMsg = geodeShouldShowMessage(S);
+  var _suppressIdentityPatternLine = false;
+  try {
+    if (_geodeHomeSubRenewCardVisible) _suppressIdentityPatternLine = true;
+    else if (geodeHomePeekWouldShowInsightStrip()) _suppressIdentityPatternLine = true;
+  } catch (_eSupPat) {}
   var streakRecoveryHtml = '';
   var identityStreakHtml = '';
   if (showMsg) {
@@ -13765,6 +13895,7 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
         '</div>';
     }
     if (
+      !_suppressIdentityPatternLine &&
       !streakRecoveryHtml &&
       streak >= 2 &&
       !geodeHasOverdue(S) &&
@@ -14099,8 +14230,13 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     _contextLine = _bhvLine;
     _contextIsConflict = true;
   } else if (_showConfLine && !_showPlanSource) {
-    // General confidence metadata must not stack with the plan source line.
-    _contextLine = _confLabel;
+    var _skipRcForMoneyPosture = false;
+    try {
+      _skipRcForMoneyPosture = !!(showAmt && window._geodeMainActionGate && window._geodeMainActionGate.needsAffordGate);
+    } catch (_eSkp) {}
+    if (!_skipRcForMoneyPosture) {
+      _contextLine = _confLabel;
+    }
   }
 
   var h = '<div class="home-primary-action" style="margin:0 0 12px">';
@@ -14125,10 +14261,6 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   h += '<div style="display:flex;flex-direction:column;align-items:stretch;gap:10px">';
   if (showAmt) {
     if (_homeVarTap) {
-      if (_showPlanTargetFraming) {
-        h +=
-          '<div style="font-size:9px;font-weight:700;color:rgba(189,183,220,0.55);letter-spacing:0.6px;text-transform:uppercase">Plan target</div>';
-      }
       h +=
         '<div role="button" tabindex="0" onclick="geodeToggleExplain(\'homeMainVar\')" ' +
         'onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeToggleExplain(\'homeMainVar\');}}catch(__hk){}" ' +
@@ -14164,8 +14296,6 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
       }
     } else {
       if (_showPlanTargetFraming) {
-        h +=
-          '<div style="font-size:9px;font-weight:700;color:rgba(189,183,220,0.55);letter-spacing:0.6px;text-transform:uppercase">Plan target</div>';
         h += '<div style="font-size:18px;font-weight:800;color:#9b7fe8">' + fm(amt) + '</div>';
         h +=
           '<div style="font-size:9px;color:rgba(189,183,220,0.52);line-height:1.35;margin-top:2px">From your monthly plan</div>';
