@@ -8666,15 +8666,9 @@ function geodeHomeMainActionInsightKind() {
   if (geodeGetIncomeContext(S) === 'NONE' || !geodeHasMeaningfulMonthlyExpenses(S)) return 'none';
   var plan = getMonthPlan();
   var steps = plan.steps || [];
-  var p1 = plan.priority1 || steps[0];
-  if (!p1 || toNum(p1.amount) <= 0) return 'none';
-  // If P1 is already done this month, use P2's family (mirrors geodeGetMainAction promotion).
-  var activeStep = p1;
-  var prog1 = geodePlanStepProgress(S, p1);
-  if (prog1.phase === 'done') {
-    var p2k = geodePlanNextStepAfterP1(plan);
-    if (p2k && toNum(p2k.amount) > 0) activeStep = p2k;
-  }
+  var firstInc = geodeFirstIncompletePlanStep(plan, S);
+  if (!firstInc || !firstInc.step) return 'none';
+  var activeStep = firstInc.step;
   var lb = String(activeStep.label || '');
   if (lb.indexOf('Reduce high') === 0) return 'debt';
   if (lb === 'Build your emergency fund') return 'buffer';
@@ -9508,18 +9502,11 @@ function geodeInterpretAnticipation(state, item) {
     var steps = (plan && plan.steps) || [];
     var p1 = (plan && plan.priority1) || steps[0];
 
-    // Same active step as geodeHomeMainActionInsightKind (P1, or P2 when P1 is done this month).
+    // Same active step as geodeHomeMainActionInsightKind (first incomplete in full sequence).
     var activeStepAmount = 0;
-    if (p1 && toNum(p1.amount) > 0) {
-      var activeStep = p1;
-      var prog1 = geodePlanStepProgress(state, p1);
-      if (prog1.phase === 'done') {
-        var p2k = geodePlanNextStepAfterP1(plan);
-        if (p2k && toNum(p2k.amount) > 0) {
-          activeStep = p2k;
-        }
-      }
-      activeStepAmount = activeStep && activeStep.amount != null ? Number(activeStep.amount) : 0;
+    var firstIncSlack = geodeFirstIncompletePlanStep(plan, state);
+    if (firstIncSlack && firstIncSlack.step && firstIncSlack.step.amount != null) {
+      activeStepAmount = Number(firstIncSlack.step.amount);
     }
 
     var slackAfterP1 = left - activeStepAmount;
@@ -11159,6 +11146,30 @@ function geodePlanPageStatusSectionHtml(optSkipNegDup) {
   var p1p =
     p1 && toNum(p1.amount) > 0 ? geodePlanStepProgress(S, p1) : null;
   var ratio = totalS > 0 ? totalA / totalS : 1;
+  var meaningfulCount = 0;
+  var doneCount = 0;
+  var firstMeaningfulIx = -1;
+  for (var mi = 0; mi < steps.length; mi++) {
+    if (toNum(steps[mi].amount) <= 0) continue;
+    if (firstMeaningfulIx < 0) firstMeaningfulIx = mi;
+    meaningfulCount++;
+    if (geodePlanStepProgress(S, steps[mi]).phase === 'done') doneCount++;
+  }
+  var onlyFirstStepDone = false;
+  if (meaningfulCount > 0 && doneCount === 1 && firstMeaningfulIx >= 0) {
+    onlyFirstStepDone = geodePlanStepProgress(S, steps[firstMeaningfulIx]).phase === 'done';
+    if (onlyFirstStepDone) {
+      for (var mj = 0; mj < steps.length; mj++) {
+        if (toNum(steps[mj].amount) <= 0) continue;
+        if (mj === firstMeaningfulIx) continue;
+        var pj = geodePlanStepProgress(S, steps[mj]).phase;
+        if (pj === 'done' || pj === 'partial') {
+          onlyFirstStepDone = false;
+          break;
+        }
+      }
+    }
+  }
 
   var headline;
   var col;
@@ -11167,7 +11178,11 @@ function geodePlanPageStatusSectionHtml(optSkipNegDup) {
     headline = 'Little to allocate this month';
     col = '#34d5a0';
     why = 'No large spare-cash amounts to allocate right now \u2014 the order below shows where things go when cash appears.';
-  } else if (p1p && p1p.phase === 'done') {
+  } else if (meaningfulCount > 0 && doneCount === meaningfulCount) {
+    headline = 'Plan complete for this month';
+    col = '#34d5a0';
+    why = 'You\u2019ve logged the suggested amounts for each plan step this month.';
+  } else if (onlyFirstStepDone) {
     headline = 'First step complete';
     col = '#34d5a0';
     why = 'Your first step is done this month \u2014 the rest of the stack stays in order if there\u2019s more to allocate.';
@@ -12765,6 +12780,22 @@ function geodePlanStepProgress(state, step) {
   return out;
 }
 
+/** First plan row with amount > 0 that is not done this month (full sequence; Plan + Home). */
+function geodeFirstIncompletePlanStep(plan, state) {
+  plan = plan || {};
+  state = state || S;
+  var steps = plan.steps || [];
+  for (var i = 0; i < steps.length; i++) {
+    var step = steps[i];
+    if (!step || toNum(step.amount) <= 0) continue;
+    var progress = geodePlanStepProgress(state, step);
+    if (progress.phase !== 'done') {
+      return { step: step, index: i, progress: progress };
+    }
+  }
+  return null;
+}
+
 /** Next plan step after Priority 1 (same getMonthPlan() order; display / Home only). */
 function geodePlanNextStepAfterP1(plan) {
   plan = plan || {};
@@ -13249,11 +13280,17 @@ function geodeGetMainAction(state) {
     }
   }
 
-  // 3+) Single source of truth: getMonthPlan().priority1 (same as Plan Priority 1).
+  // 3+) Full plan sequence: first incomplete step (same engine as Plan tab rows).
   var plan = getMonthPlan();
   var steps = (plan && plan.steps) ? plan.steps : [];
-  var p1 = plan && (plan.priority1 || steps[0]);
-  if (!p1 || !steps.length || toNum(p1.amount) <= 0) {
+  var hasMeaningfulStep = false;
+  for (var _hmi = 0; _hmi < steps.length; _hmi++) {
+    if (steps[_hmi] && toNum(steps[_hmi].amount) > 0) {
+      hasMeaningfulStep = true;
+      break;
+    }
+  }
+  if (!steps.length || !hasMeaningfulStep) {
     return {
       title: 'Review your plan',
       amount: null,
@@ -13264,21 +13301,22 @@ function geodeGetMainAction(state) {
       }
     };
   }
-  var prog = geodePlanStepProgress(state, p1);
-  // If P1 is already done this month, advance to the next incomplete step instead of
-  // staying on "View plan". Falls back to P1 done-state only when no P2 exists.
-  if (prog.phase === 'done') {
-    var p2 = geodePlanNextStepAfterP1(plan);
-    if (p2 && toNum(p2.amount) > 0) {
-      var prog2 = geodePlanStepProgress(state, p2);
-      var _act2 = geodeMainActionFromPriorityStep(state, p2, prog2);
-      if (_act2 && (_act2.cta === 'View plan' || _act2.cta === 'Review plan') && typeof _act2.run === 'function') {
-        _act2.run = geodeOpenPlanMonthlyFromHome;
+  var firstInc = geodeFirstIncompletePlanStep(plan, state);
+  if (!firstInc) {
+    return {
+      title: 'Your monthly plan is complete',
+      amount: null,
+      cta: 'View plan',
+      sub: 'You\u2019ve logged this month\u2019s plan steps. Review or adjust anytime.',
+      _geodeHomeMainActionNoRibbon: true,
+      run: function () {
+        geodeOpenPlanMonthlyFromHome();
       }
-      return _act2;
-    }
+    };
   }
-  var _act1 = geodeMainActionFromPriorityStep(state, p1, prog);
+  var activeStep = firstInc.step;
+  var prog = firstInc.progress;
+  var _act1 = geodeMainActionFromPriorityStep(state, activeStep, prog);
   if (_act1 && (_act1.cta === 'View plan' || _act1.cta === 'Review plan') && typeof _act1.run === 'function') {
     _act1.run = geodeOpenPlanMonthlyFromHome;
   }
@@ -13324,11 +13362,9 @@ function geodeHomeVisibleMainActionTitle() {
   try {
     if (!geodeHasOverdue(S) && !a._geodeHomeMainActionNoRibbon && geodeGetIncomeContext(S) !== 'NONE' && geodeHasMeaningfulMonthlyExpenses(S)) {
       var planM = getMonthPlan();
-      var stepsM = (planM && planM.steps) ? planM.steps : [];
-      var p1m = planM && (planM.priority1 || stepsM[0]);
-      if (p1m && toNum(p1m.amount) > 0) {
-        var prM = geodePlanStepProgress(S, p1m);
-        var ribM = geodeHomePlanStepRibbonTitle(p1m, prM);
+      var firstIncT = geodeFirstIncompletePlanStep(planM, S);
+      if (firstIncT && firstIncT.step && toNum(firstIncT.step.amount) > 0) {
+        var ribM = geodeHomePlanStepRibbonTitle(firstIncT.step, firstIncT.progress);
         if (ribM) title = ribM;
       }
     }
@@ -13529,7 +13565,7 @@ function geodePlanStepFamilyFromLabel(step) {
   return null;
 }
 
-/** Same plan priority step Main Action would use (priority 2 when P1 done); null when not on that path. */
+/** Same plan step Main Action centres on (first incomplete in full sequence); null when plan complete. */
 function geodeActivePriorityStepForHome(state) {
   state = state || S;
   try {
@@ -13556,19 +13592,9 @@ function geodeActivePriorityStepForHome(state) {
     } catch (_eMu) {}
     if (!geodeHasMeaningfulMonthlyExpenses(state) && !_mu) return null;
     var plan = getMonthPlan();
-    var steps = (plan && plan.steps) ? plan.steps : [];
-    var p1 = plan && (plan.priority1 || steps[0]);
-    if (!p1 || !steps.length || toNum(p1.amount) <= 0) return null;
-    var prog = geodePlanStepProgress(state, p1);
-    var step = p1;
-    if (prog.phase === 'done') {
-      var p2h = geodePlanNextStepAfterP1(plan);
-      if (p2h && toNum(p2h.amount) > 0) {
-        step = p2h;
-        prog = geodePlanStepProgress(state, p2h);
-      }
-    }
-    return { step: step, prog: prog };
+    var firstInc = geodeFirstIncompletePlanStep(plan, state);
+    if (!firstInc || !firstInc.step) return null;
+    return { step: firstInc.step, prog: firstInc.progress };
   } catch (_eAps) {
     return null;
   }
@@ -13775,21 +13801,9 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   var title = String(a.title || '').trim();
   if (!geodeHasOverdue(S) && !a._geodeHomeMainActionNoRibbon && geodeGetIncomeContext(S) !== 'NONE' && geodeHasMeaningfulMonthlyExpenses(S)) {
     var planM = getMonthPlan();
-    var stepsM = planM.steps || [];
-    var p1m = planM.priority1 || stepsM[0];
-    if (p1m && toNum(p1m.amount) > 0) {
-      var prM = geodePlanStepProgress(S, p1m);
-      // If P1 is done and P2 is being promoted, use P2 for the ribbon title so it
-      // stays aligned with the CTA/amount that geodeGetMainAction() returned.
-      var activeStepM = p1m;
-      if (prM.phase === 'done') {
-        var p2m = geodePlanNextStepAfterP1(planM);
-        if (p2m && toNum(p2m.amount) > 0) {
-          activeStepM = p2m;
-          prM = geodePlanStepProgress(S, p2m);
-        }
-      }
-      var ribM = geodeHomePlanStepRibbonTitle(activeStepM, prM);
+    var firstIncM = geodeFirstIncompletePlanStep(planM, S);
+    if (firstIncM && firstIncM.step && toNum(firstIncM.step.amount) > 0) {
+      var ribM = geodeHomePlanStepRibbonTitle(firstIncM.step, firstIncM.progress);
       if (ribM) title = ribM;
     }
   }
@@ -14856,15 +14870,9 @@ function geodeHomeResolvedPlanStepForDedup(state) {
       if (!geodeHomeHasMeaningfulUserActionForDedup(state)) return null;
     }
     var planD = getMonthPlan();
-    var stepsD = (planD && planD.steps) ? planD.steps : [];
-    var p1d = planD && (planD.priority1 || stepsD[0]);
-    if (!p1d || !stepsD.length || toNum(p1d.amount) <= 0) return null;
-    var progD = geodePlanStepProgress(state, p1d);
-    if (progD.phase === 'done') {
-      var p2d = geodePlanNextStepAfterP1(planD);
-      if (p2d && toNum(p2d.amount) > 0) return p2d;
-    }
-    return p1d;
+    var firstIncD = geodeFirstIncompletePlanStep(planD, state);
+    if (!firstIncD || !firstIncD.step) return null;
+    return firstIncD.step;
   } catch (_e2) {
     return null;
   }
