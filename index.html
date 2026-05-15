@@ -9280,14 +9280,33 @@ function geodeSubscriptionReminderLocalDiffDays(isoDue) {
   }
 }
 
-/** Spending only: timed renewal nudges — recurring/annual or explicit subs category (not name-pattern alone). */
+/** Spending only: timed renewal nudges — subscriptions (category or name pattern) or recurring annual commitments; excludes living-cost categories. */
 function geodeExpenseIsSubscriptionRenewalEligible(e) {
   if (!e || !e.date) return false;
   var iso = String(e.date).slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  var cat = String(e.cat || '').toLowerCase();
+  var nm = String(e.name || '').toLowerCase();
+  if (
+    cat === 'food' ||
+    cat === 'transport' ||
+    cat === 'housing' ||
+    cat === 'utilities' ||
+    cat === 'groceries' ||
+    cat === 'rent' ||
+    cat === 'debt' ||
+    cat === 'essentials' ||
+    cat === 'loan'
+  ) {
+    return false;
+  }
+  if (/debt\s+minimum|^min\s*payment|minimum\s*payment\b/i.test(nm)) {
+    return false;
+  }
+  if (cat === 'subs') return true;
   var rec = String(e.rec || '').toLowerCase();
-  if (rec === 'yes' || rec === 'annual') return true;
-  if (e.cat === 'subs') return true;
+  if (rec === 'annual') return true;
+  if (rec === 'yes' && GEODE_SUB_PATTERNS.test(e.name || '')) return true;
   return false;
 }
 
@@ -17250,13 +17269,35 @@ function geodeQsDone(){
   if(inc!=null&&inc>=0){S.income=inc;S.incomeExplicitlySet=true;}
   if(qd.incomeType){S.incomeType=qd.incomeType;S.incomeTypeUserSet=true;}
   if(typeof qd.hasDependants==='boolean') S.hasDependants=qd.hasDependants;
-  var expMap={housing:'Housing',food:'Food and groceries',transport:'Transport',bills:'Bills and subscriptions'};
-  Object.keys(expMap).forEach(function(k){
-    var amt=geodeQuickSetupNum((qd.expenses||{})[k]); if(!amt||amt<=0) return;
-    var ex=(S.expenses||[]).filter(function(e){return e.id==='qs_'+k;})[0];
-    if(ex){ex.amount=amt;ex.name=expMap[k];}
-    else S.expenses.push({id:'qs_'+k,name:expMap[k],amount:amt,cat:k==='bills'?'subs':k,rec:'yes',date:geodeTodayLocalISO()});
-  });
+  var expQs = [
+    { key: 'housing', name: 'Housing', cat: 'housing', rec: 'no' },
+    { key: 'food', name: 'Food and groceries', cat: 'food', rec: 'no' },
+    { key: 'transport', name: 'Transport', cat: 'transport', rec: 'no' },
+    { key: 'bills', name: 'Bills and subscriptions', cat: 'subs', rec: 'yes' }
+  ];
+  for (var _eqi = 0; _eqi < expQs.length; _eqi++) {
+    var _er = expQs[_eqi];
+    var _eamt = geodeQuickSetupNum((qd.expenses || {})[_er.key]);
+    if (!_eamt || _eamt <= 0) continue;
+    var _eex = (S.expenses || []).filter(function (_e) {
+      return _e && _e.id === 'qs_' + _er.key;
+    })[0];
+    if (_eex) {
+      _eex.amount = _eamt;
+      _eex.name = _er.name;
+      _eex.cat = _er.cat;
+      _eex.rec = _er.rec;
+    } else {
+      S.expenses.push({
+        id: 'qs_' + _er.key,
+        name: _er.name,
+        amount: _eamt,
+        cat: _er.cat,
+        rec: _er.rec,
+        date: geodeTodayLocalISO()
+      });
+    }
+  }
   var dt=geodeQuickSetupNum((qd.debt||{}).total), dm=geodeQuickSetupNum((qd.debt||{}).min);
   if(dt&&dt>0){
     var ed=(S.debts||[]).filter(function(d){return d.id==='qs_debt';})[0];
