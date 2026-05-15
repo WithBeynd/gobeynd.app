@@ -14982,20 +14982,17 @@ function geodeRealityPageHtml() {
   var statusDetail = '';
   if (!rs.hasData) {
     statusLabel = 'Unknown';
-    statusDetail =
-      'No balance check yet this month. Add what you believe is available when you\u2019re ready.';
+    statusDetail = 'Add today\u2019s available balance to compare it with your monthly estimate.';
   } else if (rs.confidence === 'low' || rs.status !== 'aligned') {
     statusLabel = 'Worth reviewing';
     statusDetail =
-      'Today\u2019s check looks different from your monthly estimate. Beynd won\u2019t change anything unless you choose to.';
+      'Your available balance and monthly estimate look meaningfully different. Beynd won\u2019t change anything unless you choose to.';
   } else if (rs.activitySinceCheck || (typeof rs.daysOld === 'number' && rs.daysOld > 3) || rs.confidence === 'moderate') {
     statusLabel = 'Needs caution';
-    statusDetail =
-      'Your latest check may be aging, or things may have moved since then. Update when you\u2019re ready.';
+    statusDetail = 'Today\u2019s available balance may not support the plan as expected.';
   } else {
-    statusLabel = 'On track';
-    statusDetail =
-      'Latest check lines up with your estimated monthly room (from what you entered).';
+    statusLabel = 'Broadly aligned';
+    statusDetail = 'Your available balance is close to your monthly estimate.';
   }
 
   var curAmt = '';
@@ -15003,29 +15000,63 @@ function geodeRealityPageHtml() {
     curAmt = String(S.realityCheck.amount);
   }
 
-  var figuresRight = '';
-  if (!rs.hasData) {
-    figuresRight =
-      '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.25;letter-spacing:0.01em">' +
-      escHtmlLite('Latest check') +
-      '</div>' +
-      '<div style="font-size:15px;font-weight:700;color:rgba(189,183,220,0.4);margin-bottom:4px;line-height:1.2">\u2014</div>' +
-      '<div style="font-size:10px;color:var(--tx-3);line-height:1.45;opacity:0.82">Add below when you\u2019re ready.</div>';
-  } else {
-    var daysOld = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
-    var latestShort =
-      daysOld === 0 ? 'Updated today' : daysOld === 1 ? 'Updated yesterday' : 'Updated ' + daysOld + ' days ago';
-    figuresRight =
-      '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.25;letter-spacing:0.01em">' +
-      escHtmlLite('Latest check') +
-      '</div>' +
-      '<div style="font-size:18px;font-weight:800;color:#9b7fe8;line-height:1.2;margin-bottom:6px">' +
-      escHtmlLite(fm(Number(S.realityCheck.amount))) +
-      '</div>' +
-      '<div style="font-size:10px;color:var(--tx-3);line-height:1.45;opacity:0.82">' +
-      escHtmlLite(latestShort) +
-      '</div>';
+  var availNum = null;
+  if (rs.hasData && S.realityCheck && S.realityCheck.amount != null && !isNaN(Number(S.realityCheck.amount))) {
+    availNum = Number(S.realityCheck.amount);
   }
+  var diffNum = availNum != null && isFinite(availNum) && isFinite(left) ? availNum - left : null;
+
+  var cmp = '';
+  cmp += '<div style="padding:14px 16px;border-radius:13px;background:rgba(255,255,255,0.03);border:1px solid var(--bd);margin-bottom:18px">';
+  cmp +=
+    '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:6px 0 8px">' +
+    '<span style="font-size:11px;font-weight:600;color:var(--tx-3);letter-spacing:0.01em">' +
+    escHtmlLite('Monthly estimate') +
+    '</span>' +
+    '<span style="font-size:16px;font-weight:800;color:' +
+    (left >= 0 ? '#f5c234' : '#f07070') +
+    ';white-space:nowrap">' +
+    escHtmlLite(fm(left)) +
+    '</span></div>';
+  cmp +=
+    '<div style="height:1px;background:rgba(255,255,255,0.06);margin:2px 0 6px"></div>';
+  cmp +=
+    '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:6px 0 8px">' +
+    '<span style="font-size:11px;font-weight:600;color:var(--tx-3);letter-spacing:0.01em">' +
+    escHtmlLite('Available today') +
+    '</span>';
+  if (rs.hasData && availNum != null && isFinite(availNum)) {
+    cmp +=
+      '<span style="font-size:16px;font-weight:800;color:#9b7fe8;white-space:nowrap">' +
+      escHtmlLite(fm(availNum)) +
+      '</span>';
+  } else {
+    cmp +=
+      '<span style="font-size:13px;font-weight:600;color:rgba(189,183,220,0.45);white-space:nowrap">' +
+      escHtmlLite('Not added yet') +
+      '</span>';
+  }
+  cmp += '</div>';
+  if (rs.hasData && diffNum != null && isFinite(diffNum)) {
+    cmp += '<div style="height:1px;background:rgba(255,255,255,0.06);margin:2px 0 6px"></div>';
+    var diffAbs = Math.abs(diffNum);
+    var diffCol =
+      diffNum === 0 ? 'rgba(237,234,255,0.88)' : diffNum > 0 ? '#34d5a0' : '#f07070';
+    var diffPrefix = diffNum > 0 ? '+' : diffNum < 0 ? '\u2212' : '';
+    var diffMag = diffNum === 0 ? fm(0) : fm(diffAbs);
+    cmp +=
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:6px 0 4px">' +
+      '<span style="font-size:11px;font-weight:600;color:var(--tx-3);letter-spacing:0.01em">' +
+      escHtmlLite('Difference') +
+      '</span>' +
+      '<span style="font-size:15px;font-weight:800;color:' +
+      diffCol +
+      ';white-space:nowrap">' +
+      diffPrefix +
+      escHtmlLite(diffMag) +
+      '</span></div>';
+  }
+  cmp += '</div>';
 
   var h = '';
   h += '<div style="padding:22px 18px 30px">';
@@ -15041,7 +15072,7 @@ function geodeRealityPageHtml() {
     escHtmlLite('Reality check') +
     '</div>' +
     '<div style="font-size:12px;color:var(--tx-3);margin-top:10px;line-height:1.55;max-width:30em">' +
-    escHtmlLite('A quick sense-check before you act.') +
+    escHtmlLite('Compare your monthly estimate with what is available today.') +
     '</div>' +
     '</div>';
 
@@ -15057,40 +15088,19 @@ function geodeRealityPageHtml() {
     '</div>';
   h += '</div>';
 
-  h +=
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px">';
-  h +=
-    '<div style="padding:14px 14px;border-radius:13px;background:rgba(255,255,255,0.03);border:1px solid var(--bd);min-width:0">';
-  h +=
-    '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.25;letter-spacing:0.01em">' +
-    escHtmlLite('Estimated room') +
-    '</div>';
-  h +=
-    '<div style="font-size:18px;font-weight:800;color:' +
-    (left >= 0 ? '#f5c234' : '#f07070') +
-    ';line-height:1.2">' +
-    escHtmlLite(fm(left)) +
-    '</div>';
-  h +=
-    '<div style="font-size:10px;color:var(--tx-3);margin-top:8px;line-height:1.45;opacity:0.82">' +
-    escHtmlLite('From your entries.') +
-    '</div>';
-  h += '</div>';
-  h +=
-    '<div style="padding:14px 14px;border-radius:13px;background:rgba(255,255,255,0.03);border:1px solid var(--bd);min-width:0">' +
-    figuresRight +
-    '</div>';
-  h += '</div>';
+  h += cmp;
 
   h +=
-    '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.3;letter-spacing:0.01em">Update balance</div>';
+    '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.3;letter-spacing:0.01em">' +
+    escHtmlLite('Update check') +
+    '</div>';
   h +=
-    '<div style="font-size:10px;color:var(--tx-3);line-height:1.5;margin-bottom:12px;opacity:0.78">' +
-    escHtmlLite('Based on what you enter. Not a live bank feed.') +
+    '<div style="font-size:10px;color:var(--tx-3);line-height:1.5;margin-bottom:12px;opacity:0.82">' +
+    escHtmlLite('Enter the amount currently available in your bank account.') +
     '</div>';
   h +=
     '<label style="font-size:11px;font-weight:500;color:var(--tx-3);display:block;margin-bottom:6px">' +
-    escHtmlLite('Available balance') +
+    escHtmlLite('Available today') +
     '</label>';
   h +=
     '<input type="number" id="rc_page_amount" class="fi" value="' +
@@ -15753,6 +15763,26 @@ function rHome() {
     '</div>' +
     '</details>';
   h += '</div>';
+  try {
+    if (sessionStorage.getItem('geode_post_qs_reality_prompt') === '1') {
+      h +=
+        '<div style="margin-bottom:14px;padding:14px 16px;border-radius:14px;background:rgba(155,127,232,0.07);border:1px solid rgba(155,127,232,0.2)">' +
+        '<div style="font-size:14px;font-weight:700;color:var(--tx-1);margin-bottom:6px">' +
+        escHtmlLite('Your first plan is ready') +
+        '</div>' +
+        '<div style="font-size:11px;color:rgba(237,234,255,0.82);line-height:1.45;margin-bottom:12px">' +
+        escHtmlLite('Want to sense-check it against today? Reality check is optional and manual.') +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button type="button" class="btn btn-p" style="flex:1;min-width:120px" onclick="geodePostQsRealityCheckNow()">' +
+        escHtmlLite('Check reality') +
+        '</button>' +
+        '<button type="button" class="btn btn-s" style="flex:1;min-width:100px" onclick="geodeDismissPostQsRealityPrompt()">' +
+        escHtmlLite('Not now') +
+        '</button>' +
+        '</div></div>';
+    }
+  } catch (_ePostQsPrompt) {}
   try {
     if (sessionStorage.getItem('geode_qs_just_finished') === '1') {
       sessionStorage.removeItem('geode_qs_just_finished');
@@ -17585,7 +17615,11 @@ function geodeQuickSetupRender() {
     body+='</div></div>';
   } else {
     body+='<div style="font-size:15px;font-weight:700;color:var(--tx-1);margin-bottom:4px">Monthly essentials</div>';
-    body+='<div style="font-size:11px;color:var(--tx-3);margin-bottom:14px;line-height:1.5">Rough figures are fine. Beynd will coach from here.</div>';
+    body+='<div style="font-size:11px;color:var(--tx-3);margin-bottom:8px;line-height:1.5">Rough figures are fine. Beynd will coach from here.</div>';
+    body+=
+      '<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin-bottom:14px;opacity:0.88">' +
+      escHtmlLite('Your first plan is based on what you enter. You can sense-check later in Money \u2014 Reality (optional, manual).') +
+      '</div>';
     var exp=qd.expenses||{};
     [['housing','Housing / rent','Rent or mortgage'],['food','Food and groceries','Weekly shop x 4'],
      ['transport','Transport','Travel, fuel, car'],['bills','Bills and subscriptions','Utilities, phone, streaming']
@@ -17663,10 +17697,33 @@ function geodeQsDone(){
   }
   S.hasOnboarded=true; S.ready=true; S.quickSetupDismissed=false;
   try{save();}catch(e){}
+  try {
+    sessionStorage.setItem('geode_post_qs_reality_prompt', '1');
+  } catch (_eQsPromptSs) {}
   window._geodeQS=null;
   try{closeModal();}catch(e){}
   try{goTab('home');render();}catch(e){}
-  toast('Plan saved. Open Home.', 'ok');
+  toast('Your first plan is saved.', 'ok');
+}
+
+/** Session-only: dismiss post\u2011Quick Setup Reality nudge on Home. */
+function geodeDismissPostQsRealityPrompt() {
+  try {
+    sessionStorage.removeItem('geode_post_qs_reality_prompt');
+  } catch (_eD) {}
+  try {
+    render();
+  } catch (_eR) {}
+}
+
+/** Session-only: open Reality surface from post\u2011Quick Setup prompt, then clear nudge. */
+function geodePostQsRealityCheckNow() {
+  try {
+    sessionStorage.removeItem('geode_post_qs_reality_prompt');
+  } catch (_eC) {}
+  try {
+    geodeNavigateToReality();
+  } catch (_eN) {}
 }
 
 function geodeQuickSetupCancel() {
