@@ -374,6 +374,15 @@ textarea.fi{min-height:70px}
 .mo-close .mo-close-x{font-size:15px;color:var(--tx-1);line-height:1}
 .mo-close .mo-close-lb{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--tx-3)}
 
+/* Ask Beynd chat sheet (override .fi/.btn width:100% in flex rows) */
+.beynd-ask-sheet{display:flex;flex-direction:column;min-width:0;width:100%}
+.beynd-ask-messages{min-height:120px;max-height:min(42vh,340px);overflow-y:auto;overflow-x:hidden;padding:4px 0 8px;display:flex;flex-direction:column;gap:8px;width:100%;min-width:0;box-sizing:border-box;-webkit-overflow-scrolling:touch}
+.beynd-ask-starters{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;width:100%;min-width:0}
+.beynd-ask-compose{display:flex;flex-direction:column;gap:10px;margin-top:12px;width:100%;min-width:0;box-sizing:border-box}
+.beynd-ask-compose .fi{width:100%;min-width:0;box-sizing:border-box;min-height:72px;font-size:13px;line-height:1.45;flex:0 0 auto;margin:0}
+.beynd-ask-compose .btn.btn-p{width:100%;flex:0 0 auto;margin:0;align-self:stretch}
+.beynd-ask-foot{font-size:10px;color:var(--tx-3);line-height:1.4;margin-top:10px}
+
 /* TIP */
 .tip{background:linear-gradient(135deg,rgba(155,127,232,0.1),rgba(232,124,160,0.07));border:1px solid rgba(155,127,232,0.18);border-radius:16px;padding:14px;margin-bottom:10px}
 .tip-ic{display:flex;align-items:center;justify-content:flex-start;margin-bottom:5px}
@@ -818,7 +827,9 @@ var S = {
   appearance: 'dark',
   /** Persisted schema version for backups and future migrations; see GEODE_SCHEMA_VERSION. */
   _schemaVersion: GEODE_SCHEMA_VERSION,
-  beyondApiKey: ''
+  beyondApiKey: '',
+  /** Ask Beynd AI provider: 'openai' | 'anthropic' (inferred from key prefix when unset). */
+  beyondAiProvider: 'openai'
 };
 /** Pre-mutation figures for the last modal save (Dashboard “since last update”); cleared on other saves. */
 var _pendingCompareBaseline = null;
@@ -1037,6 +1048,14 @@ function load() {
   }
   geodeNormalizeIncomeTypeFields();
   geodeNormalizeMonthContext(S);
+  if (S.beyondAiProvider !== 'anthropic' && S.beyondAiProvider !== 'openai') {
+    S.beyondAiProvider = S.beyondApiKey
+      ? (String(S.beyondApiKey).trim().indexOf('sk-ant-') === 0 ? 'anthropic' : 'openai')
+      : 'openai';
+  } else if (S.beyondApiKey && !S.beyondAiProvider) {
+    S.beyondAiProvider =
+      String(S.beyondApiKey).trim().indexOf('sk-ant-') === 0 ? 'anthropic' : 'openai';
+  }
   captureMonthlySnapshot();
   if (S.theme === 'light') {
     S.theme = 'dark';
@@ -16433,11 +16452,65 @@ function geodeBuildCoachingContext() {
 
 var _beynd_chat_history = [];
 
+function geodeInferBeyndAiProviderFromKey(key) {
+  var k = String(key || '').trim();
+  if (k.indexOf('sk-ant-') === 0) return 'anthropic';
+  return 'openai';
+}
+
+function geodeBeyndAiProviderDisplayName(providerId) {
+  return providerId === 'anthropic' ? 'Anthropic' : 'OpenAI';
+}
+
 function geodeGetBeyndAiProvider() {
-  return 'anthropic';
+  var key = String(S.beyondApiKey || '').trim();
+  if (key.indexOf('sk-ant-') === 0) return 'anthropic';
+  if (S.beyondAiProvider === 'anthropic' || S.beyondAiProvider === 'openai') {
+    return S.beyondAiProvider;
+  }
+  return 'openai';
 }
 
 var geodeBeyndAiProviders = {
+  openai: {
+    complete: function(opts) {
+      var apiKey = (opts && opts.apiKey) || '';
+      var system = (opts && opts.system) || '';
+      var messages = (opts && opts.messages) || [];
+      var chatMessages = [{ role: 'system', content: system }];
+      var mi;
+      for (mi = 0; mi < messages.length; mi++) {
+        var m = messages[mi];
+        if (m && (m.role === 'user' || m.role === 'assistant')) {
+          chatMessages.push({ role: m.role, content: m.content });
+        }
+      }
+      return fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + apiKey
+        },
+        body: JSON.stringify({
+          model: 'gpt-5-mini',
+          messages: chatMessages,
+          max_completion_tokens: 600
+        })
+      })
+        .then(function(r) {
+          return r.json();
+        })
+        .then(function(data) {
+          var text =
+            (data.choices &&
+              data.choices[0] &&
+              data.choices[0].message &&
+              data.choices[0].message.content) ||
+            'Sorry, I could not answer that.';
+          return { text: text };
+        });
+    }
+  },
   anthropic: {
     complete: function(opts) {
       var apiKey = (opts && opts.apiKey) || '';
@@ -16491,25 +16564,27 @@ function geodeOpenAskBeynd() {
   if (!S.beyondApiKey) {
     h += '<div style="padding:12px 14px;border-radius:12px;background:rgba(155,127,232,0.07);border:1px solid rgba(155,127,232,0.2);margin-bottom:10px">';
     h += '<div style="font-size:12px;font-weight:600;color:var(--tx-1);margin-bottom:6px">Set up Ask Beynd</div>';
-    h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.5;margin-bottom:10px">Add your API key to enable your coach. It stays on this device only.</div>';
+    h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.5;margin-bottom:10px">Add your OpenAI API key to enable your AI coach. Your key stays on this device.</div>';
     h += '<button type="button" class="btn btn-p" onclick="geodeOpenAskBeyndApiKeySetup()" style="width:100%">Set up key</button>';
     h += '</div>';
     h += '<button type="button" class="btn-sm" style="width:100%;margin-top:4px;opacity:0.88" onclick="closeModal()">Cancel</button>';
     openModal(h);
     return;
   }
-  h += '<div id="beynd-chat-messages" style="min-height:120px;max-height:min(42vh,340px);overflow-y:auto;padding:4px 0 8px;display:flex;flex-direction:column;gap:8px"></div>';
-  h += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px" id="beynd-starters">';
+  h += '<div class="beynd-ask-sheet">';
+  h += '<div id="beynd-chat-messages" class="beynd-ask-messages"></div>';
+  h += '<div id="beynd-starters" class="beynd-ask-starters">';
   var starters = ['How should I prioritise this month?','Am I on track?','What\u2019s costing me the most in interest?','Can I afford to increase my savings?'];
   starters.forEach(function(q) {
     h += '<button type="button" class="btn-sm" style="font-size:10px" onclick="geodeAskBeynd(' + JSON.stringify(q) + ')">' + escHtmlLite(q) + '</button>';
   });
   h += '</div>';
-  h += '<div style="display:flex;gap:8px;align-items:flex-end">';
-  h += '<textarea id="beynd-input" class="fi" rows="2" placeholder="Ask about your finances\u2026" style="flex:1;resize:none;font-size:13px" onkeydown="try{if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();geodeAskBeynd();}}catch(e){}"></textarea>';
-  h += '<button type="button" class="btn btn-p" onclick="geodeAskBeynd()" style="flex-shrink:0;padding:10px 16px">Ask</button>';
+  h += '<div class="beynd-ask-compose">';
+  h += '<textarea id="beynd-input" class="fi" rows="3" placeholder="Ask about your plan, money, or next move" onkeydown="try{if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();geodeAskBeynd();}}catch(e){}"></textarea>';
+  h += '<button type="button" class="btn btn-p" onclick="geodeAskBeynd()">Ask</button>';
   h += '</div>';
-  h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-top:8px">A financial summary is sent to Anthropic to answer your questions. Conversation is not stored.</div>';
+  h += '<div class="beynd-ask-foot">A financial summary is sent to ' + escHtmlLite(geodeBeyndAiProviderDisplayName(geodeGetBeyndAiProvider())) + ' when you ask a question. Conversation is not stored.</div>';
+  h += '</div>';
   openModal(h);
   geodeAskBeynd('Briefly introduce yourself and give me one key observation about my finances right now.');
 }
@@ -20484,11 +20559,15 @@ function delInv(id){
 
 function geodeOpenApiKeyModal() {
   var cur = S.beyondApiKey || '';
-  var h = mh('Beynd AI key');
-  h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.55;margin:-4px 0 12px">An Anthropic API key enables Ask Beynd on your Home screen. Your key is stored only on this device and never sent anywhere except to answer your questions.</div>';
-  h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-bottom:10px">Get a free key at <span style="color:var(--gem-l)">console.anthropic.com</span>. Usage is pay-per-query and very low cost.</div>';
-  h += '<div class="field"><label>API key</label><input id="beynd-key-in" class="fi" type="password" placeholder="sk-ant-..." value="' + escHtmlLite(cur) + '" /></div>';
-  h += '<div style="font-size:10px;color:rgba(112,106,144,0.7);line-height:1.35;margin-bottom:12px">A summary of your finances (not raw transaction names) is sent to Anthropic when you ask a question. Queries are not stored by Beynd.</div>';
+  var prov = cur ? geodeGetBeyndAiProvider() : 'openai';
+  var h = mh('Ask Beynd API key');
+  h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.55;margin:-4px 0 12px">OpenAI is the default provider. Your key stays on this device. When you ask Beynd, a summary is sent to your AI provider to answer your question.</div>';
+  h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-bottom:10px">Get a key at <span style="color:var(--gem-l)">platform.openai.com/api-keys</span>. Usage is billed by your provider.</div>';
+  if (prov === 'anthropic') {
+    h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-bottom:10px">Your saved key uses Anthropic (legacy).</div>';
+  }
+  h += '<div class="field"><label>API key</label><input id="beynd-key-in" class="fi" type="password" placeholder="sk-..." value="' + escHtmlLite(cur) + '" /></div>';
+  h += '<div style="font-size:10px;color:rgba(112,106,144,0.7);line-height:1.35;margin-bottom:12px">A summary of your finances (not raw transaction names) is sent to ' + escHtmlLite(geodeBeyndAiProviderDisplayName(prov)) + ' when you ask a question. Queries are not stored by Beynd.</div>';
   h += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
   h += '<button class="btn btn-p" onclick="geodeSaveApiKey()" style="flex:1">Save</button>';
   if (cur) h += '<button class="btn btn-s" onclick="geodeClearApiKey()" style="flex:0">Remove key</button>';
@@ -20498,11 +20577,13 @@ function geodeOpenApiKeyModal() {
 function geodeSaveApiKey() {
   var k = ((document.getElementById('beynd-key-in')||{}).value||'').trim();
   S.beyondApiKey = k;
+  S.beyondAiProvider = k ? geodeInferBeyndAiProviderFromKey(k) : 'openai';
   save(); closeModal(); rMe();
   toast(k ? 'API key saved. Ask Beynd is ready.' : 'API key cleared.', 'ok');
 }
 function geodeClearApiKey() {
   S.beyondApiKey = '';
+  S.beyondAiProvider = 'openai';
   save(); closeModal(); rMe();
   toast('API key removed.', 'ok');
 }
@@ -20515,7 +20596,7 @@ function geodeBuildUserGuideHtml() {
       body: '<p>Beynd is a financial coach, not a bank tracker. The difference matters.</p>' +
             '<p>Most apps show you what you\'ve already spent. Beynd tells you what to do with your money <em>before</em> you spend it \u2014 every month, in priority order.</p>' +
             '<p>The monthly plan on the Plan tab is the core of the app. It answers one question: given your income, your commitments, and your goals, what should you actually do with what\'s left this month?</p>' +
-            '<p>Your data never leaves your device. No account, no server, no syncing.</p>'
+            '<p>Your plan data stays on your device. No account, no server, no syncing. Ask Beynd sends a summary to your AI provider only when you ask a question.</p>'
     },
     {
       title: 'Setting up (do this first)',
@@ -20573,7 +20654,7 @@ function geodeBuildUserGuideHtml() {
     {
       title: 'Your data and privacy',
       icon: 'shield',
-      body: '<p>Everything is stored on your device only. Nothing is uploaded, shared, or sold. There is no Beynd account.</p>' +
+      body: '<p>Your plan data is stored on your device only. Nothing is uploaded, shared, or sold except when you use Ask Beynd — a summary is sent to your AI provider to answer your question. There is no Beynd account.</p>' +
             '<p>To back up your data, go to Settings and use <strong>Export CSV</strong> or <strong>Download backup</strong> (redacted JSON).</p>' +
             '<p>To protect your data on a shared device, set a PIN in Settings \u2192 Security.</p>' +
             '<p>If you need to start fresh, Settings \u2192 Reset All Data clears everything permanently.</p>' +
@@ -20766,7 +20847,7 @@ function geodeBuildSettingsLandingHtml() {
   var remSub = r.enabled ? 'On' : 'Off';
   var displayName = p.name && String(p.name).trim() ? String(p.name).trim() : '';
   var profileSub = displayName ? 'Name, photo, and message' : 'Name and profile message';
-  var accessSub = (S.beyondApiKey ? 'AI key on' : 'AI key off') + ' \u00b7 Lock \u00b7 Dark mode';
+  var accessSub = (S.beyondApiKey ? 'Ask Beynd on' : 'Ask Beynd off') + ' \u00b7 Lock \u00b7 Dark mode';
   var identityTitle = displayName || 'Your Beynd setup';
   var h = '';
   h +=
@@ -20883,11 +20964,13 @@ function geodeBuildSettingsAccessDrillHtml() {
   h += '<div class="sh">Access &amp; tools</div>';
   h += '<div class="card">';
   h += geodeMeRow(
-    'Beynd AI key',
-    S.beyondApiKey ? 'Active — Ask Beynd can respond' : 'Not set — Ask Beynd is disabled',
+    'Ask Beynd key',
+    S.beyondApiKey
+      ? 'Set — Ask Beynd is enabled · ' + geodeBeyndAiProviderDisplayName(geodeGetBeyndAiProvider())
+      : 'Not set — Ask Beynd is disabled',
     'geodeOpenApiKeyModal()',
     'Manage',
-    geodeMeChip(S.beyondApiKey ? 'Active' : 'Not set', S.beyondApiKey ? 'good' : 'muted')
+    geodeMeChip(S.beyondApiKey ? 'Set' : 'Not set', S.beyondApiKey ? 'good' : 'muted')
   );
   h += geodeMeRow('Lock app', 'PIN screen; data stays on this device', 'lockApp()', 'Lock');
   var _appCurrent = (S.appearance === 'offwhite') ? 'offwhite' : 'dark';
