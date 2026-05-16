@@ -2632,7 +2632,85 @@ function geodeHasPlanContext() {
 }
 
 function goToSettings() {
-  goTab('me');
+  geodeNavigateToSettingsSubpage('');
+}
+
+function geodeSyncTabBar(activeTab) {
+  var btns = document.querySelectorAll('.tab');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].className = 'tab' + (btns[i].dataset.t === activeTab ? ' on' : '');
+  }
+}
+
+/** Open Settings tab with a drill-down section (does not use goTab, which clears section). */
+function geodeNavigateToSettingsSubpage(section) {
+  var valid = { profile: 1, plan: 1, data: 1, access: 1, reminders: 1, guide: 1, danger: 1 };
+  var sec = section && valid[String(section)] ? String(section) : '';
+  try {
+    if (typeof closeModal === 'function') closeModal();
+  } catch (_eNavClose) {}
+  if (typeof _geodeBootstrap !== 'undefined' && !_geodeBootstrap) {
+    try {
+      markActive();
+    } catch (_eNavMa) {}
+  }
+  tab = 'me';
+  window._geodeSettingsSection = sec;
+  geodeSyncTabBar('me');
+  render();
+}
+
+/** Route tap-throughs to the exact Settings subpage or modal the user needs. */
+function geodeOpenSettingsAction(action) {
+  var a = String(action || '').toLowerCase();
+  if (a === 'api_key') {
+    geodeOpenApiKeyModal();
+    return;
+  }
+  try {
+    if (typeof closeModal === 'function') closeModal();
+  } catch (_eOsaClose) {}
+  if (a === 'income') {
+    openIncModal();
+    return;
+  }
+  if (a === 'currency') {
+    openCurModal();
+    return;
+  }
+  if (a === 'plan_strategy') {
+    openPlanStrategyModal();
+    return;
+  }
+  if (a === 'income_type') {
+    openIncomeTypeModal();
+    return;
+  }
+  if (a === 'dependants') {
+    openDependantsModal();
+    return;
+  }
+  if (a === 'region') {
+    openRegionModal();
+    return;
+  }
+  if (a === 'reminders') {
+    geodeNavigateToSettingsSubpage('reminders');
+    return;
+  }
+  if (a === 'backup') {
+    geodeNavigateToSettingsSubpage('data');
+    return;
+  }
+  if (a === 'access') {
+    geodeNavigateToSettingsSubpage('access');
+    return;
+  }
+  if (a === 'plan') {
+    geodeNavigateToSettingsSubpage('plan');
+    return;
+  }
+  geodeNavigateToSettingsSubpage('plan');
 }
 
 // setExplainMode removed (explanations are always shown contextually)
@@ -10819,7 +10897,7 @@ function renderMonthPlan() {
     h += '<div style="font-size:10px;color:var(--tx-3);margin-bottom:10px;line-height:1.35">' + plan.strategyLine + '</div>';
     h += geodeExplain(
       'Your plan style controls how your money is split between debt, saving, and investing. ' +
-        '<span class="link-like" onclick="goToSettings()">Change this in Settings</span>'
+        '<span class="link-like" onclick="geodeOpenSettingsAction(\'plan_strategy\')">Change plan style</span>'
     );
   }
   if (plan.focusLine) {
@@ -11664,7 +11742,7 @@ function geodePlanPageStyleSectionHtml() {
     '<div style="margin:0 0 12px;font-size:11px;color:var(--tx-2);line-height:1.45">' +
     escHtmlLite(fullName + ' plan style') +
     ' · ' +
-    '<span class="link-like" onclick="goTab(\'me\')">Change in Settings</span></div>'
+    '<span class="link-like" onclick="geodeOpenSettingsAction(\'plan_strategy\')">Change plan style</span></div>'
   );
 }
 
@@ -16355,6 +16433,11 @@ function geodeBuildCoachingContext() {
 
 var _beynd_chat_history = [];
 
+/** Ask Beynd setup: swap to API key modal without closeModal (avoids delayed removeModalDom killing the new sheet). */
+function geodeOpenAskBeyndApiKeySetup() {
+  geodeOpenApiKeyModal();
+}
+
 function geodeOpenAskBeynd() {
   _beynd_chat_history = [];
   var h = mh('Ask Beynd');
@@ -16362,8 +16445,8 @@ function geodeOpenAskBeynd() {
   if (!S.beyondApiKey) {
     h += '<div style="padding:12px 14px;border-radius:12px;background:rgba(155,127,232,0.07);border:1px solid rgba(155,127,232,0.2);margin-bottom:10px">';
     h += '<div style="font-size:12px;font-weight:600;color:var(--tx-1);margin-bottom:6px">Set up Ask Beynd</div>';
-    h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.5;margin-bottom:10px">Add an Anthropic API key in Settings to enable your AI coach. Your key is stored only on this device.</div>';
-    h += '<button type="button" class="btn btn-p" onclick="closeModal();goTab(\'me\')" style="width:100%">Go to Settings</button>';
+    h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.5;margin-bottom:10px">Add your API key to enable your coach. It stays on this device only.</div>';
+    h += '<button type="button" class="btn btn-p" onclick="geodeOpenAskBeyndApiKeySetup()" style="width:100%">Set up key</button>';
     h += '</div>';
     h += '<button type="button" class="btn-sm" style="width:100%;margin-top:4px;opacity:0.88" onclick="closeModal()">Cancel</button>';
     openModal(h);
@@ -16600,7 +16683,7 @@ function rHome() {
     hEmpty +=
       '<button type="button" class="btn btn-p" onclick="openIncModal()" style="margin-top:18px;width:100%;max-width:360px;padding:14px 18px;font-size:16px;font-weight:800;border-radius:12px">Set income</button>';
     hEmpty +=
-      '<button type="button" class="btn btn-s" onclick="goTab(\'me\')" style="margin-top:10px;width:100%;max-width:360px;padding:12px 16px;font-size:13px;font-weight:700;border-radius:12px">Add data in Settings</button>';
+      '<button type="button" class="btn btn-s" onclick="geodeOpenSettingsAction(\'plan\')" style="margin-top:10px;width:100%;max-width:360px;padding:12px 16px;font-size:13px;font-weight:700;border-radius:12px">Set up plan &amp; money</button>';
     hEmpty +=
       '<button type="button" class="btn-sm" onclick="geodeOpenQuickSetupWizard()" style="margin-top:14px;width:100%;max-width:360px;font-size:12px;opacity:0.88">Quick setup (2–3 mins)</button>';
     hEmpty += '</div>';
@@ -16698,7 +16781,7 @@ function rHome() {
         '</svg>' +
         '<div style="font-size:11px;color:rgba(155,127,232,0.9);line-height:1.4;font-weight:500">' +
         'Buffer-first mode — your plan adjusts for variable income.' +
-        ' <span class="link-like" onclick="goTab(\'me\')" style="font-size:11px">Adjust in Settings</span>' +
+        ' <span class="link-like" onclick="geodeOpenSettingsAction(\'income_type\')" style="font-size:11px">Change income type</span>' +
         '</div></div>';
     }
   } catch (_eIrr) {}
@@ -17969,10 +18052,10 @@ function rReview(el) {
 
   h +=
     '<div style="display:flex;justify-content:flex-end;align-items:center;padding:10px 2px 2px">' +
-    '<button type="button" onclick="goTab(\'me\')" ' +
+    '<button type="button" onclick="geodeOpenSettingsAction(\'plan\')" ' +
     'style="background:none;border:none;padding:0;margin:0;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,sans-serif;' +
     'font-size:10px;font-weight:750;color:var(--gem-l);text-decoration:underline;text-underline-offset:2px;white-space:nowrap">' +
-    'Add data' +
+    'Set up plan &amp; money' +
     '</button>' +
     '</div>';
 
