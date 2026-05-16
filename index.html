@@ -9055,8 +9055,7 @@ function geodeHomePeekWouldShowInsightStrip() {
 }
 
 /**
- * Read-only snapshot for future Human Moment suppression. Does not mutate state or write storage.
- * Safe to call from selection logic later; nothing on screen uses this yet.
+ * Read-only snapshot for Home Human Moment suppression. Does not mutate state or write storage.
  */
 function geodeHumanMomentSuppressionContext(state) {
   state = state || S;
@@ -9075,11 +9074,13 @@ function geodeHumanMomentSuppressionContext(state) {
     hasPostSetupRealityPrompt = false;
   }
   var hasRealityData = false;
+  var rs = null;
   try {
-    var _rsHm = geodeRealityStatus();
-    hasRealityData = !!(_rsHm && _rsHm.hasData);
+    rs = geodeRealityStatus();
+    hasRealityData = !!(rs && rs.hasData);
   } catch (_eHmSup3) {
     hasRealityData = false;
+    rs = null;
   }
   var hasDependants = false;
   try {
@@ -9087,43 +9088,210 @@ function geodeHumanMomentSuppressionContext(state) {
   } catch (_eHmSup4) {
     hasDependants = false;
   }
+  var postureObj = null;
+  try {
+    postureObj = geodeGetContextPosture(state);
+  } catch (_eHmSup5) {
+    postureObj = null;
+  }
+  var monthCtx = null;
+  try {
+    monthCtx = geodeGetMonthContext(state);
+  } catch (_eHmSup6) {
+    monthCtx = null;
+  }
+  var feeling = '';
+  try {
+    feeling = geodeGetRealityFeeling() || '';
+  } catch (_eHmSup7) {
+    feeling = '';
+  }
+  var subsDueVisible = false;
+  try {
+    subsDueVisible = geodeSubsDueSoon(7).length > 0;
+  } catch (_eHmSup8) {
+    subsDueVisible = false;
+  }
+  var needsAttentionVisible = false;
+  try {
+    if (hasOverdue) {
+      var items = geodeOverdueItems();
+      if (items.length) {
+        var stepDedup = geodeHomeResolvedPlanStepForDedup(state);
+        var dg = stepDedup ? geodeHomePlanStepDebtGoalIds(stepDedup) : { debtId: '', goalId: '' };
+        if (stepDedup && (dg.debtId || dg.goalId)) {
+          items = items.filter(function (item) {
+            if (item.kind === 'goal' && dg.goalId && String(item.id) === String(dg.goalId)) return false;
+            if (item.kind === 'payment' && dg.debtId && item.debtId && String(item.debtId) === String(dg.debtId)) {
+              return false;
+            }
+            return true;
+          });
+        }
+        needsAttentionVisible = items.length > 0;
+      }
+    }
+  } catch (_eHmSup9) {
+    needsAttentionVisible = false;
+  }
+  var mainActionTitle = '';
+  var mainActionSub = '';
+  try {
+    var a = geodeGetMainAction(state) || {};
+    mainActionTitle = geodeHomeVisibleMainActionTitle();
+    mainActionSub = a.sub ? String(a.sub) : '';
+  } catch (_eHmSup10) {
+    mainActionTitle = '';
+    mainActionSub = '';
+  }
   return {
     hasOverdue: hasOverdue,
     hasPostSetupRealityPrompt: hasPostSetupRealityPrompt,
     hasRealityData: hasRealityData,
-    hasDependants: hasDependants
+    hasDependants: hasDependants,
+    postureObj: postureObj,
+    monthCtx: monthCtx,
+    rs: rs,
+    feeling: feeling,
+    subsDueVisible: subsDueVisible,
+    needsAttentionVisible: needsAttentionVisible,
+    mainActionTitle: mainActionTitle,
+    mainActionSub: mainActionSub
   };
 }
 
+function geodeHumanMomentShouldSuppress(ctx, state) {
+  state = state || S;
+  ctx = ctx || geodeHumanMomentSuppressionContext(state);
+  if (geodeIsEmptyState()) return true;
+  if (geodeGetIncomeContext(state) === 'NONE') return true;
+  if (geodeGetIncomeContext(state) !== 'NONE' && !geodeHasMeaningfulMonthlyExpenses(state)) return true;
+  if (ctx.hasPostSetupRealityPrompt) return true;
+  if (ctx.subsDueVisible) return true;
+  if (ctx.hasOverdue) return true;
+  if (ctx.needsAttentionVisible) return true;
+  var maNorm = geodeNormalizeHomeMainActionText(ctx.mainActionTitle + ' ' + ctx.mainActionSub);
+  if (maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('clear overdue') >= 0) return true;
+  return false;
+}
+
+function geodeHumanMomentDuplicatesMainAction(hm, ctx) {
+  if (!hm) return true;
+  var body = String(hm.body || '');
+  var title = String(hm.title || '');
+  var mainT = String(ctx.mainActionTitle || '');
+  var mainS = String(ctx.mainActionSub || '');
+  if (geodeWhySkipsGoalRepeat(mainT, body) === '') return true;
+  if (geodeWhySkipsGoalRepeat(body, mainT) === '') return true;
+  if (geodeWhySkipsGoalRepeat(mainT, title) === '') return true;
+  var mn = geodeNormalizeHomeMainActionText(mainT + ' ' + mainS);
+  if (mn.indexOf('buffer') >= 0 && hm.topic === 'protect_flexibility') return true;
+  if (mn.indexOf('dependant') >= 0 && body.indexOf('supports others') >= 0) return true;
+  if (mn.indexOf('flexibility') >= 0 && body.indexOf('room before') >= 0) return true;
+  return false;
+}
+
 /**
- * Human Moments: one calm, timely line when the moment calls for it. Stage 12B is scaffold only.
- * Returns null so Home stays unchanged until product wires selection and copy.
- *
- * Future signal reads (existing helpers only, no plan math changes here):
- * - geodeGetContextPosture(state) for combined human context (Reality Human Moment uses this today)
- * - geodeRealityStatus() for gap, status, confidence, daysOld, activitySinceCheck
- * - state.hasDependants and geodeCtx(state) for household tone and buffer posture
- * - geodeHasOverdue(state)
- * - geodeCtx(state).subsDue and the same subscription helpers as the yellow card
- * - sessionStorage geode_post_qs_reality_prompt when the optional post Quick Setup Reality strip is up
- * - geodeHomeMonthlyPlanStepsComplete(state), geodeFirstIncompletePlanStep with getMonthPlan()
- * - Insight families for spare cash or direction (for example invest_gap, balanced_behavior) from existing pools
- * - geodeGetIncomeContext(state) for NONE or IRREGULAR
- *
- * When UI ships, suppress if:
- * - the visible Main Action already carries the same intent
- * - the subscription renewal card is the main issue
- * - overdue or Needs attention already owns the moment
- * - the post Quick Setup Reality prompt is visible
- * - Insight already fills the single slot unless Human Moment replaces that slot
- * - more than one moment would show (never more than one)
- *
- * Example return shape for a later build (not returned yet):
- * { topic: 'reality_gap', priority: 80, title: '...', body: '...', cta: null, source: 'reality' }
+ * Home Human Moment: one calm line in strong caution cases only. Replaces Insight when eligible.
  */
 function geodePickHumanMoment(state) {
   state = state || S;
-  return null;
+  var ctx = geodeHumanMomentSuppressionContext(state);
+  if (geodeHumanMomentShouldSuppress(ctx, state)) return null;
+
+  var postureObj = ctx.postureObj;
+  var posture = postureObj && postureObj.posture;
+  var tone = postureObj && postureObj.tone;
+  var feeling = ctx.feeling;
+  var rs = ctx.rs || {};
+  var gap = rs.hasData && typeof rs.gap === 'number' ? rs.gap : null;
+  var below = rs.hasData && ((gap != null && gap < -50) || rs.status === 'overstated');
+  var mc = ctx.monthCtx || {};
+  var worried = !!(mc.worried);
+  var cautious = tone === 'cautious' || posture === 'protect_flexibility' || posture === 'review_first';
+
+  if (posture === 'steady_progress' || posture === 'growth_room') return null;
+
+  var topic = null;
+  var body = null;
+  var source = 'context_posture';
+
+  if (ctx.hasDependants && posture === 'protect_flexibility') {
+    topic = 'protect_flexibility';
+    body = 'Since this income supports others too, keeping some room may be the safer move.';
+    source = 'dependants';
+  } else if (worried && cautious) {
+    topic = posture === 'review_first' ? 'review_first' : 'protect_flexibility';
+    body = 'This month already has something on your mind. Keep flexibility before adding more.';
+    source = 'month_context';
+  } else if (below && feeling === 'slow') {
+    topic = 'review_first';
+    body = 'Today may need a slower pace. Review what has changed before adding anything new.';
+    source = 'reality_gap';
+  } else if (posture === 'review_first') {
+    topic = 'review_first';
+    body = 'Today may need a slower pace. Review what has changed before adding anything new.';
+  } else if (posture === 'protect_flexibility') {
+    topic = 'protect_flexibility';
+    body = 'Keep some room before adding new commitments.';
+  } else {
+    return null;
+  }
+
+  var hm = {
+    topic: topic,
+    title: 'Worth pausing for a moment',
+    body: body,
+    tone: 'cautious',
+    source: source
+  };
+  if (geodeHumanMomentDuplicatesMainAction(hm, ctx)) return null;
+  return hm;
+}
+
+/** Home coaching strip: Human Moment OR Insight (never both). */
+function geodeHomeHumanMomentStripHtml(hm) {
+  if (!hm || !hm.body) return '';
+  var st = nudgeStyle('warning', hm.topic);
+  var color = st.color || 'rgba(245,194,52,0.9)';
+  var shortMsg = geodeHomeInsightShortLine(hm.body, 160);
+  var h = '<div style="margin-bottom:6px">';
+  h +=
+    '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px">';
+  h += geodeIcon('sparkles', 'ic ic-hdr-sm') + '<span>Human moment</span><span style="flex:1;height:1px;background:rgba(255,255,255,0.05)"></span></div>';
+  h +=
+    '<div style="background:rgba(255,255,255,0.02);border:1px solid ' +
+    color +
+    '44;border-left:3px solid ' +
+    color +
+    ';border-radius:14px;padding:13px 14px;margin-bottom:8px;opacity:1">';
+  h += '<div style="display:flex;align-items:flex-start;gap:10px">';
+  h += '<span class="ic ic-nudge" style="color:' + color + ';flex-shrink:0">' + geodeSvg(st.icon) + '</span>';
+  h += '<div style="min-width:0">';
+  h +=
+    '<div style="font-size:12px;font-weight:700;color:' +
+    color +
+    ';margin-bottom:4px;line-height:1.3">' +
+    escHtmlLite(String(hm.title || 'Worth pausing for a moment').trim()) +
+    '</div>';
+  h +=
+    '<div style="font-size:11px;color:rgba(255,255,255,0.72);line-height:1.45">' + escHtmlLite(shortMsg) + '</div>';
+  h += '</div></div></div></div>';
+  return h;
+}
+
+function geodeHomeCoachingStripHtml() {
+  var hm = null;
+  try {
+    hm = geodePickHumanMoment(S);
+  } catch (_eHmStrip) {
+    hm = null;
+  }
+  if (hm) {
+    S._pendingLastShownHighlightTopics = [];
+    return geodeHomeHumanMomentStripHtml(hm);
+  }
+  return renderInsights();
 }
 
 /**
@@ -16614,7 +16782,7 @@ function rHome() {
   h += geodeHomeGoalCompletionCardHtml();
   h += geodeHomeMainActionHtml(_homeSubRenewCardVisible);
   h += _homeSubRenewCardHtml;
-  h += renderInsights();
+  h += geodeHomeCoachingStripHtml();
   // Reality check balance removed — use bank sync in v2
   h +=
     '<div style="margin-top:14px;margin-bottom:10px">' +
