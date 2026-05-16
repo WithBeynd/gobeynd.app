@@ -15040,6 +15040,78 @@ function geodeSaveRealityCheckFromPage() {
   toast('Saved.');
 }
 
+/**
+ * Reality page only: one human read of estimate vs balance. Read-only; no storage writes.
+ * Status above says what changed; this line says what it may mean in practice.
+ */
+function geodeRealityHumanMoment(state, rs, monthlyEstimate, availableToday, difference) {
+  state = state || S;
+  var title = 'What this means today';
+  if (!rs || !rs.hasData) {
+    return {
+      title: title,
+      body:
+        'Add today\u2019s available balance when you want a clearer check against your monthly estimate.',
+      tone: 'unknown'
+    };
+  }
+  var stLabel = '';
+  if (rs.confidence === 'low' || rs.status !== 'aligned') {
+    stLabel = 'Worth reviewing';
+  } else if (
+    rs.activitySinceCheck ||
+    (typeof rs.daysOld === 'number' && rs.daysOld > 3) ||
+    rs.confidence === 'moderate'
+  ) {
+    stLabel = 'Needs caution';
+  } else {
+    stLabel = 'Broadly aligned';
+  }
+  var diff = difference;
+  var hasDiff = diff != null && isFinite(diff);
+  var meaningfullyBelow =
+    (hasDiff && diff < -50) || rs.status === 'overstated';
+  var meaningfullyAbove = (hasDiff && diff > 50) || rs.status === 'understated';
+  var broadlyAligned =
+    !(rs.confidence === 'low' || rs.status !== 'aligned') &&
+    !(rs.activitySinceCheck || (typeof rs.daysOld === 'number' && rs.daysOld > 3) || rs.confidence === 'moderate');
+  var hasDeps = !!state.hasDependants;
+  if (meaningfullyBelow) {
+    var bodyBelow =
+      'Today looks tighter than your monthly estimate. Keep some flexibility before adding new commitments.';
+    if (
+      hasDeps &&
+      (stLabel === 'Worth reviewing' || stLabel === 'Needs caution')
+    ) {
+      bodyBelow =
+        'Today looks tighter than your monthly estimate. Since this income supports others too, keeping flexibility may be the safer move.';
+    }
+    return { title: title, body: bodyBelow, tone: 'caution' };
+  }
+  if (meaningfullyAbove) {
+    return {
+      title: title,
+      body:
+        'Today looks a little stronger than your monthly estimate. You may have room to choose your next move carefully.',
+      tone: 'steady'
+    };
+  }
+  if (broadlyAligned) {
+    return {
+      title: title,
+      body:
+        'Today looks close to your monthly estimate. Your next step can stay small and steady.',
+      tone: 'steady'
+    };
+  }
+  return {
+    title: title,
+    body:
+      'Today looks close to your monthly estimate. Your next step can stay small and steady.',
+    tone: 'steady'
+  };
+}
+
 /** Lightweight Reality tap-through page (Money · msub reality). */
 function geodeRealityPageHtml() {
   var left = calcMonthlyLeftover(S);
@@ -15160,6 +15232,31 @@ function geodeRealityPageHtml() {
   h += '</div>';
 
   h += cmp;
+
+  var _hmRe = null;
+  try {
+    _hmRe = geodeRealityHumanMoment(S, rs, left, availNum, diffNum);
+  } catch (_eHmR) {
+    _hmRe = null;
+  }
+  if (_hmRe && _hmRe.title && _hmRe.body) {
+    var _hmBd = 'rgba(155,127,232,0.14)';
+    if (_hmRe.tone === 'unknown') _hmBd = 'rgba(189,183,220,0.18)';
+    else if (_hmRe.tone === 'caution') _hmBd = 'rgba(245,194,52,0.2)';
+    h +=
+      '<div style="padding:13px 15px;border-radius:12px;margin-bottom:16px;background:rgba(255,255,255,0.02);border:1px solid ' +
+      _hmBd +
+      '">';
+    h +=
+      '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.02em;margin-bottom:6px;line-height:1.3">' +
+      escHtmlLite(String(_hmRe.title)) +
+      '</div>';
+    h +=
+      '<div style="font-size:12px;color:rgba(237,234,255,0.82);line-height:1.5">' +
+      escHtmlLite(String(_hmRe.body)) +
+      '</div>';
+    h += '</div>';
+  }
 
   h +=
     '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.3;letter-spacing:0.01em">' +
