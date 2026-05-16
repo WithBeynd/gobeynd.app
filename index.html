@@ -6413,6 +6413,45 @@ function geodeFilterNoIncomeHighlightPool(raw) {
   });
 }
 
+/**
+ * Display-only: allow Home Insight topic when Context Posture permits (Stage 15B).
+ * Read-only; does not mutate state or persist.
+ */
+function geodeInsightAllowedByContextPosture(topic, nudge, postureObj) {
+  if (!postureObj) return true;
+  var posture = postureObj.posture;
+  if (posture !== 'protect_flexibility' && posture !== 'review_first' && posture !== 'unknown') {
+    return true;
+  }
+  var tp = String(topic || (nudge && nudge.topic) || '');
+  if (
+    tp === 'invest_gap' ||
+    tp === 'growth_alignment' ||
+    tp === 'invest_habit_gap' ||
+    tp === 'cash_in_motion' ||
+    tp === 'invest_action_home' ||
+    tp === 'opportunity' ||
+    tp === 'income_allocation_gap' ||
+    tp === 'balanced_behavior'
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** Filter highlight pool by Context Posture before primary Insight selection. */
+function geodeFilterHighlightPoolByContextPosture(raw, postureObj) {
+  if (!raw || !raw.length) return raw || [];
+  if (!postureObj) return raw;
+  var posture = postureObj.posture;
+  if (posture !== 'protect_flexibility' && posture !== 'review_first' && posture !== 'unknown') {
+    return raw;
+  }
+  return raw.filter(function (n) {
+    return geodeInsightAllowedByContextPosture(n && n.topic, n, postureObj);
+  });
+}
+
 /** K7.1: sort key — boost safety / buffer topics when dependants or irregular income (display only). */
 function geodeK71NudgeSortWeight(n) {
   var ctx = geodeGetContextFlags();
@@ -8939,6 +8978,11 @@ function geodeHomePeekWouldShowInsightStrip() {
   }
   pool = geodeFilterHighlightPool(pool, latestKind, pressure);
   pool = geodeFilterNoIncomeHighlightPool(pool);
+  var _postureInsightPeek = null;
+  try {
+    _postureInsightPeek = geodeGetContextPosture(S);
+  } catch (_ePiPk) {}
+  pool = geodeFilterHighlightPoolByContextPosture(pool, _postureInsightPeek);
   if (_skipOverdueInsight) {
     pool = pool.filter(function (hn) {
       return hn && hn.topic !== 'tight_month';
@@ -9150,6 +9194,11 @@ function renderInsights() {
   }
   pool = geodeFilterHighlightPool(pool, latestKind, pressure);
   pool = geodeFilterNoIncomeHighlightPool(pool);
+  var _postureInsight = null;
+  try {
+    _postureInsight = geodeGetContextPosture(S);
+  } catch (_ePi) {}
+  pool = geodeFilterHighlightPoolByContextPosture(pool, _postureInsight);
   if (_skipOverdueInsight) {
     pool = pool.filter(function (hn) {
       return hn && hn.topic !== 'tight_month';
