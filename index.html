@@ -19,6 +19,11 @@
   --gem:#9b7fe8;--gem-l:#c4abff;--rose:#e87ca0;
   --ok:#34d5a0;--warn:#f5c234;--danger:#f07070;--info:#60a5fa;
   --radius:16px;
+  --motion-fast:120ms;
+  --motion-standard:180ms;
+  --motion-calm:240ms;
+  --ease-out:cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-standard:cubic-bezier(0.4, 0, 0.2, 1);
 }
 /* Inactive off-white appearance token draft.
    Do not activate in production yet.
@@ -510,8 +515,25 @@ canvas{display:block}
 .plan-panel.plan-panel--accent{margin-bottom:16px;border-color:rgba(155,127,232,0.22);background:linear-gradient(180deg,rgba(155,127,232,0.07),var(--bg-surface))}
 .plan-kicker{font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px}
 
+/* Motion polish (Stage 22B) — calm enter fades; no bounce */
+@keyframes geode-soft-enter-kf{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.geode-soft-enter{animation:geode-soft-enter-kf var(--motion-standard) var(--ease-out) both}
+.geode-bubble-in{animation:geode-soft-enter-kf var(--motion-fast) var(--ease-out) both}
+.geode-expand-wrap{overflow:hidden}
+.geode-expand-inner{will-change:opacity,transform}
+.geode-month-context--open .geode-expand-inner{animation-duration:var(--motion-calm)}
+
 @keyframes fi{from{opacity:0}to{opacity:1}}
 @keyframes su{from{transform:translateY(60px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:0.01ms !important;
+    animation-iteration-count:1 !important;
+    scroll-behavior:auto !important;
+    transition-duration:0.01ms !important;
+  }
+}
 </style>
 </head>
 <body>
@@ -15908,6 +15930,8 @@ function geodeRealityMonthContextCollapsedRowHtml(mc) {
   var summary = geodeRealityMonthContextCompactSummary(mc);
   var action = mc.hasAny ? 'Edit' : 'Add';
   var h = '';
+  h += '<div class="geode-expand-wrap geode-month-context">';
+  h += '<div class="geode-expand-inner geode-soft-enter">';
   h +=
     '<div style="margin-top:22px;padding-top:18px;border-top:1px solid rgba(189,183,220,0.12)">';
   h +=
@@ -15927,11 +15951,14 @@ function geodeRealityMonthContextCollapsedRowHtml(mc) {
     escHtmlLite(action) +
     '</span>';
   h += '</button></div>';
+  h += '</div></div>';
   return h;
 }
 
 function geodeRealityMonthContextExpandedFormHtml(mc) {
   var h = '';
+  h += '<div class="geode-expand-wrap geode-month-context geode-month-context--open">';
+  h += '<div class="geode-expand-inner geode-soft-enter">';
   h +=
     '<div style="margin-top:22px;padding-top:18px;border-top:1px solid rgba(189,183,220,0.12)">';
   h +=
@@ -15971,6 +15998,7 @@ function geodeRealityMonthContextExpandedFormHtml(mc) {
     escHtmlLite('Skip for now') +
     '</button>';
   h += '</div>';
+  h += '</div></div>';
   return h;
 }
 
@@ -16589,6 +16617,11 @@ function geodeOpenAskBeynd() {
   geodeAskBeynd('Briefly introduce yourself and give me one key observation about my finances right now.');
 }
 
+function geodeApplyChatBubbleEnter(el) {
+  if (!el) return;
+  el.classList.add('geode-bubble-in');
+}
+
 function geodeAskBeynd(question) {
   var inp = document.getElementById('beynd-input');
   var q = question || (inp && inp.value.trim()) || '';
@@ -16604,6 +16637,7 @@ function geodeAskBeynd(question) {
     var uBubble = document.createElement('div');
     uBubble.style.cssText = 'align-self:flex-end;background:rgba(155,127,232,0.15);border-radius:12px 12px 3px 12px;padding:9px 12px;font-size:13px;color:var(--tx-1);max-width:82%;line-height:1.45';
     uBubble.textContent = q;
+    geodeApplyChatBubbleEnter(uBubble);
     msgs.appendChild(uBubble);
     msgs.scrollTop = msgs.scrollHeight;
   }
@@ -16612,6 +16646,7 @@ function geodeAskBeynd(question) {
   loadBubble.id = 'beynd-loading';
   loadBubble.style.cssText = 'align-self:flex-start;background:var(--bg-raised);border-radius:12px 12px 12px 3px;padding:9px 12px;font-size:12px;color:var(--tx-3);max-width:82%';
   loadBubble.textContent = 'Thinking\u2026';
+  geodeApplyChatBubbleEnter(loadBubble);
   if (msgs) { msgs.appendChild(loadBubble); msgs.scrollTop = msgs.scrollHeight; }
 
   _beynd_chat_history.push({role:'user', content: q});
@@ -16635,6 +16670,7 @@ function geodeAskBeynd(question) {
       var aBubble = document.createElement('div');
       aBubble.style.cssText = 'align-self:flex-start;background:var(--bg-raised);border-radius:12px 12px 12px 3px;padding:9px 12px;font-size:13px;color:var(--tx-1);max-width:88%;line-height:1.55;white-space:pre-wrap';
       aBubble.textContent = reply;
+      geodeApplyChatBubbleEnter(aBubble);
       aMs.appendChild(aBubble);
       aMs.scrollTop = aMs.scrollHeight;
     }
@@ -16646,6 +16682,7 @@ function geodeAskBeynd(question) {
       var errBubble = document.createElement('div');
       errBubble.style.cssText = 'align-self:flex-start;background:rgba(240,112,112,0.08);border-radius:12px;padding:9px 12px;font-size:12px;color:#f07070;max-width:88%';
       errBubble.textContent = 'Could not reach the AI coach. Check your API key in Settings or try again.';
+      geodeApplyChatBubbleEnter(errBubble);
       aMs2.appendChild(errBubble);
     }
   });
