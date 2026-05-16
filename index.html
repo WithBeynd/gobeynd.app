@@ -9008,6 +9008,77 @@ function geodeHomePeekWouldShowInsightStrip() {
 }
 
 /**
+ * Read-only snapshot for future Human Moment suppression. Does not mutate state or write storage.
+ * Safe to call from selection logic later; nothing on screen uses this yet.
+ */
+function geodeHumanMomentSuppressionContext(state) {
+  state = state || S;
+  var hasOverdue = false;
+  try {
+    hasOverdue = !!geodeHasOverdue(state);
+  } catch (_eHmSup1) {
+    hasOverdue = false;
+  }
+  var hasPostSetupRealityPrompt = false;
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      hasPostSetupRealityPrompt = sessionStorage.getItem('geode_post_qs_reality_prompt') === '1';
+    }
+  } catch (_eHmSup2) {
+    hasPostSetupRealityPrompt = false;
+  }
+  var hasRealityData = false;
+  try {
+    var _rsHm = geodeRealityStatus();
+    hasRealityData = !!(_rsHm && _rsHm.hasData);
+  } catch (_eHmSup3) {
+    hasRealityData = false;
+  }
+  var hasDependants = false;
+  try {
+    hasDependants = !!state.hasDependants;
+  } catch (_eHmSup4) {
+    hasDependants = false;
+  }
+  return {
+    hasOverdue: hasOverdue,
+    hasPostSetupRealityPrompt: hasPostSetupRealityPrompt,
+    hasRealityData: hasRealityData,
+    hasDependants: hasDependants
+  };
+}
+
+/**
+ * Human Moments: one calm, timely line when the moment calls for it. Stage 12B is scaffold only.
+ * Returns null so Home stays unchanged until product wires selection and copy.
+ *
+ * Future signal reads (existing helpers only, no plan math changes here):
+ * - geodeRealityStatus() for gap, status, confidence, daysOld, activitySinceCheck
+ * - state.hasDependants and geodeCtx(state) for household tone and buffer posture
+ * - geodeHasOverdue(state)
+ * - geodeCtx(state).subsDue and the same subscription helpers as the yellow card
+ * - sessionStorage geode_post_qs_reality_prompt when the optional post Quick Setup Reality strip is up
+ * - geodeHomeMonthlyPlanStepsComplete(state), geodeFirstIncompletePlanStep with getMonthPlan()
+ * - Insight families for spare cash or direction (for example invest_gap, balanced_behavior) from existing pools
+ * - geodeGetIncomeContext(state) for NONE or IRREGULAR
+ *
+ * When UI ships, suppress if:
+ * - the visible Main Action already carries the same intent
+ * - the subscription renewal card is the main issue
+ * - overdue or Needs attention already owns the moment
+ * - the post Quick Setup Reality prompt is visible
+ * - Insight already fills the single slot unless Human Moment replaces that slot
+ * - more than one moment would show (never more than one)
+ *
+ * Example return shape for a later build (not returned yet):
+ * { topic: 'reality_gap', priority: 80, title: '...', body: '...', cta: null, source: 'reality' }
+ */
+function geodePickHumanMoment(state) {
+  state = state || S;
+  return null;
+}
+
+/**
  * Home insight strip (called from rHome only). At most one card; highest-priority primary only.
  * nudgeHistory: append when the displayed topic changes vs S.lastShownNudgeTopics.
  * S.lastShownNudgeTopics is committed after DOM paint in rHome().
