@@ -809,6 +809,8 @@ var S = {
   quickSetupDismissed: false,
   /** Reality Check: user-entered actual balance for the current month. { amount, ym, date } */
   realityCheck: null,
+  /** Optional month context (protect / worry / success); month-scoped via ym. */
+  monthContext: null,
   /** Stage 5: goal ids the user has acknowledged as reached. { [goalId]: true } */
   completedGoalAcknowledged: {},
   theme: 'dark',
@@ -1034,6 +1036,7 @@ function load() {
     S.incomeTypeUserSet = S.incomeType === 'irregular';
   }
   geodeNormalizeIncomeTypeFields();
+  geodeNormalizeMonthContext(S);
   captureMonthlySnapshot();
   if (S.theme === 'light') {
     S.theme = 'dark';
@@ -15212,29 +15215,123 @@ function geodeGetContextPosture(state) {
   };
 }
 
+/** Month Context: normalize optional protect / worry / success for current month. */
+function geodeNormalizeMonthContext(state) {
+  state = state || S;
+  var ym = currentYM();
+  if (!state.monthContext || typeof state.monthContext !== 'object' || Array.isArray(state.monthContext)) {
+    state.monthContext = { ym: '', protect: '', worried: '', success: '', updatedAt: 0, dismissedYm: '' };
+  }
+  var mc = state.monthContext;
+  if (mc.ym !== ym) {
+    mc.ym = ym;
+    mc.protect = '';
+    mc.worried = '';
+    mc.success = '';
+    mc.updatedAt = 0;
+    mc.dismissedYm = '';
+  }
+  mc.protect = String(mc.protect || '').trim();
+  mc.worried = String(mc.worried || '').trim();
+  mc.success = String(mc.success || '').trim();
+  mc.dismissedYm = String(mc.dismissedYm || '').trim();
+  if (typeof mc.updatedAt !== 'number' || !isFinite(mc.updatedAt)) mc.updatedAt = 0;
+}
+
+function geodeGetMonthContext(state) {
+  state = state || S;
+  geodeNormalizeMonthContext(state);
+  var mc = state.monthContext;
+  return {
+    ym: mc.ym,
+    protect: mc.protect,
+    worried: mc.worried,
+    success: mc.success,
+    updatedAt: mc.updatedAt,
+    dismissedYm: mc.dismissedYm,
+    hasAny: !!(mc.protect || mc.worried || mc.success),
+    dismissedThisMonth: mc.dismissedYm === mc.ym && !!mc.ym
+  };
+}
+
+function geodeSaveMonthContextFromReality() {
+  geodeNormalizeMonthContext(S);
+  var ym = currentYM();
+  function fieldVal(id) {
+    var el = document.getElementById(id);
+    return el ? String(el.value || '').trim().slice(0, 280) : '';
+  }
+  S.monthContext.protect = fieldVal('mc_protect');
+  S.monthContext.worried = fieldVal('mc_worried');
+  S.monthContext.success = fieldVal('mc_success');
+  S.monthContext.ym = ym;
+  S.monthContext.updatedAt = Date.now();
+  S.monthContext.dismissedYm = '';
+  save();
+  toast('Saved for this month.', 'ok', 2600);
+  if (typeof tab !== 'undefined' && tab === 'money' && msub === 'reality') {
+    var c = document.getElementById('content');
+    if (c) c.innerHTML = geodeRealityPageHtml();
+  } else {
+    render();
+  }
+}
+
+function geodeDismissMonthContextForNow() {
+  geodeNormalizeMonthContext(S);
+  S.monthContext.dismissedYm = currentYM();
+  save();
+  toast('Noted for this month.', 'ok', 2600);
+  if (typeof tab !== 'undefined' && tab === 'money' && msub === 'reality') {
+    var c = document.getElementById('content');
+    if (c) c.innerHTML = geodeRealityPageHtml();
+  } else {
+    render();
+  }
+}
+
+function geodeRealityHumanMomentMonthContextOverlay(body, postureObj, state, rs, difference) {
+  var mc = geodeGetMonthContext(state);
+  if (!mc.hasAny) return body;
+  var p = postureObj && postureObj.posture;
+  var tone = postureObj && postureObj.tone;
+  var diff = difference;
+  var hasDiff = diff != null && isFinite(diff);
+  var tighter = (hasDiff && diff < -50) || (rs && rs.status === 'overstated');
+  if (mc.protect && (p === 'protect_flexibility' || p === 'review_first' || tone === 'cautious')) {
+    return 'Keep some room for what you are protecting this month.';
+  }
+  if (mc.worried && tighter) {
+    return 'Since this month already has a concern, keeping flexibility may help.';
+  }
+  if (mc.success && p === 'steady_progress') {
+    return 'Keep the next move aligned with what would make this month feel successful.';
+  }
+  return body;
+}
+
 /** Reality Human Moment copy from Context Posture (display-only). */
-function geodeRealityHumanMomentBodyFromPosture(postureObj) {
+function geodeRealityHumanMomentBodyFromPosture(postureObj, state, rs, difference) {
   if (!postureObj) {
     return 'Add today\u2019s available balance when you want a clearer check against your monthly estimate.';
   }
   var p = postureObj.posture;
   var dependants = postureObj.inputs && postureObj.inputs.hasDependants;
+  var body;
   if (dependants && (p === 'protect_flexibility' || p === 'review_first')) {
-    return 'Since this income supports others too, keeping flexibility may be the safer move.';
+    body = 'Since this income supports others too, keeping flexibility may be the safer move.';
+  } else if (p === 'protect_flexibility') {
+    body = 'Today may need a little more room. Keep flexibility before adding new commitments.';
+  } else if (p === 'review_first') {
+    body = 'Today may be a moment to pause and review before adding anything new.';
+  } else if (p === 'steady_progress') {
+    body = 'Today looks steady enough to keep the next move small and intentional.';
+  } else if (p === 'growth_room') {
+    body = 'Today looks a little stronger than your monthly estimate. Choose the next move carefully.';
+  } else {
+    body = 'Add today\u2019s available balance when you want a clearer check against your monthly estimate.';
   }
-  if (p === 'protect_flexibility') {
-    return 'Today may need a little more room. Keep flexibility before adding new commitments.';
-  }
-  if (p === 'review_first') {
-    return 'Today may be a moment to pause and review before adding anything new.';
-  }
-  if (p === 'steady_progress') {
-    return 'Today looks steady enough to keep the next move small and intentional.';
-  }
-  if (p === 'growth_room') {
-    return 'Today looks a little stronger than your monthly estimate. Choose the next move carefully.';
-  }
-  return 'Add today\u2019s available balance when you want a clearer check against your monthly estimate.';
+  return geodeRealityHumanMomentMonthContextOverlay(body, postureObj, state, rs, difference);
 }
 
 function geodeRealityHumanMomentToneFromPosture(postureObj) {
@@ -15283,7 +15380,7 @@ function geodeRealityHumanMoment(state, rs, monthlyEstimate, availableToday, dif
   var postureObj = geodeGetContextPosture(state);
   return {
     title: title,
-    body: geodeRealityHumanMomentBodyFromPosture(postureObj),
+    body: geodeRealityHumanMomentBodyFromPosture(postureObj, state, rs, difference),
     tone: geodeRealityHumanMomentToneFromPosture(postureObj)
   };
 }
@@ -15494,6 +15591,58 @@ function geodeRealityPageHtml() {
     '</button>';
   h += '</div>';
 
+  h += geodeRealityMonthContextSectionHtml();
+
+  h += '</div>';
+  return h;
+}
+
+function geodeRealityMonthContextSectionHtml() {
+  var mc = geodeGetMonthContext(S);
+  if (mc.dismissedThisMonth && !mc.hasAny) return '';
+  var h = '';
+  h +=
+    '<div style="margin-top:22px;padding-top:18px;border-top:1px solid rgba(189,183,220,0.12)">';
+  h +=
+    '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:6px;line-height:1.3;letter-spacing:0.01em">' +
+    escHtmlLite('This month') +
+    '</div>';
+  h +=
+    '<div style="font-size:10px;color:var(--tx-3);line-height:1.5;margin-bottom:14px;opacity:0.82">' +
+    escHtmlLite('What are you trying to protect or keep steady?') +
+    '</div>';
+  h +=
+    '<label style="font-size:11px;font-weight:500;color:var(--tx-3);display:block;margin-bottom:6px">' +
+    escHtmlLite('Protect') +
+    '</label>';
+  h +=
+    '<input type="text" id="mc_protect" class="fi" value="' +
+    escHtmlLite(mc.protect) +
+    '" placeholder="e.g. rent, family support, peace of mind" maxlength="280" style="margin-bottom:12px;width:100%;box-sizing:border-box"/>';
+  h +=
+    '<label style="font-size:11px;font-weight:500;color:var(--tx-3);display:block;margin-bottom:6px">' +
+    escHtmlLite('Worried about') +
+    '</label>';
+  h +=
+    '<input type="text" id="mc_worried" class="fi" value="' +
+    escHtmlLite(mc.worried) +
+    '" placeholder="e.g. overspending, bills, low buffer" maxlength="280" style="margin-bottom:12px;width:100%;box-sizing:border-box"/>';
+  h +=
+    '<label style="font-size:11px;font-weight:500;color:var(--tx-3);display:block;margin-bottom:6px">' +
+    escHtmlLite('Success would feel like') +
+    '</label>';
+  h +=
+    '<input type="text" id="mc_success" class="fi" value="' +
+    escHtmlLite(mc.success) +
+    '" placeholder="e.g. staying steady, paying one debt, saving a little" maxlength="280" style="margin-bottom:14px;width:100%;box-sizing:border-box"/>';
+  h +=
+    '<button type="button" class="btn btn-p" style="width:100%;margin-bottom:10px" onclick="geodeSaveMonthContextFromReality()">' +
+    escHtmlLite('Save month context') +
+    '</button>';
+  h +=
+    '<button type="button" class="btn btn-s" style="width:100%" onclick="geodeDismissMonthContextForNow()">' +
+    escHtmlLite('Skip for now') +
+    '</button>';
   h += '</div>';
   return h;
 }
@@ -15875,6 +16024,16 @@ function geodeFormatAskBeyndContextPostureBlock() {
   }
 }
 
+function geodeFormatAskBeyndMonthContextBlock(state) {
+  var mc = geodeGetMonthContext(state);
+  if (!mc.hasAny) return '';
+  var lines = [];
+  if (mc.protect) lines.push('Protecting: ' + mc.protect);
+  if (mc.worried) lines.push('Worried about: ' + mc.worried);
+  if (mc.success) lines.push('Success this month: ' + mc.success);
+  return lines.join('\n');
+}
+
 /** Build a financial summary string for the AI system prompt. No raw transaction names. */
 function geodeBuildCoachingContext() {
   try {
@@ -15922,6 +16081,7 @@ function geodeBuildCoachingContext() {
       : '  None';
 
     var postureBlock = geodeFormatAskBeyndContextPostureBlock();
+    var monthCtxBlock = geodeFormatAskBeyndMonthContextBlock(S);
 
     var ctx = [
       'BEYND USER FINANCIAL CONTEXT (' + code + ')',
@@ -15933,7 +16093,12 @@ function geodeBuildCoachingContext() {
       'Monthly spending total: ' + sym + Math.round(tSpend),
       '',
       'CONTEXT POSTURE (coaching tone only, does not change plan math)',
-      postureBlock,
+      postureBlock
+    ];
+    if (monthCtxBlock) {
+      ctx.push('', 'MONTH CONTEXT', monthCtxBlock);
+    }
+    ctx.push(
       '',
       'DEBTS',
       debtLines,
@@ -15946,8 +16111,8 @@ function geodeBuildCoachingContext() {
       '',
       'THIS MONTH\'S PLAN',
       planSteps || '  Not enough data to build a plan yet'
-    ].join('\n');
-    return ctx;
+    );
+    return ctx.join('\n');
   } catch(e) { return 'Financial context unavailable.'; }
 }
 
@@ -20731,6 +20896,7 @@ function geodeBeyndBackupRestorableKeyWhitelist() {
     'reminderPrefs',
     'quickSetupDismissed',
     'realityCheck',
+    'monthContext',
     'completedGoalAcknowledged',
     'theme',
     '_schemaVersion',
