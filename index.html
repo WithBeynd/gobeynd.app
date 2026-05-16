@@ -9053,6 +9053,7 @@ function geodeHumanMomentSuppressionContext(state) {
  * Returns null so Home stays unchanged until product wires selection and copy.
  *
  * Future signal reads (existing helpers only, no plan math changes here):
+ * - geodeGetContextPosture(state) for combined human context (Reality Human Moment uses this today)
  * - geodeRealityStatus() for gap, status, confidence, daysOld, activitySinceCheck
  * - state.hasDependants and geodeCtx(state) for household tone and buffer posture
  * - geodeHasOverdue(state)
@@ -15044,6 +15045,156 @@ function geodeRealityFeelingMomentBody(feeling) {
   return '';
 }
 
+/**
+ * Read-only combined human context for tone and Reality Human Moment (Stage 13B).
+ * Does not mutate state, persist, or affect plan math.
+ */
+function geodeGetContextPosture(state) {
+  state = state || S;
+  geodeNormalizeIncomeTypeFields();
+
+  var reasonCodes = [];
+  var strategy = state.planStrategy || 'balanced';
+  if (strategy !== 'debt' && strategy !== 'balanced' && strategy !== 'growth') {
+    strategy = 'balanced';
+  }
+  var incomeType = state.incomeType || 'stable';
+  var irregular = incomeType === 'irregular';
+  var dependants = !!state.hasDependants;
+  var feeling = geodeGetRealityFeeling();
+
+  var rs = null;
+  try {
+    rs = geodeRealityStatus();
+  } catch (_eCpRs) {
+    rs = { hasData: false };
+  }
+  if (!rs) rs = { hasData: false };
+
+  var hasData = !!rs.hasData;
+  var gap = hasData && typeof rs.gap === 'number' ? rs.gap : null;
+  var below = hasData && ((gap != null && gap < -50) || rs.status === 'overstated');
+  var above = hasData && ((gap != null && gap > 50) || rs.status === 'understated');
+  var aligned =
+    hasData &&
+    !below &&
+    !above &&
+    rs.confidence !== 'low' &&
+    rs.status === 'aligned' &&
+    !rs.activitySinceCheck &&
+    !(typeof rs.daysOld === 'number' && rs.daysOld > 3) &&
+    rs.confidence !== 'moderate';
+
+  var posture = 'unknown';
+  var tone = 'calm';
+
+  if (!hasData) {
+    reasonCodes.push('no_reality_check');
+    if (feeling === 'moved') {
+      posture = 'protect_flexibility';
+      tone = 'cautious';
+      reasonCodes.push('feeling_moved');
+    } else if (feeling === 'slow' || feeling === 'unsure') {
+      posture = 'review_first';
+      tone = 'cautious';
+      reasonCodes.push('feeling_' + feeling);
+    }
+  } else if (feeling === 'slow' && below) {
+    posture = 'review_first';
+    tone = 'cautious';
+    reasonCodes.push('feeling_slow', 'reality_below');
+  } else if (irregular && dependants) {
+    posture = 'protect_flexibility';
+    tone = 'cautious';
+    reasonCodes.push('irregular_income', 'dependants');
+    if (below) reasonCodes.push('reality_below');
+  } else if (dependants && below) {
+    posture = 'protect_flexibility';
+    tone = 'cautious';
+    reasonCodes.push('dependants', 'reality_below');
+  } else if (feeling === 'moved') {
+    posture = 'protect_flexibility';
+    tone = 'cautious';
+    reasonCodes.push('feeling_moved');
+    if (below) reasonCodes.push('reality_below');
+  } else if (below) {
+    posture = 'protect_flexibility';
+    tone = 'cautious';
+    reasonCodes.push('reality_below');
+    if (irregular) reasonCodes.push('irregular_income');
+  } else if (strategy === 'growth' && above && (feeling === 'still' || !feeling)) {
+    posture = 'growth_room';
+    tone = 'encouraging';
+    reasonCodes.push('growth_strategy', 'reality_above');
+    if (feeling === 'still') reasonCodes.push('feeling_still');
+  } else if (!irregular && !dependants && aligned && (feeling === 'still' || !feeling)) {
+    posture = 'steady_progress';
+    tone = 'calm';
+    reasonCodes.push('stable_income', 'reality_aligned');
+    if (feeling === 'still') reasonCodes.push('feeling_still');
+  } else if (feeling === 'slow' || feeling === 'unsure') {
+    posture = 'review_first';
+    tone = 'cautious';
+    reasonCodes.push('feeling_' + feeling);
+  } else if (above) {
+    posture = 'growth_room';
+    tone = 'encouraging';
+    reasonCodes.push('reality_above');
+  } else if (hasData) {
+    posture = 'steady_progress';
+    tone = 'calm';
+    reasonCodes.push('reality_check_present');
+  }
+
+  return {
+    posture: posture,
+    tone: tone,
+    reasonCodes: reasonCodes,
+    shouldAffectPlanMath: false,
+    shouldAffectHumanMoment: true,
+    shouldAffectHome: false,
+    inputs: {
+      planStrategy: strategy,
+      incomeType: incomeType,
+      hasDependants: dependants,
+      realityFeeling: feeling || null,
+      realityHasData: hasData
+    }
+  };
+}
+
+/** Reality Human Moment copy from Context Posture (display-only). */
+function geodeRealityHumanMomentBodyFromPosture(postureObj) {
+  if (!postureObj) {
+    return 'Add today\u2019s available balance when you want a clearer check against your monthly estimate.';
+  }
+  var p = postureObj.posture;
+  var dependants = postureObj.inputs && postureObj.inputs.hasDependants;
+  if (dependants && (p === 'protect_flexibility' || p === 'review_first')) {
+    return 'Since this income supports others too, keeping flexibility may be the safer move.';
+  }
+  if (p === 'protect_flexibility') {
+    return 'Today may need a little more room. Keep flexibility before adding new commitments.';
+  }
+  if (p === 'review_first') {
+    return 'Today may be a moment to pause and review before adding anything new.';
+  }
+  if (p === 'steady_progress') {
+    return 'Today looks steady enough to keep the next move small and intentional.';
+  }
+  if (p === 'growth_room') {
+    return 'Today looks a little stronger than your monthly estimate. Choose the next move carefully.';
+  }
+  return 'Add today\u2019s available balance when you want a clearer check against your monthly estimate.';
+}
+
+function geodeRealityHumanMomentToneFromPosture(postureObj) {
+  if (!postureObj) return 'unknown';
+  if (postureObj.posture === 'unknown') return 'unknown';
+  if (postureObj.tone === 'cautious') return 'caution';
+  return 'steady';
+}
+
 /** How today feels chips: session feeling + short toast; refreshes Reality interpretation. */
 function geodeRealitySelfReportToast(kind) {
   try {
@@ -15075,81 +15226,16 @@ function geodeSaveRealityCheckFromPage() {
 
 /**
  * Reality page only: one human read of estimate vs balance. Read-only for S; session feeling via sessionStorage.
- * Status above says what changed; this line says what it may mean in practice.
+ * Status above says what changed; this line says what it may mean in practice (guided by geodeGetContextPosture).
  */
 function geodeRealityHumanMoment(state, rs, monthlyEstimate, availableToday, difference) {
   state = state || S;
   var title = 'What this means today';
-  var feeling = geodeGetRealityFeeling();
-  var feelingBody = geodeRealityFeelingMomentBody(feeling);
-  if (feelingBody) {
-    var feelingTone = 'steady';
-    if (feeling === 'moved' || feeling === 'slow') feelingTone = 'caution';
-    else if (feeling === 'unsure') feelingTone = 'unknown';
-    return { title: title, body: feelingBody, tone: feelingTone };
-  }
-  if (!rs || !rs.hasData) {
-    return {
-      title: title,
-      body:
-        'Add today\u2019s available balance when you want a clearer check against your monthly estimate.',
-      tone: 'unknown'
-    };
-  }
-  var stLabel = '';
-  if (rs.confidence === 'low' || rs.status !== 'aligned') {
-    stLabel = 'Worth reviewing';
-  } else if (
-    rs.activitySinceCheck ||
-    (typeof rs.daysOld === 'number' && rs.daysOld > 3) ||
-    rs.confidence === 'moderate'
-  ) {
-    stLabel = 'Needs caution';
-  } else {
-    stLabel = 'Broadly aligned';
-  }
-  var diff = difference;
-  var hasDiff = diff != null && isFinite(diff);
-  var meaningfullyBelow =
-    (hasDiff && diff < -50) || rs.status === 'overstated';
-  var meaningfullyAbove = (hasDiff && diff > 50) || rs.status === 'understated';
-  var broadlyAligned =
-    !(rs.confidence === 'low' || rs.status !== 'aligned') &&
-    !(rs.activitySinceCheck || (typeof rs.daysOld === 'number' && rs.daysOld > 3) || rs.confidence === 'moderate');
-  var hasDeps = !!state.hasDependants;
-  if (meaningfullyBelow) {
-    var bodyBelow =
-      'Today looks tighter than your monthly estimate. Keep some flexibility before adding new commitments.';
-    if (
-      hasDeps &&
-      (stLabel === 'Worth reviewing' || stLabel === 'Needs caution')
-    ) {
-      bodyBelow =
-        'Today looks tighter than your monthly estimate. Since this income supports others too, keeping flexibility may be the safer move.';
-    }
-    return { title: title, body: bodyBelow, tone: 'caution' };
-  }
-  if (meaningfullyAbove) {
-    return {
-      title: title,
-      body:
-        'Today looks a little stronger than your monthly estimate. You may have room to choose your next move carefully.',
-      tone: 'steady'
-    };
-  }
-  if (broadlyAligned) {
-    return {
-      title: title,
-      body:
-        'Today looks close to your monthly estimate. Your next step can stay small and steady.',
-      tone: 'steady'
-    };
-  }
+  var postureObj = geodeGetContextPosture(state);
   return {
     title: title,
-    body:
-      'Today looks close to your monthly estimate. Your next step can stay small and steady.',
-    tone: 'steady'
+    body: geodeRealityHumanMomentBodyFromPosture(postureObj),
+    tone: geodeRealityHumanMomentToneFromPosture(postureObj)
   };
 }
 
