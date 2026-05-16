@@ -16433,6 +16433,52 @@ function geodeBuildCoachingContext() {
 
 var _beynd_chat_history = [];
 
+function geodeGetBeyndAiProvider() {
+  return 'anthropic';
+}
+
+var geodeBeyndAiProviders = {
+  anthropic: {
+    complete: function(opts) {
+      var apiKey = (opts && opts.apiKey) || '';
+      var system = opts && opts.system;
+      var messages = (opts && opts.messages) || [];
+      return fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 600,
+          system: system,
+          messages: messages
+        })
+      })
+        .then(function(r) {
+          return r.json();
+        })
+        .then(function(data) {
+          var text =
+            (data.content && data.content[0] && data.content[0].text) ||
+            'Sorry, I could not answer that.';
+          return { text: text };
+        });
+    }
+  }
+};
+
+function geodeBeyndAiComplete(opts) {
+  var providerId = geodeGetBeyndAiProvider();
+  var adapter = geodeBeyndAiProviders[providerId];
+  if (!adapter || typeof adapter.complete !== 'function') {
+    return Promise.reject(new Error('Unsupported AI provider: ' + providerId));
+  }
+  return adapter.complete(opts || {});
+}
+
 /** Ask Beynd setup: swap to API key modal without closeModal (avoids delayed removeModalDom killing the new sheet). */
 function geodeOpenAskBeyndApiKeySetup() {
   geodeOpenApiKeyModal();
@@ -16500,19 +16546,12 @@ function geodeAskBeynd(question) {
     'Be honest: do not sugarcoat financial problems. Tone: calm, professional, adult. Never invent numbers or advice outside the data provided.\n\n' +
     geodeBuildCoachingContext();
 
-  fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json', 'x-api-key': S.beyondApiKey, 'anthropic-version': '2023-06-01'},
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 600,
-      system: systemPrompt,
-      messages: _beynd_chat_history.slice(-10)
-    })
-  }).then(function(r) {
-    return r.json();
-  }).then(function(data) {
-    var reply = (data.content && data.content[0] && data.content[0].text) || 'Sorry, I could not answer that.';
+  geodeBeyndAiComplete({
+    apiKey: S.beyondApiKey,
+    system: systemPrompt,
+    messages: _beynd_chat_history.slice(-10)
+  }).then(function(result) {
+    var reply = (result && result.text) || 'Sorry, I could not answer that.';
     _beynd_chat_history.push({role:'assistant', content: reply});
     var lb = document.getElementById('beynd-loading');
     if (lb) lb.remove();
