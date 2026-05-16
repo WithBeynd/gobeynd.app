@@ -15728,6 +15728,104 @@ function geodeOverdueCardHtml() {
 
 // ── ASK BEYND — conversational AI coach ──────────────────────────────────────
 
+function geodeContextPostureLabel(posture) {
+  if (posture === 'protect_flexibility') return 'protect flexibility';
+  if (posture === 'review_first') return 'review first';
+  if (posture === 'steady_progress') return 'steady progress';
+  if (posture === 'growth_room') return 'growth room';
+  return 'unknown (neutral)';
+}
+
+function geodeContextPostureReasonPhrase(code) {
+  var phrases = {
+    irregular_income: 'variable income',
+    dependants: 'income supports others',
+    reality_below: 'today looks tighter than the monthly estimate',
+    reality_above: 'today looks stronger than the monthly estimate',
+    feeling_still: 'feels on track today',
+    feeling_moved: 'things moved today',
+    feeling_slow: 'slow down today',
+    feeling_unsure: 'unsure today',
+    no_reality_check: 'reality check not added yet',
+    growth_strategy: 'growth plan strategy',
+    stable_income: 'stable income',
+    reality_aligned: 'reality aligned with estimate',
+    reality_check_present: 'reality check on file'
+  };
+  return phrases[code] || '';
+}
+
+function geodeContextPostureCoachGuidance(postureObj) {
+  var p = postureObj && postureObj.posture;
+  var t = postureObj && postureObj.tone;
+  if (p === 'protect_flexibility' || p === 'review_first' || t === 'cautious') {
+    return 'Use this to keep guidance calm and avoid pushing new commitments too quickly.';
+  }
+  if (p === 'growth_room' || t === 'encouraging') {
+    return 'Use this to acknowledge room while staying measured about new commitments.';
+  }
+  if (p === 'steady_progress') {
+    return 'Use this to keep guidance steady and practical.';
+  }
+  return 'Use this to keep guidance calm and neutral until more context is available.';
+}
+
+/** Compact Context Posture block for Ask Beynd prompt only (read-only). */
+function geodeFormatAskBeyndContextPostureBlock() {
+  try {
+    var po = geodeGetContextPosture(S);
+    var inputs = po.inputs || {};
+    var strategy = inputs.planStrategy || 'balanced';
+    var stratWord =
+      strategy === 'debt' ? 'debt-focused' : strategy === 'growth' ? 'growth-focused' : 'balanced';
+    var incWord =
+      inputs.incomeType === 'irregular'
+        ? 'variable/irregular'
+        : inputs.incomeType === 'none'
+          ? 'none'
+          : 'stable';
+    var supportWord = inputs.hasDependants ? 'yes, income supports others' : 'no';
+    var lines = [];
+    lines.push('Context posture: ' + geodeContextPostureLabel(po.posture));
+    lines.push('Tone: ' + (po.tone || 'calm'));
+    lines.push('Plan strategy: ' + stratWord);
+    lines.push('Income type: ' + incWord);
+    lines.push('Income supports others: ' + supportWord);
+    lines.push(
+      inputs.realityHasData ? 'Reality check: on file this month' : 'Reality check: not added yet'
+    );
+    if (inputs.realityFeeling) {
+      var feelMap = {
+        still: 'still on track',
+        moved: 'things moved',
+        slow: 'slow down',
+        unsure: 'unsure'
+      };
+      lines.push(
+        'How today feels (session): ' + (feelMap[inputs.realityFeeling] || inputs.realityFeeling)
+      );
+    }
+    var whyParts = [];
+    var codes = po.reasonCodes || [];
+    var ci;
+    for (ci = 0; ci < codes.length; ci++) {
+      var phrase = geodeContextPostureReasonPhrase(codes[ci]);
+      if (phrase && whyParts.indexOf(phrase) < 0) whyParts.push(phrase);
+    }
+    if (whyParts.length) {
+      lines.push('Why: ' + whyParts.join(', '));
+    }
+    lines.push(geodeContextPostureCoachGuidance(po));
+    return lines.join('\n');
+  } catch (_eApb) {
+    return (
+      'Context posture: unknown (neutral)\n' +
+      'Tone: calm\n' +
+      'Use this to keep guidance calm and neutral until more context is available.'
+    );
+  }
+}
+
 /** Build a financial summary string for the AI system prompt. No raw transaction names. */
 function geodeBuildCoachingContext() {
   try {
@@ -15774,6 +15872,8 @@ function geodeBuildCoachingContext() {
         }).join('\n')
       : '  None';
 
+    var postureBlock = geodeFormatAskBeyndContextPostureBlock();
+
     var ctx = [
       'BEYND USER FINANCIAL CONTEXT (' + code + ')',
       '',
@@ -15782,6 +15882,9 @@ function geodeBuildCoachingContext() {
       'Left this month on plan (after bills & spending): ' + sym + Math.round(left),
       'Net worth: ' + sym + Math.round(net),
       'Monthly spending total: ' + sym + Math.round(tSpend),
+      '',
+      'CONTEXT POSTURE (coaching tone only, does not change plan math)',
+      postureBlock,
       '',
       'DEBTS',
       debtLines,
