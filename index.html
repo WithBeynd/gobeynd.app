@@ -16582,7 +16582,8 @@ function geodeBeyndAiComplete(opts) {
 
 /** Ask Beynd setup: swap to API key modal without closeModal (avoids delayed removeModalDom killing the new sheet). */
 function geodeOpenAskBeyndApiKeySetup() {
-  geodeOpenApiKeyModal();
+  var html = geodeBuildApiKeyModalPanelHtml();
+  if (!geodeReplaceMoPanelHtml(html)) geodeOpenApiKeyModal();
 }
 
 function geodeOpenAskBeynd() {
@@ -16592,7 +16593,7 @@ function geodeOpenAskBeynd() {
   if (!S.beyondApiKey) {
     h += '<div style="padding:12px 14px;border-radius:12px;background:rgba(155,127,232,0.07);border:1px solid rgba(155,127,232,0.2);margin-bottom:10px">';
     h += '<div style="font-size:12px;font-weight:600;color:var(--tx-1);margin-bottom:6px">Set up Ask Beynd</div>';
-    h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.5;margin-bottom:10px">Add your OpenAI API key to enable your AI coach. Your key stays on this device.</div>';
+    h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.5;margin-bottom:10px">Add your OpenAI API key to enable your AI coach. Your key stays on this device. When you ask, Beynd sends a short summary to your provider.</div>';
     h += '<button type="button" class="btn btn-p" onclick="geodeOpenAskBeyndApiKeySetup()" style="width:100%">Set up key</button>';
     h += '</div>';
     h += '<button type="button" class="btn-sm" style="width:100%;margin-top:4px;opacity:0.88" onclick="closeModal()">Cancel</button>';
@@ -20600,12 +20601,12 @@ function delInv(id){
 
 // ── PROFILE ───────────────────────────────────────
 
-function geodeOpenApiKeyModal() {
+function geodeBuildApiKeyModalPanelHtml() {
   var cur = S.beyondApiKey || '';
   var prov = cur ? geodeGetBeyndAiProvider() : 'openai';
   var h = mh('Ask Beynd API key');
   h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.55;margin:-4px 0 12px">OpenAI is the default provider. Your key stays on this device. When you ask Beynd, a summary is sent to your AI provider to answer your question.</div>';
-  h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-bottom:10px">Get a key at <span style="color:var(--gem-l)">platform.openai.com/api-keys</span>. Usage is billed by your provider.</div>';
+  h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-bottom:10px">Get a key at <a href="https://platform.openai.com/api-keys" style="color:var(--gem-l);text-decoration:underline;text-underline-offset:2px" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a>. Usage is billed by your provider.</div>';
   if (prov === 'anthropic') {
     h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.35;margin-bottom:10px">Your saved key uses Anthropic (legacy).</div>';
   }
@@ -20615,7 +20616,11 @@ function geodeOpenApiKeyModal() {
   h += '<button class="btn btn-p" onclick="geodeSaveApiKey()" style="flex:1">Save</button>';
   if (cur) h += '<button class="btn btn-s" onclick="geodeClearApiKey()" style="flex:0">Remove key</button>';
   h += '</div>';
-  openModal(h);
+  return h;
+}
+
+function geodeOpenApiKeyModal() {
+  openModal(geodeBuildApiKeyModalPanelHtml());
 }
 function geodeSaveApiKey() {
   var k = ((document.getElementById('beynd-key-in')||{}).value||'').trim();
