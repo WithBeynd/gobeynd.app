@@ -9374,7 +9374,7 @@ function geodeHomeHumanMomentStripHtml(hm) {
   var st = nudgeStyle('warning', hm.topic);
   var color = st.color || 'rgba(245,194,52,0.9)';
   var shortMsg = geodeHomeInsightShortLine(hm.body, 160);
-  var h = '<div style="margin-bottom:6px">';
+  var h = '<div class="geode-soft-enter" style="margin-bottom:6px">';
   h +=
     '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px">';
   h += geodeIcon('sparkles', 'ic ic-hdr-sm') + '<span>Human moment</span><span style="flex:1;height:1px;background:rgba(255,255,255,0.05)"></span></div>';
@@ -9442,7 +9442,7 @@ function renderInsights() {
         var stOd = nudgeStyle('warning', 'tight_month');
         S._pendingLastShownHighlightTopics = ['overdue_focus'];
         return (
-          '<div style="margin-bottom:6px">' +
+          '<div class="geode-soft-enter" style="margin-bottom:6px">' +
           '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px">' +
           geodeIcon('sparkles', 'ic ic-hdr-sm') +
           '<span>Insight</span><span style="flex:1;height:1px;background:rgba(255,255,255,0.05)"></span></div>' +
@@ -9613,7 +9613,7 @@ function renderInsights() {
     while (S.nudgeHistory.length > 20) S.nudgeHistory.shift();
     persistGeodeToLocalStorage();
   }
-  var h = '<div style="margin-bottom:6px">';
+  var h = '<div class="geode-soft-enter" style="margin-bottom:6px">';
   h += '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px">';
   h += geodeIcon('sparkles', 'ic ic-hdr-sm') + '<span>Insight</span><span style="flex:1;height:1px;background:rgba(255,255,255,0.05)"></span></div>';
   for (var i = 0; i < nudges.length; i++) {
