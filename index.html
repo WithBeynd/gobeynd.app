@@ -16600,7 +16600,14 @@ function geodeOpenAskBeynd() {
     return;
   }
   h += '<div class="beynd-ask-sheet">';
-  h += '<div id="beynd-chat-messages" class="beynd-ask-messages"></div>';
+  h += '<div id="beynd-chat-messages" class="beynd-ask-messages">';
+  h +=
+    '<div class="geode-bubble-in" style="align-self:flex-start;background:var(--bg-raised);border-radius:12px 12px 12px 3px;padding:9px 12px;font-size:13px;color:var(--tx-1);max-width:88%;line-height:1.55">' +
+    escHtmlLite('I\u2019m ready when you are. Ask about your plan, money, or next move.') +
+    '<div style="margin-top:7px;font-size:12px;color:var(--tx-3)">' +
+    escHtmlLite('Choose a prompt or type your own question.') +
+    '</div></div>';
+  h += '</div>';
   h += '<div id="beynd-starters" class="beynd-ask-starters">';
   var starters = ['How should I prioritise this month?','Am I on track?','What\u2019s costing me the most in interest?','Can I afford to increase my savings?'];
   starters.forEach(function(q) {
@@ -16614,7 +16621,6 @@ function geodeOpenAskBeynd() {
   h += '<div class="beynd-ask-foot">A financial summary is sent to ' + escHtmlLite(geodeBeyndAiProviderDisplayName(geodeGetBeyndAiProvider())) + ' when you ask a question. Conversation is not stored.</div>';
   h += '</div>';
   openModal(h);
-  geodeAskBeynd('Briefly introduce yourself and give me one key observation about my finances right now.');
 }
 
 function geodeApplyChatBubbleEnter(el) {
