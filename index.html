@@ -12190,7 +12190,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
   var styleChip =
     ps === 'debt' ? 'Debt-focused' : ps === 'growth' ? 'Growth' : 'Balanced';
 
-  var h = '<div class="geode-plan-detail-wrap">';
+  var h = '<div class="geode-plan-detail-wrap geode-soft-enter">';
   h +=
     '<button type="button" class="btn btn-s geode-plan-detail-back" onclick="geodeClosePlanStepDetail()">Back to monthly plan</button>';
 
@@ -20832,6 +20832,10 @@ function geodeSettingsBack() {
   rMe();
 }
 
+function geodeSettingsDrillShell(html) {
+  return '<div class="geode-soft-enter">' + (html || '') + '</div>';
+}
+
 function geodeSettingsBackHeader(title, subtitle) {
   return (
     '<div style="padding:4px 0 14px;border-bottom:1px solid var(--bd);margin-bottom:12px">' +
@@ -21078,20 +21082,21 @@ function rMe() {
   if (sec === '') {
     c.innerHTML = geodeBuildSettingsLandingHtml();
   } else if (sec === 'profile') {
-    c.innerHTML = geodeBuildSettingsProfileDrillHtml();
+    c.innerHTML = geodeSettingsDrillShell(geodeBuildSettingsProfileDrillHtml());
   } else if (sec === 'plan') {
-    c.innerHTML =
-      geodeSettingsBackHeader('Plan & money', 'Currency, income, region, and plan style.') + geodeBuildSettingsPlanBodyHtml();
+    c.innerHTML = geodeSettingsDrillShell(
+      geodeSettingsBackHeader('Plan & money', 'Currency, income, region, and plan style.') + geodeBuildSettingsPlanBodyHtml()
+    );
   } else if (sec === 'data') {
-    c.innerHTML = geodeBuildSettingsDataDrillHtml();
+    c.innerHTML = geodeSettingsDrillShell(geodeBuildSettingsDataDrillHtml());
   } else if (sec === 'access') {
-    c.innerHTML = geodeBuildSettingsAccessDrillHtml();
+    c.innerHTML = geodeSettingsDrillShell(geodeBuildSettingsAccessDrillHtml());
   } else if (sec === 'reminders') {
-    c.innerHTML = geodeBuildSettingsRemindersDrillHtml();
+    c.innerHTML = geodeSettingsDrillShell(geodeBuildSettingsRemindersDrillHtml());
   } else if (sec === 'guide') {
-    c.innerHTML = geodeBuildSettingsGuideDrillHtml();
+    c.innerHTML = geodeSettingsDrillShell(geodeBuildSettingsGuideDrillHtml());
   } else if (sec === 'danger') {
-    c.innerHTML = geodeBuildSettingsDangerDrillHtml();
+    c.innerHTML = geodeSettingsDrillShell(geodeBuildSettingsDangerDrillHtml());
   } else {
     window._geodeSettingsSection = '';
     c.innerHTML = geodeBuildSettingsLandingHtml();
