@@ -16640,7 +16640,7 @@ function geodeAskBeynd(question) {
   if (starters) starters.style.display = 'none';
 
   var msgs = document.getElementById('beynd-chat-messages');
-  if (msgs && !question) {
+  if (msgs) {
     var uBubble = document.createElement('div');
     uBubble.style.cssText = 'align-self:flex-end;background:rgba(155,127,232,0.15);border-radius:12px 12px 3px 12px;padding:9px 12px;font-size:13px;color:var(--tx-1);max-width:82%;line-height:1.45';
     uBubble.textContent = q;
