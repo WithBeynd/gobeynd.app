@@ -15714,6 +15714,22 @@ function geodeRealityHumanMoment(state, rs, monthlyEstimate, availableToday, dif
   };
 }
 
+/** Display-only: last-checked line for Reality page (daysOld from geodeRealityStatus). */
+function geodeRealityLastCheckedLabel(daysOld) {
+  var d = typeof daysOld === 'number' && daysOld >= 0 ? daysOld : 0;
+  if (d === 0) return 'Last checked today';
+  if (d === 1) return 'Last checked yesterday';
+  return 'Last checked ' + d + ' days ago';
+}
+
+/** Display-only: plain-language Difference helper (same sign as avail − estimate). */
+function geodeRealityDifferenceExplain(diffNum) {
+  if (diffNum == null || !isFinite(diffNum)) return '';
+  if (Math.abs(diffNum) <= 50) return 'Your available balance is close to your monthly estimate.';
+  if (diffNum < 0) return 'You have less available than your monthly estimate suggests.';
+  return 'You have more available than your monthly estimate suggests.';
+}
+
 /** Lightweight Reality tap-through page (Money · msub reality). */
 function geodeRealityPageHtml() {
   var left = calcMonthlyLeftover(S);
@@ -15764,6 +15780,10 @@ function geodeRealityPageHtml() {
     escHtmlLite(fm(left)) +
     '</span></div>';
   cmp +=
+    '<div style="font-size:10px;color:rgba(189,183,220,0.52);line-height:1.4;padding:0 2px 6px">' +
+    escHtmlLite('Based on your plan for this month.') +
+    '</div>';
+  cmp +=
     '<div style="height:1px;background:rgba(255,255,255,0.06);margin:2px 0 6px"></div>';
   cmp +=
     '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:6px 0 8px">' +
@@ -15800,6 +15820,13 @@ function geodeRealityPageHtml() {
       diffPrefix +
       escHtmlLite(diffMag) +
       '</span></div>';
+    var _diffExplain = geodeRealityDifferenceExplain(diffNum);
+    if (_diffExplain) {
+      cmp +=
+        '<div style="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.45;padding:4px 0 2px">' +
+        escHtmlLite(_diffExplain) +
+        '</div>';
+    }
   }
   cmp += '</div>';
 
@@ -15880,6 +15907,30 @@ function geodeRealityPageHtml() {
     '<button type="button" class="btn btn-p" style="width:100%" onclick="geodeSaveRealityCheckFromPage()">' +
     escHtmlLite('Save balance check') +
     '</button>';
+  if (rs.hasData && S.realityCheck && S.realityCheck.date) {
+    var _rcDaysOld = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
+    var _rcStale = _rcDaysOld > 7;
+    var _rcAct = !!rs.activitySinceCheck;
+    var _rcMetaMb = _rcStale || _rcAct ? '6' : '14';
+    h +=
+      '<div style="font-size:10px;color:rgba(189,183,220,0.52);line-height:1.45;margin-top:' +
+      _rcMetaMb +
+      'px">' +
+      escHtmlLite(geodeRealityLastCheckedLabel(_rcDaysOld)) +
+      '</div>';
+    if (_rcStale) {
+      h +=
+        '<div style="font-size:10px;color:rgba(245,194,52,0.55);line-height:1.4;margin-top:4px">' +
+        escHtmlLite('This check may be out of date.') +
+        '</div>';
+    }
+    if (_rcAct) {
+      h +=
+        '<div style="font-size:10px;color:rgba(189,183,220,0.48);line-height:1.4;margin-top:4px">' +
+        escHtmlLite('Your plan has moved since this check.') +
+        '</div>';
+    }
+  }
 
   h +=
     '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin:22px 0 10px;line-height:1.3;letter-spacing:0.01em">' +
