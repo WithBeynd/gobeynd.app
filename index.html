@@ -16974,7 +16974,7 @@ function rHome() {
     var _sCardCp = _sCardItems.length ? geodeSubscriptionReminderCopy(_sCardItems) : null;
     var _sdRenewLine = _sCardCp ? escHtmlLite(_sCardCp.line) : escHtmlLite(_sd.name || '');
     _homeSubRenewCardHtml +=
-      '<div style="background:var(--bg-surface);border:1px solid var(--bd);border-left:2px solid rgba(245,194,52,0.42);border-radius:14px;padding:13px 15px;margin-bottom:10px;cursor:pointer;box-shadow:none" onclick="geodeOpenSubReview(\'' +
+      '<div class="geode-soft-enter" style="background:var(--bg-surface);border:1px solid var(--bd);border-left:2px solid rgba(245,194,52,0.42);border-radius:14px;padding:13px 15px;margin-bottom:10px;cursor:pointer;box-shadow:none" onclick="geodeOpenSubReview(\'' +
       _sd.id +
       "','" +
       _sdKind +
