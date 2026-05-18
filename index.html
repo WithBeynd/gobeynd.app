@@ -16508,14 +16508,61 @@ function geodeBuildCoachingContext() {
     var postureBlock = geodeFormatAskBeyndContextPostureBlock();
     var monthCtxBlock = geodeFormatAskBeyndMonthContextBlock(S);
 
+    var rs = null;
+    try {
+      rs = geodeRealityStatus();
+    } catch (_eRsCtx) {
+      rs = { hasData: false };
+    }
+    if (!rs) rs = { hasData: false };
+
+    var balanceCtxLines = ['BALANCE SENSE-CHECK (optional, user entered)'];
+    if (!rs.hasData) {
+      balanceCtxLines.push('Balance you added: none this month');
+      balanceCtxLines.push('Plan leftover this month (estimate): ' + sym + Math.round(left));
+    } else {
+      var balAmt = 0;
+      try {
+        if (S.realityCheck && S.realityCheck.amount != null && !isNaN(Number(S.realityCheck.amount))) {
+          balAmt = Number(S.realityCheck.amount);
+        }
+      } catch (_eBal) {}
+      balanceCtxLines.push('Balance you added: ' + sym + Math.round(balAmt));
+      balanceCtxLines.push('Checked: ' + geodeRealityLastCheckedLabel(rs.daysOld));
+      balanceCtxLines.push('Plan leftover this month (estimate): ' + sym + Math.round(left));
+      var gap = typeof rs.gap === 'number' ? rs.gap : null;
+      if (gap != null && isFinite(gap)) {
+        var gapAbs = Math.abs(gap);
+        if (gapAbs <= 50) {
+          balanceCtxLines.push('Compared with your plan: close');
+        } else if (gap > 50) {
+          balanceCtxLines.push('Compared with your plan: about ' + sym + Math.round(gapAbs) + ' more room');
+        } else {
+          balanceCtxLines.push('Compared with your plan: about ' + sym + Math.round(gapAbs) + ' tighter');
+        }
+      }
+      var senseLabel = 'Go gently here';
+      if (rs.confidence === 'high' && !rs.activitySinceCheck) {
+        senseLabel = 'Looks steady';
+      } else if (rs.confidence === 'moderate' || (typeof rs.daysOld === 'number' && rs.daysOld > 3)) {
+        senseLabel = 'Worth another look';
+      }
+      balanceCtxLines.push(senseLabel);
+      if (rs.activitySinceCheck) {
+        balanceCtxLines.push('A few things changed after this balance was added.');
+      }
+    }
+    var balanceBlock = balanceCtxLines.join('\n');
+
     var ctx = [
       'BEYND USER FINANCIAL CONTEXT (' + code + ')',
       '',
       'Income: ' + sym + income + '/month (' + incType + ')',
       'Dependants: ' + deps,
-      'Left this month on plan (after bills & spending): ' + sym + Math.round(left),
       'Net worth: ' + sym + Math.round(net),
       'Monthly spending total: ' + sym + Math.round(tSpend),
+      '',
+      balanceBlock,
       '',
       'CONTEXT POSTURE (coaching tone only, does not change plan math)',
       postureBlock
@@ -16652,7 +16699,7 @@ function geodeOpenAskBeyndApiKeySetup() {
 function geodeOpenAskBeynd() {
   _beynd_chat_history = [];
   var h = mh('Ask Beynd');
-  h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.45;margin:-4px 0 10px">Your coach knows your actual numbers. Ask anything about your finances.</div>';
+  h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.45;margin:-4px 0 10px">Ask from your plan and the picture you have built in Beynd. Bank connection is not live yet.</div>';
   if (!S.beyondApiKey) {
     h += '<div style="padding:12px 14px;border-radius:12px;background:rgba(155,127,232,0.07);border:1px solid rgba(155,127,232,0.2);margin-bottom:10px">';
     h += '<div style="font-size:12px;font-weight:600;color:var(--tx-1);margin-bottom:6px">Set up Ask Beynd</div>';
@@ -16673,7 +16720,7 @@ function geodeOpenAskBeynd() {
     '</div></div>';
   h += '</div>';
   h += '<div id="beynd-starters" class="beynd-ask-starters">';
-  var starters = ['How should I prioritise this month?','Am I on track?','What\u2019s costing me the most in interest?','Can I afford to increase my savings?'];
+  var starters = ['How should I prioritise this month?','Am I on track?','What\u2019s costing me the most in interest?','What does my plan suggest for savings this month?'];
   starters.forEach(function(q) {
     h += '<button type="button" class="btn-sm" style="font-size:10px" onclick="geodeAskBeynd(' + JSON.stringify(q) + ')">' + escHtmlLite(q) + '</button>';
   });
@@ -16721,9 +16768,15 @@ function geodeAskBeynd(question) {
 
   _beynd_chat_history.push({role:'user', content: q});
 
-  var systemPrompt = 'You are Beynd, a personal financial coach. You have real-time access to this user\'s financial data shown below. ' +
-    'Be specific \u2014 use their actual numbers. Be concise (2\u20133 sentences for simple questions, more only when detail genuinely helps). ' +
-    'Be honest: do not sugarcoat financial problems. Tone: calm, professional, adult. Never invent numbers or advice outside the data provided.\n\n' +
+  var systemPrompt =
+    'You are Beynd, a calm personal financial coach.\n\n' +
+    'You receive a short summary the user keeps on this device. Bank connection is not live yet. This is coaching, not regulated financial advice.\n\n' +
+    'The summary has monthly figures from what they entered, including priority steps for this month. It may also include a balance they added for a sense-check.\n\n' +
+    'Use only numbers from the summary. Do not invent figures.\n\n' +
+    'If they ask whether they can afford something and no balance is listed this month, or the summary says Worth another look or Go gently here, lead with what their monthly picture shows. Mention once that refreshing their balance would sharpen the answer. Then continue with useful guidance. Do not tell them they can afford it as fact.\n\n' +
+    'If a balance is on file and the summary says Looks steady, you may compare both views in plain language. Stay practical and warm. Do not sound like a bank or a guarantee.\n\n' +
+    'Do not repeat caveats unnecessarily. Explain them once clearly, then continue naturally.\n\n' +
+    'Be specific with their numbers. Use two or three sentences unless more detail clearly helps. Be honest without shaming. Stay calm and direct.\n\n' +
     geodeBuildCoachingContext();
 
   geodeBeyndAiComplete({
