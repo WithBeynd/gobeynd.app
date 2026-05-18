@@ -7527,7 +7527,7 @@ function getCoreNudges(state) {
           variants: [
             'You still have about ' + fm(left) + ' unallocated this month — putting it to work will move you forward faster.',
             'There is still about ' + fm(left) + ' left unassigned — choosing a direction (debt, goals, investing) builds momentum.',
-            'You have roughly ' + fm(left) + ' spare this month — assigning it intentionally compounds progress.'
+            'You have about ' + fm(left) + ' unassigned on your plan this month. Giving it a job can build momentum.'
           ]
         });
       }
@@ -15942,7 +15942,9 @@ function geodeRealityPageHtml() {
     '</div>';
   h +=
     '<div style="font-size:10px;color:var(--tx-3);line-height:1.5;margin-bottom:12px;opacity:0.82">' +
-    escHtmlLite('Enter the amount currently available in your bank account.') +
+    escHtmlLite(
+      'Enter the balance you want Beynd to use for this month\u2019s sense-check. You add it yourself; nothing is pulled from your bank.'
+    ) +
     '</div>';
   h +=
     '<label style="font-size:11px;font-weight:500;color:var(--tx-3);display:block;margin-bottom:6px">' +
@@ -20861,7 +20863,7 @@ function geodeBuildUserGuideHtml() {
       title: 'Home tab and coaching',
       icon: 'home',
       body: '<p>Home shows your most important action for this month at the top, followed by up to two coaching insights.</p>' +
-            '<p>These aren\u2019t a fixed tip list \u2014 they respond to your actual numbers. If your buffer is underfunded, the plan flags it. If you\u2019ve got high-interest debt and spare cash, it tells you what to do.</p>' +
+            '<p>Home responds to what you have entered in Beynd and your monthly plan. If your buffer needs attention or debt is costly, Beynd surfaces the next step as a plan view, not live bank data.</p>' +
             '<p>The streak counter tracks how many consecutive weeks you\u2019ve been active in the app. Consistency matters more than any single decision.</p>'
     },
     {
