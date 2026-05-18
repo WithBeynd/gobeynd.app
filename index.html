@@ -12888,7 +12888,16 @@ function geodePlanApplyPriorityStep(ix) {
     if (!step) return;
     var prog = geodePlanStepProgress(S, step);
     var act = geodeMainActionFromPriorityStep(S, step, prog);
-    if (act && typeof act.run === 'function') act.run();
+    if (act && typeof act.run === 'function') {
+      var _fam = null;
+      try {
+        _fam = geodePlanStepFamilyFromLabel(step);
+      } catch (_eFam) {}
+      geodeRunAffordGatedAction(
+        act.run,
+        geodeAffordGateBuildForPlanMoneyAction(act.amount, act.cta, _fam)
+      );
+    }
   } catch (_e) {}
 }
 
@@ -14488,35 +14497,7 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     window._geodeMainActionGate = null;
     var _fnAff = window._geodeMainActionRun;
     if (typeof _fnAff === 'function' && showAmt) {
-      var _ctaAff = String(cta || '').trim();
-      var _moneyCta =
-        _ctaAff === 'Schedule payment' ||
-        _ctaAff === 'Plan a buffer contribution' ||
-        _ctaAff === 'Schedule contribution' ||
-        _ctaAff === 'Begin contributing' ||
-        _ctaAff === 'Schedule investment' ||
-        (_ctaAff === 'Add investment' && Math.round(amt) >= 1);
-      if (_moneyCta) {
-        var _sigFam = '';
-        try {
-          _sigFam = _ftFam ? String(_ftFam).trim() : '';
-        } catch (_eSf) {
-          _sigFam = '';
-        }
-        var _sigRaw =
-          currentYM() + '|' + _ctaAff + '|' + Math.round(amt) + (_sigFam ? '|' + _sigFam : '');
-        var _sigH = 0;
-        for (var _si = 0; _si < _sigRaw.length; _si++) {
-          _sigH = ((_sigH << 5) - _sigH + _sigRaw.charCodeAt(_si)) | 0;
-        }
-        var _sigKey = 'v1_' + currentYM() + '_' + (_sigH >>> 0).toString(16);
-        window._geodeMainActionGate = {
-          needsAffordGate: true,
-          amount: amt,
-          cta: _ctaAff,
-          sig: _sigKey
-        };
-      }
+      window._geodeMainActionGate = geodeAffordGateBuildForPlanMoneyAction(amt, cta, _ftFam);
     }
   } catch (_eFg) {
     try {
@@ -15055,6 +15036,80 @@ function geodeHomeNoteRecentCompletion(kind) {
   } catch (e0) {}
 }
 
+/** Single source for plan-prefilled money afford gate (Home, Plan Apply, Money quick chip). */
+function geodeAffordGateBuildForPlanMoneyAction(amount, cta, sigFam) {
+  try {
+    var amt = amount;
+    if (typeof amt !== 'number' || !isFinite(amt) || amt <= 0) return null;
+    var _ctaAff = String(cta || '').trim();
+    var _moneyCta =
+      _ctaAff === 'Schedule payment' ||
+      _ctaAff === 'Plan a buffer contribution' ||
+      _ctaAff === 'Schedule contribution' ||
+      _ctaAff === 'Begin contributing' ||
+      _ctaAff === 'Schedule investment' ||
+      (_ctaAff === 'Add investment' && Math.round(amt) >= 1);
+    if (!_moneyCta) return null;
+    var _sigFam = '';
+    try {
+      _sigFam = sigFam ? String(sigFam).trim() : '';
+    } catch (_eSf) {
+      _sigFam = '';
+    }
+    var _sigRaw =
+      currentYM() + '|' + _ctaAff + '|' + Math.round(amt) + (_sigFam ? '|' + _sigFam : '');
+    var _sigH = 0;
+    for (var _si = 0; _si < _sigRaw.length; _si++) {
+      _sigH = ((_sigH << 5) - _sigH + _sigRaw.charCodeAt(_si)) | 0;
+    }
+    var _sigKey = 'v1_' + currentYM() + '_' + (_sigH >>> 0).toString(16);
+    return {
+      needsAffordGate: true,
+      amount: amt,
+      cta: _ctaAff,
+      sig: _sigKey
+    };
+  } catch (_eAb) {
+    return null;
+  }
+}
+
+function geodeRunAffordGatedAction(fn, gate) {
+  try {
+    if (typeof fn !== 'function') return;
+    if (!gate || !gate.needsAffordGate || !gate.sig) {
+      fn();
+      return;
+    }
+    var skOk = geodeAffordGateStoragePrefix('ok', gate.sig);
+    var skPause = geodeAffordGateStoragePrefix('pause', gate.sig);
+    var okOn = false;
+    try {
+      okOn = sessionStorage.getItem(skOk) === '1';
+    } catch (_eOk) {}
+    if (okOn) {
+      var rsOk = null;
+      try {
+        rsOk = geodeRealityStatus();
+      } catch (_eRsOk) {
+        rsOk = null;
+      }
+      if (!geodeAffordGateRealityFirmEnough(rsOk)) {
+        okOn = false;
+        try {
+          sessionStorage.removeItem(skOk);
+        } catch (_eClr) {}
+      }
+    }
+    if (okOn) {
+      fn();
+      return;
+    }
+    window._geodeAffordGatePending = { fn: fn, gate: gate, skOk: skOk, skPause: skPause };
+    geodeOpenAffordabilityGateModal();
+  } catch (_eRg) {}
+}
+
 /** sessionStorage key helper for Reality Check Lite (Main Action gate). */
 function geodeAffordGateStoragePrefix(kind, sigKey) {
   return 'geode_aff_' + String(kind || '') + '_' + String(sigKey || '');
@@ -15218,39 +15273,7 @@ function geodeAffordGatePause() {
 
 function geodeRunMainAction() {
   try {
-    var fn = window._geodeMainActionRun;
-    if (typeof fn !== 'function') return;
-    var gate = window._geodeMainActionGate;
-    if (!gate || !gate.needsAffordGate || !gate.sig) {
-      fn();
-      return;
-    }
-    var skOk = geodeAffordGateStoragePrefix('ok', gate.sig);
-    var skPause = geodeAffordGateStoragePrefix('pause', gate.sig);
-    var okOn = false;
-    try {
-      okOn = sessionStorage.getItem(skOk) === '1';
-    } catch (_eOk) {}
-    if (okOn) {
-      var rsOk = null;
-      try {
-        rsOk = geodeRealityStatus();
-      } catch (_eRsOk) {
-        rsOk = null;
-      }
-      if (!geodeAffordGateRealityFirmEnough(rsOk)) {
-        okOn = false;
-        try {
-          sessionStorage.removeItem(skOk);
-        } catch (_eClr) {}
-      }
-    }
-    if (okOn) {
-      fn();
-      return;
-    }
-    window._geodeAffordGatePending = { fn: fn, gate: gate, skOk: skOk, skPause: skPause };
-    geodeOpenAffordabilityGateModal();
+    geodeRunAffordGatedAction(window._geodeMainActionRun, window._geodeMainActionGate);
   } catch (e) {}
 }
 
@@ -20400,7 +20423,10 @@ function geodePayQuickFromPlan(kind) {
     if (mk !== 'none' && mk !== '' && mk === kind) {
       var a = geodeGetMainAction();
       if (a && typeof a.run === 'function') {
-        a.run();
+        geodeRunAffordGatedAction(
+          a.run,
+          geodeAffordGateBuildForPlanMoneyAction(a.amount, a.cta, kind)
+        );
         return;
       }
     }
