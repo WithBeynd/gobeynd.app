@@ -15060,13 +15060,22 @@ function geodeAffordGateStoragePrefix(kind, sigKey) {
   return 'geode_aff_' + String(kind || '') + '_' + String(sigKey || '');
 }
 
+/** Read-only: true when current-month balance check is firm enough to remember confirmation. */
+function geodeAffordGateRealityFirmEnough(rs) {
+  if (!rs || !rs.hasData) return false;
+  if (rs.activitySinceCheck) return false;
+  return rs.confidence === 'high';
+}
+
 /** Display-only: one afford-modal line from Reality Check state (no plan or gate changes). */
 function geodeAffordabilityRealityLine() {
-  var fallback = 'This is from your plan, not a live balance check.';
   try {
     var rs = geodeRealityStatus();
     if (!rs || !rs.hasData) {
-      return fallback;
+      return 'No balance added this month yet. This step comes from your monthly plan, not your bank.';
+    }
+    if (rs.confidence === 'low') {
+      return 'Your balance and plan look quite far apart. Worth a fresh look before you continue.';
     }
     var daysOld = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
     if (daysOld > 3) {
@@ -15077,7 +15086,7 @@ function geodeAffordabilityRealityLine() {
     }
     return 'Your latest balance check helps Beynd sense-check this step.';
   } catch (_eAr) {
-    return fallback;
+    return 'No balance added this month yet. This step comes from your monthly plan, not your bank.';
   }
 }
 
@@ -15091,6 +15100,19 @@ function geodeOpenAffordabilityGateModal() {
   } catch (_eAm) {
     amtStr = String(g.amount);
   }
+  var rs = null;
+  try {
+    rs = geodeRealityStatus();
+  } catch (_eRsMo) {
+    rs = { hasData: false };
+  }
+  if (!rs) rs = { hasData: false };
+  var primaryLabel = 'Continue with this amount';
+  if (!rs.hasData) {
+    primaryLabel = 'Add my balance first';
+  } else if (geodeAffordGateRealityFirmEnough(rs)) {
+    primaryLabel = 'Still feels right';
+  }
   var paused = false;
   try {
     paused = sessionStorage.getItem(geodeAffordGateStoragePrefix('pause', g.sig)) === '1';
@@ -15099,9 +15121,9 @@ function geodeOpenAffordabilityGateModal() {
   h +=
     '<div style="font-size:12px;color:var(--tx-2);line-height:1.55;margin:-4px 0 10px">' +
     escHtmlLite(
-      'Your plan suggests ' +
+      'Beynd has ' +
         amtStr +
-        '. Take a moment to check this still feels right before you schedule.'
+        ' down as your next step this month. Take a moment to see if that still feels right.'
     ) +
     '</div>';
   h +=
@@ -15121,7 +15143,7 @@ function geodeOpenAffordabilityGateModal() {
   h += '<div style="display:flex;flex-direction:column;gap:8px">';
   h +=
     '<button type="button" class="btn btn-p" onclick="geodeAffordGateYes()">' +
-    escHtmlLite('Yes, this is affordable') +
+    escHtmlLite(primaryLabel) +
     '</button>';
   h +=
     '<button type="button" class="btn btn-s" onclick="geodeAffordGateNotSure()">' +
@@ -15138,15 +15160,28 @@ function geodeOpenAffordabilityGateModal() {
 function geodeAffordGateYes() {
   try {
     var p = window._geodeAffordGatePending;
+    if (!p || typeof p.fn !== 'function' || !p.skOk || !p.skPause) return;
+    var rs = null;
+    try {
+      rs = geodeRealityStatus();
+    } catch (_eRsY) {
+      rs = { hasData: false };
+    }
+    if (!rs) rs = { hasData: false };
+    if (!rs.hasData) {
+      geodeAffordGateNotSure();
+      return;
+    }
     window._geodeAffordGatePending = null;
     // Immediate teardown: closeModal() schedules removeModalDom(165ms) and would
     // delete the next modal openPayModal/openModal creates on the same #modal id.
     removeModalDom();
-    if (!p || typeof p.fn !== 'function' || !p.skOk || !p.skPause) return;
-    try {
-      sessionStorage.setItem(p.skOk, '1');
-      sessionStorage.removeItem(p.skPause);
-    } catch (_eS) {}
+    if (geodeAffordGateRealityFirmEnough(rs)) {
+      try {
+        sessionStorage.setItem(p.skOk, '1');
+        sessionStorage.removeItem(p.skPause);
+      } catch (_eS) {}
+    }
     p.fn();
   } catch (_eY) {}
 }
@@ -15196,6 +15231,20 @@ function geodeRunMainAction() {
     try {
       okOn = sessionStorage.getItem(skOk) === '1';
     } catch (_eOk) {}
+    if (okOn) {
+      var rsOk = null;
+      try {
+        rsOk = geodeRealityStatus();
+      } catch (_eRsOk) {
+        rsOk = null;
+      }
+      if (!geodeAffordGateRealityFirmEnough(rsOk)) {
+        okOn = false;
+        try {
+          sessionStorage.removeItem(skOk);
+        } catch (_eClr) {}
+      }
+    }
     if (okOn) {
       fn();
       return;
