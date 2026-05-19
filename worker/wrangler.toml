@@ -1,0 +1,6 @@
+name = "beynd-ask-worker"
+main = "src/index.js"
+compatibility_date = "2026-05-19"
+
+[observability]
+enabled = true
