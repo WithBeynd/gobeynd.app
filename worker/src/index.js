@@ -5,7 +5,16 @@ const ALLOWED_ORIGINS = new Set([
   'http://localhost:5500'
 ]);
 
-const MAX_BODY_BYTES = 16 * 1024;
+const MAX_BODY_BYTES = 32 * 1024;
+const MAX_QUESTION_CHARS = 800;
+const MAX_MESSAGES = 10;
+const MAX_MESSAGE_CONTENT_CHARS = 2000;
+const MAX_CONTEXT_CHARS = 12000;
+const OPENAI_TIMEOUT_MS = 12000;
+const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
+const PLACEHOLDER_OPENAI_MODEL = 'gpt-4o-mini'; // Placeholder fallback only; prefer env.OPENAI_MODEL.
+const WORKER_SYSTEM_PROMPT =
+  'You are Beynd, a careful financial assistant. Answer using only the provided context and conversation. Keep responses concise, practical, and avoid inventing facts.';
 
 function requestId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -41,6 +50,11 @@ function isJsonRequest(request) {
 }
 
 async function readJsonWithLimit(request) {
+  const contentLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+    return { error: 'too_large' };
+  }
+
   const body = await request.text();
   const bytes = new TextEncoder().encode(body).length;
   if (bytes > MAX_BODY_BYTES) {
@@ -57,13 +71,36 @@ function validatePayload(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return false;
   }
-  if (typeof payload.question !== 'string' || payload.question.trim().length === 0) {
+  if (
+    typeof payload.question !== 'string' ||
+    payload.question.trim().length === 0 ||
+    payload.question.length > MAX_QUESTION_CHARS
+  ) {
     return false;
   }
-  if (!Array.isArray(payload.messages)) {
+  if (!Array.isArray(payload.messages) || payload.messages.length > MAX_MESSAGES) {
     return false;
   }
-  if (typeof payload.context !== 'string' || payload.context.trim().length === 0) {
+  for (const message of payload.messages) {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      return false;
+    }
+    if (message.role !== 'user' && message.role !== 'assistant') {
+      return false;
+    }
+    if (
+      typeof message.content !== 'string' ||
+      message.content.trim().length === 0 ||
+      message.content.length > MAX_MESSAGE_CONTENT_CHARS
+    ) {
+      return false;
+    }
+  }
+  if (
+    typeof payload.context !== 'string' ||
+    payload.context.trim().length === 0 ||
+    payload.context.length > MAX_CONTEXT_CHARS
+  ) {
     return false;
   }
   if (
@@ -75,8 +112,110 @@ function validatePayload(payload) {
   return true;
 }
 
+function providerMessages(payload) {
+  return [
+    { role: 'system', content: WORKER_SYSTEM_PROMPT },
+    {
+      role: 'user',
+      content: `Context:\n${payload.context}`
+    },
+    ...payload.messages.map((message) => ({
+      role: message.role,
+      content: message.content
+    })),
+    { role: 'user', content: payload.question }
+  ];
+}
+
+async function callOpenAI(payload, env) {
+  if (!env || typeof env.OPENAI_API_KEY !== 'string' || env.OPENAI_API_KEY.trim().length === 0) {
+    return { error: 'provider_unavailable' };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model:
+          typeof env.OPENAI_MODEL === 'string' && env.OPENAI_MODEL.trim().length > 0
+            ? env.OPENAI_MODEL
+            : PLACEHOLDER_OPENAI_MODEL,
+        messages: providerMessages(payload),
+        temperature: 0.4,
+        max_completion_tokens: 500
+      }),
+      signal: controller.signal
+    });
+
+    if (response.status === 429) {
+      return { error: 'rate_limit' };
+    }
+    if (!response.ok) {
+      return { error: 'provider_unavailable' };
+    }
+
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string' || text.trim().length === 0) {
+      return { error: 'provider_unavailable' };
+    }
+
+    return { text };
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      return { error: 'timeout' };
+    }
+    return { error: 'provider_unavailable' };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function safeErrorResponse(error, id, origin) {
+  if (error === 'timeout') {
+    return jsonResponse(
+      { error: 'timeout', message: 'The provider timed out.', requestId: id },
+      504,
+      origin
+    );
+  }
+  if (error === 'rate_limit') {
+    return jsonResponse(
+      { error: 'rate_limit', message: 'The provider is rate limited.', requestId: id },
+      429,
+      origin
+    );
+  }
+  if (error === 'oversized_payload') {
+    return jsonResponse(
+      { error: 'oversized_payload', message: 'That was a bit too much to send.', requestId: id },
+      413,
+      origin
+    );
+  }
+  if (error === 'invalid_payload') {
+    return jsonResponse(
+      { error: 'invalid_payload', message: 'That request was missing something.', requestId: id },
+      400,
+      origin
+    );
+  }
+  return jsonResponse(
+    { error: 'provider_unavailable', message: 'The provider is unavailable.', requestId: id },
+    503,
+    origin
+  );
+}
+
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const id = requestId();
     const origin = request.headers.get('origin') || '';
 
@@ -110,32 +249,21 @@ export default {
 
     const parsed = await readJsonWithLimit(request);
     if (parsed.error === 'too_large') {
-      return jsonResponse(
-        { error: 'too_large', message: 'That was a bit too much to send.', requestId: id },
-        413,
-        origin
-      );
+      return safeErrorResponse('oversized_payload', id, origin);
     }
     if (parsed.error === 'invalid_json') {
-      return jsonResponse(
-        { error: 'invalid_json', message: 'That request could not be read.', requestId: id },
-        400,
-        origin
-      );
+      return safeErrorResponse('invalid_payload', id, origin);
     }
 
     if (!validatePayload(parsed.value)) {
-      return jsonResponse(
-        { error: 'invalid_payload', message: 'That request was missing something.', requestId: id },
-        400,
-        origin
-      );
+      return safeErrorResponse('invalid_payload', id, origin);
     }
 
-    return jsonResponse(
-      { text: 'Ask Beynd worker is reachable.', requestId: id },
-      200,
-      origin
-    );
+    const providerResult = await callOpenAI(parsed.value, env);
+    if (providerResult.error) {
+      return safeErrorResponse(providerResult.error, id, origin);
+    }
+
+    return jsonResponse({ text: providerResult.text, requestId: id }, 200, origin);
   }
 };
