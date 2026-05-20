@@ -16663,6 +16663,8 @@ function geodeBuildCoachingContext() {
 }
 
 var _beynd_chat_history = [];
+var GEODE_ASK_BEYND_WORKER_URL = 'https://beynd-ask-worker.withbeynd.workers.dev/ask-beynd';
+var GEODE_ASK_BEYND_CLIENT_VERSION = 'web';
 
 function geodeInferBeyndAiProviderFromKey(key) {
   var k = String(key || '').trim();
@@ -16756,12 +16758,49 @@ var geodeBeyndAiProviders = {
 };
 
 function geodeBeyndAiComplete(opts) {
+  opts = opts || {};
+  if (!(window._GEODE_ASK_BEYND_BYOK === true && S.beyondApiKey)) {
+    return fetch(GEODE_ASK_BEYND_WORKER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question: String(opts.question || ''),
+        messages: Array.isArray(opts.messages) ? opts.messages : [],
+        context: String(opts.context || ''),
+        clientVersion: String(opts.clientVersion || GEODE_ASK_BEYND_CLIENT_VERSION)
+      })
+    })
+      .then(function(r) {
+        return r.json().then(function(data) {
+          if (!r.ok) throw new Error((data && data.error) || 'Ask Beynd unavailable');
+          return data;
+        });
+      })
+      .then(function(data) {
+        return { text: (data && data.text) || 'Sorry, I could not answer that.' };
+      });
+  }
+  opts.system = opts.system || geodeAskBeyndLegacySystemPrompt(opts.context);
   var providerId = geodeGetBeyndAiProvider();
   var adapter = geodeBeyndAiProviders[providerId];
   if (!adapter || typeof adapter.complete !== 'function') {
     return Promise.reject(new Error('Unsupported AI provider: ' + providerId));
   }
   return adapter.complete(opts || {});
+}
+
+function geodeAskBeyndLegacySystemPrompt(context) {
+  return (
+    'You are Beynd, a calm personal financial coach.\n\n' +
+    'You receive a short summary the user keeps on this device. Bank connection is not live yet. This is coaching, not regulated financial advice.\n\n' +
+    'The summary has monthly figures from what they entered, including priority steps for this month. It may also include a balance they added for a sense-check.\n\n' +
+    'Use only numbers from the summary. Do not invent figures.\n\n' +
+    'If they ask whether they can afford something and no balance is listed this month, or the summary says Worth another look or Go gently here, lead with what their monthly picture shows. Mention once that refreshing their balance would sharpen the answer. Then continue with useful guidance. Do not tell them they can afford it as fact.\n\n' +
+    'If a balance is on file and the summary says Looks steady, you may compare both views in plain language. Stay practical and warm. Do not sound like a bank or a guarantee.\n\n' +
+    'Do not repeat caveats unnecessarily. Explain them once clearly, then continue naturally.\n\n' +
+    'Be specific with their numbers. Use two or three sentences unless more detail clearly helps. Be honest without shaming. Stay calm and direct.\n\n' +
+    String(context || '')
+  );
 }
 
 /** Ask Beynd setup: swap to API key modal without closeModal (avoids delayed removeModalDom killing the new sheet). */
@@ -16774,16 +16813,6 @@ function geodeOpenAskBeynd() {
   _beynd_chat_history = [];
   var h = mh('Ask Beynd');
   h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.45;margin:-4px 0 10px">Ask from your plan and the picture you have built in Beynd. Bank connection is not live yet.</div>';
-  if (!S.beyondApiKey) {
-    h += '<div style="padding:12px 14px;border-radius:12px;background:rgba(155,127,232,0.07);border:1px solid rgba(155,127,232,0.2);margin-bottom:10px">';
-    h += '<div style="font-size:12px;font-weight:600;color:var(--tx-1);margin-bottom:6px">Set up Ask Beynd</div>';
-    h += '<div style="font-size:11px;color:var(--tx-2);line-height:1.5;margin-bottom:10px">Add your OpenAI API key to enable your AI coach. Your key stays on this device. When you ask, Beynd sends a short summary to your provider.</div>';
-    h += '<button type="button" class="btn btn-p" onclick="geodeOpenAskBeyndApiKeySetup()" style="width:100%">Set up key</button>';
-    h += '</div>';
-    h += '<button type="button" class="btn-sm" style="width:100%;margin-top:4px;opacity:0.88" onclick="closeModal()">Cancel</button>';
-    openModal(h);
-    return;
-  }
   h += '<div class="beynd-ask-sheet">';
   h += '<div id="beynd-chat-messages" class="beynd-ask-messages">';
   h +=
@@ -16796,14 +16825,14 @@ function geodeOpenAskBeynd() {
   h += '<div id="beynd-starters" class="beynd-ask-starters">';
   var starters = ['How should I prioritise this month?','Am I on track?','What\u2019s costing me the most in interest?','What does my plan suggest for savings this month?'];
   starters.forEach(function(q) {
-    h += '<button type="button" class="btn-sm" style="font-size:10px" onclick="geodeAskBeynd(' + JSON.stringify(q) + ')">' + escHtmlLite(q) + '</button>';
+    h += '<button type="button" class="btn-sm" style="font-size:10px" onclick=\'geodeAskBeynd(' + JSON.stringify(q) + ')\'>' + escHtmlLite(q) + '</button>';
   });
   h += '</div>';
   h += '<div class="beynd-ask-compose">';
   h += '<textarea id="beynd-input" class="fi" rows="3" placeholder="Ask about your plan, money, or next move" onkeydown="try{if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();geodeAskBeynd();}}catch(e){}"></textarea>';
   h += '<button type="button" class="btn btn-p" onclick="geodeAskBeynd()">Ask</button>';
   h += '</div>';
-  h += '<div class="beynd-ask-foot">A financial summary is sent to ' + escHtmlLite(geodeBeyndAiProviderDisplayName(geodeGetBeyndAiProvider())) + ' when you ask a question. Conversation is not stored.</div>';
+  h += '<div class="beynd-ask-foot">When you ask, Beynd sends a short financial summary to answer your question. Your plan stays on this device, and this chat is not stored by Beynd.</div>';
   h += '</div>';
   openModal(h);
 }
@@ -16842,21 +16871,16 @@ function geodeAskBeynd(question) {
 
   _beynd_chat_history.push({role:'user', content: q});
 
-  var systemPrompt =
-    'You are Beynd, a calm personal financial coach.\n\n' +
-    'You receive a short summary the user keeps on this device. Bank connection is not live yet. This is coaching, not regulated financial advice.\n\n' +
-    'The summary has monthly figures from what they entered, including priority steps for this month. It may also include a balance they added for a sense-check.\n\n' +
-    'Use only numbers from the summary. Do not invent figures.\n\n' +
-    'If they ask whether they can afford something and no balance is listed this month, or the summary says Worth another look or Go gently here, lead with what their monthly picture shows. Mention once that refreshing their balance would sharpen the answer. Then continue with useful guidance. Do not tell them they can afford it as fact.\n\n' +
-    'If a balance is on file and the summary says Looks steady, you may compare both views in plain language. Stay practical and warm. Do not sound like a bank or a guarantee.\n\n' +
-    'Do not repeat caveats unnecessarily. Explain them once clearly, then continue naturally.\n\n' +
-    'Be specific with their numbers. Use two or three sentences unless more detail clearly helps. Be honest without shaming. Stay calm and direct.\n\n' +
-    geodeBuildCoachingContext();
+  var context = geodeBuildCoachingContext();
+  var recentMessages = _beynd_chat_history.slice(-10).filter(function(m) {
+    return m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string';
+  });
 
   geodeBeyndAiComplete({
-    apiKey: S.beyondApiKey,
-    system: systemPrompt,
-    messages: _beynd_chat_history.slice(-10)
+    question: q,
+    messages: recentMessages,
+    context: context,
+    clientVersion: GEODE_ASK_BEYND_CLIENT_VERSION
   }).then(function(result) {
     var reply = (result && result.text) || 'Sorry, I could not answer that.';
     _beynd_chat_history.push({role:'assistant', content: reply});
@@ -16878,7 +16902,7 @@ function geodeAskBeynd(question) {
     if (aMs2) {
       var errBubble = document.createElement('div');
       errBubble.style.cssText = 'align-self:flex-start;background:rgba(240,112,112,0.08);border-radius:12px;padding:9px 12px;font-size:12px;color:#f07070;max-width:88%';
-      errBubble.textContent = 'Could not reach the AI coach. Check your API key in Settings or try again.';
+      errBubble.textContent = 'Ask Beynd is unavailable right now. Your plan still works.';
       geodeApplyChatBubbleEnter(errBubble);
       aMs2.appendChild(errBubble);
     }
