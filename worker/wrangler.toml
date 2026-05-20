@@ -4,3 +4,24 @@ compatibility_date = "2026-05-19"
 
 [observability]
 enabled = true
+
+[[ratelimits]]
+name = "BEYND_BURST_LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 4
+  period = 10
+
+[[ratelimits]]
+name = "BEYND_SUSTAINED_LIMITER"
+namespace_id = "1002"
+  [ratelimits.simple]
+  limit = 12
+  period = 60
+
+[[ratelimits]]
+name = "BEYND_GLOBAL_LIMITER"
+namespace_id = "1003"
+  [ratelimits.simple]
+  limit = 120
+  period = 60

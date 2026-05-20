@@ -215,6 +215,58 @@ function safeErrorResponse(error, id, origin) {
   );
 }
 
+const WORKER_RATE_LIMIT_MESSAGE = 'Too many requests. Please wait a moment.';
+
+async function rateLimitIpKey(request, env) {
+  const ip = request.headers.get('CF-Connecting-IP') || '';
+  if (!ip) return 'ip:unknown';
+
+  const salt =
+    typeof env.RATE_LIMIT_IP_SALT === 'string' && env.RATE_LIMIT_IP_SALT.length > 0
+      ? env.RATE_LIMIT_IP_SALT
+      : 'dev-local';
+  const data = new TextEncoder().encode(ip + '\0' + salt);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  const hex = [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return 'ip:' + hex;
+}
+
+async function enforceRateLimits(request, env) {
+  const globalLimiter = env.BEYND_GLOBAL_LIMITER;
+  const burstLimiter = env.BEYND_BURST_LIMITER;
+  const sustainedLimiter = env.BEYND_SUSTAINED_LIMITER;
+  if (!globalLimiter || !burstLimiter || !sustainedLimiter) {
+    return { ok: true };
+  }
+
+  const ipKey = await rateLimitIpKey(request, env);
+
+  const globalResult = await globalLimiter.limit({ key: 'global' });
+  if (!globalResult.success) return { ok: false, layer: 'global' };
+
+  const burstResult = await burstLimiter.limit({ key: ipKey });
+  if (!burstResult.success) return { ok: false, layer: 'burst' };
+
+  const sustainedResult = await sustainedLimiter.limit({ key: ipKey });
+  if (!sustainedResult.success) return { ok: false, layer: 'sustained' };
+
+  return { ok: true };
+}
+
+function workerRateLimitResponse(id, origin) {
+  return jsonResponse(
+    {
+      error: 'rate_limit',
+      message: WORKER_RATE_LIMIT_MESSAGE,
+      requestId: id
+    },
+    429,
+    origin
+  );
+}
+
 export default {
   async fetch(request, env) {
     const id = requestId();
@@ -238,6 +290,11 @@ export default {
         405,
         origin
       );
+    }
+
+    const rateCheck = await enforceRateLimits(request, env);
+    if (!rateCheck.ok) {
+      return workerRateLimitResponse(id, origin);
     }
 
     if (!isJsonRequest(request)) {
