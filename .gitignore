@@ -1,0 +1,4 @@
+
+# Local Cloudflare/Wrangler artifacts
+worker/.wrangler/
+worker/package-lock.json
