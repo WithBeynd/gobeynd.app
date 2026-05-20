@@ -16919,6 +16919,105 @@ function geodeFormatAskBeyndContextPostureBlock() {
   }
 }
 
+/**
+ * Human-safe month pacing lines for Ask Beynd only (read-only). Never exposes PAO field names.
+ */
+function geodeFormatAskBeyndPaoContextBlock(pao, rs) {
+  if (!pao || !pao.signals) return '';
+  rs = rs || { hasData: false };
+
+  var sig = pao.signals;
+  var hasOverdue = !!sig.hasOverdue;
+  var left = Number(sig.leftover) || 0;
+  var band = pao.band;
+  var bandConf = pao.bandConfidence;
+  var expenseCompleteness = sig.expenseCompleteness;
+  var recoveryPhase = pao.recovery && pao.recovery.phase;
+  var pacingMode = pao.outputs && pao.outputs.pacingMode;
+
+  if (
+    band === 'open' &&
+    bandConf === 'high' &&
+    !hasOverdue &&
+    rs.hasData &&
+    expenseCompleteness !== 'minimal' &&
+    recoveryPhase !== 'emerging'
+  ) {
+    return '';
+  }
+
+  var balanceSaysTighter = false;
+  var balanceCaution = false;
+  if (!rs.hasData) {
+    balanceCaution = true;
+  } else {
+    var gap = typeof rs.gap === 'number' ? rs.gap : null;
+    if (gap != null && gap < -50) balanceSaysTighter = true;
+    if (
+      rs.confidence === 'low' ||
+      rs.activitySinceCheck ||
+      (typeof rs.daysOld === 'number' && rs.daysOld > 3)
+    ) {
+      balanceCaution = true;
+    }
+  }
+
+  try {
+    var po = geodeGetContextPosture(S);
+    var codes = po && po.reasonCodes ? po.reasonCodes : [];
+    var ci;
+    for (ci = 0; ci < codes.length; ci++) {
+      if (codes[ci] === 'reality_below') balanceSaysTighter = true;
+    }
+  } catch (_ePaoDedup) {}
+
+  var lines = [];
+
+  if ((!rs.hasData || expenseCompleteness === 'minimal') && lines.length < 4) {
+    lines.push('This picture is built from what they entered; live bank data is not connected.');
+  }
+
+  if (hasOverdue && lines.length < 4) {
+    lines.push('Anything overdue may need attention before suggesting new commitments.');
+  }
+
+  if (lines.length < 4) {
+    if (left < 0 && !balanceSaysTighter) {
+      lines.push('Headroom on the plan looks thin this month.');
+    } else if (
+      (band === 'narrow' || pacingMode === 'gentle') &&
+      !balanceSaysTighter &&
+      !hasOverdue
+    ) {
+      lines.push('This month may be easier with gentler pacing.');
+    } else if (band === 'unknown') {
+      lines.push('Keep guidance practical until they add a fuller monthly picture.');
+    } else if (
+      (band !== 'open' && band !== 'narrow' && band !== 'unknown') &&
+      left >= 0 &&
+      !balanceSaysTighter &&
+      !balanceCaution
+    ) {
+      lines.push('Plan headroom may feel constrained this month.');
+    }
+  }
+
+  if (bandConf === 'low' && !balanceCaution && rs.hasData && lines.length < 4) {
+    lines.push('Treat the monthly picture as approximate unless their balance check is fresh.');
+  }
+
+  if (recoveryPhase === 'emerging' && lines.length < 4) {
+    lines.push('They may be finding their rhythm again — favour one light next step.');
+  }
+
+  if (lines.length > 4) lines = lines.slice(0, 4);
+  if (!lines.length) return '';
+
+  return (
+    'MONTH PACING (coaching tone only; does not change plan math)\n' + lines.join('\n')
+  );
+}
+
 function geodeFormatAskBeyndMonthContextBlock(state) {
   var mc = geodeGetMonthContext(state);
   if (!mc.hasAny) return '';
@@ -17024,6 +17123,12 @@ function geodeBuildCoachingContext() {
     }
     var balanceBlock = balanceCtxLines.join('\n');
 
+    var paoBlock = '';
+    try {
+      var paoAsk = assessPressure(S);
+      paoBlock = geodeFormatAskBeyndPaoContextBlock(paoAsk, rs);
+    } catch (_ePaoAskCtx) {}
+
     var ctx = [
       'BEYND USER FINANCIAL CONTEXT (' + code + ')',
       '',
@@ -17037,6 +17142,9 @@ function geodeBuildCoachingContext() {
       'CONTEXT POSTURE (coaching tone only, does not change plan math)',
       postureBlock
     ];
+    if (paoBlock) {
+      ctx.push('', paoBlock);
+    }
     if (monthCtxBlock) {
       ctx.push('', 'MONTH CONTEXT', monthCtxBlock);
     }
