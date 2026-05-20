@@ -9681,14 +9681,17 @@ function planStrategyDisplayName(key) {
 function geodeGetMessageContext(state) {
   try {
     state = state || S;
-    var left = calcMonthlyLeftover(state);
-    var income = Number(state.income || 0);
 
     var pressure = 'neutral';
-    if (income > 0) {
-      if (left < 0) pressure = 'tight';
-      else if (left < income * 0.1) pressure = 'low';
-      else pressure = 'comfortable';
+    try {
+      var _paoMsgCtx = assessPressure(state);
+      if (_paoMsgCtx && _paoMsgCtx.signals) {
+        pressure = paoToMessagePressure(_paoMsgCtx);
+      } else {
+        pressure = geodeLegacyMessagePressureFromState(state);
+      }
+    } catch (_eMsgPaoCtx) {
+      pressure = geodeLegacyMessagePressureFromState(state);
     }
 
     var streak = Number(localStorage.getItem('geode_streak_count') || '0');
