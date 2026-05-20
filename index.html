@@ -10131,6 +10131,390 @@ function geodePickHomeCompletionMessage(state) {
   return msgs[idx];
 }
 
+// ── PAO (Pressure Assessment Object) — Stage 45C shadow mode only ─────────────
+// Read-only assessment + adapters. Does not change plan math or production behaviour.
+
+/** Centralised thresholds (parity with legacy pressure helpers). */
+var PAO_PRESSURE_THRESHOLDS = {
+  homeStrongLeftBelow: 0,
+  homeMildMinLeftAbsolute: 40,
+  incomeRatioHigh: 0.08,
+  incomeRatioModerate: 0.18,
+  incomeRatioMessageLow: 0.1,
+  ctxCriticalLeftMax: 0,
+  financialTightLeftMax: 100,
+  financialSurplusLeftAbove: 300,
+  messageTightLeftBelow: 0
+};
+
+function geodePaoDevEnabled() {
+  try {
+    if (typeof location !== 'undefined') {
+      var h = String(location.hostname || '').toLowerCase();
+      if (h === 'localhost' || h === '127.0.0.1') return true;
+      var q = String(location.search || '');
+      if (q.indexOf('geode_pao_dev=1') >= 0 || q.indexOf('geode_pao_dev=true') >= 0) return true;
+    }
+    if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('geode_pao_dev') === '1') {
+      return true;
+    }
+  } catch (_ePaoDev) {}
+  return false;
+}
+
+/**
+ * Canonical read-only pressure assessment (no mutations, no persistence).
+ * @param {object} state App state (defaults to S)
+ * @param {object} [_options] Reserved for future use
+ */
+function assessPressure(state, _options) {
+  state = state || S;
+  var T = PAO_PRESSURE_THRESHOLDS;
+  var left = calcMonthlyLeftover(state);
+  var income = Number(state.income) || 0;
+  var debts = state.debts || [];
+  var totalDebt = 0;
+  var di;
+  for (di = 0; di < debts.length; di++) {
+    totalDebt += toNum(debts[di] && debts[di].balance);
+  }
+
+  var hasOverdue = false;
+  try {
+    hasOverdue = geodeHasOverdue(state);
+  } catch (_eOd) {}
+
+  var rs = null;
+  try {
+    rs = geodeRealityStatus();
+  } catch (_eRs) {
+    rs = { hasData: false };
+  }
+  if (!rs) rs = { hasData: false };
+
+  var feeling = '';
+  try {
+    feeling = geodeGetRealityFeeling() || '';
+  } catch (_eRf) {}
+
+  var ymNow = currentYM();
+  var mc = state.monthContext;
+  var monthWorry = !!(mc && mc.ym === ymNow && String(mc.worried || '').trim());
+  var monthProtect = !!(mc && mc.ym === ymNow && String(mc.protect || '').trim());
+  var irregular = state.incomeType === 'irregular';
+  var dependants = !!state.hasDependants;
+
+  var expenseCompleteness = 'unknown';
+  var exLen = (state.expenses || []).length;
+  var payLen = (state.payments || []).length;
+  if (exLen === 0 && payLen === 0) expenseCompleteness = 'minimal';
+  else if (exLen > 0) expenseCompleteness = 'present';
+
+  var cashCritical = left <= T.ctxCriticalLeftMax;
+  var cashHigh =
+    !cashCritical && income > 0 && left < income * T.incomeRatioHigh;
+  var cashModerate =
+    !cashCritical && !cashHigh && income > 0 && left < income * T.incomeRatioModerate;
+  var financialTight =
+    left <= T.ctxCriticalLeftMax ||
+    (left <= T.financialTightLeftMax && totalDebt > 0);
+
+  var cashHeadroomLevel = 'low';
+  if (hasOverdue || cashCritical) cashHeadroomLevel = 'critical';
+  else if (cashHigh) cashHeadroomLevel = 'high';
+  else if (cashModerate || financialTight) cashHeadroomLevel = 'moderate';
+
+  var obligationLevel = hasOverdue ? 'critical' : totalDebt > 0 && financialTight ? 'high' : 'low';
+
+  var pacingLevel = 'low';
+  var ftH = (state.followthroughOutcomeHistory || []).slice(-6);
+  if (ftH.length >= 3) {
+    var ign = 0;
+    var fi;
+    for (fi = 0; fi < ftH.length; fi++) {
+      if (ftH[fi] && ftH[fi].outcome === 'ignored') ign++;
+    }
+    if (ign >= 2) pacingLevel = 'moderate';
+  }
+
+  var humanLevel = 'low';
+  if (feeling === 'moved' || feeling === 'unsure' || monthWorry) humanLevel = 'high';
+  else if (feeling === 'slow' || monthProtect || dependants) humanLevel = 'moderate';
+
+  var dataLevel = 'moderate';
+  var reasonCodes = [];
+  if (!rs.hasData) {
+    dataLevel = 'low';
+    reasonCodes.push('data_plan_estimate_only');
+  } else {
+    if (rs.confidence === 'low') {
+      dataLevel = 'low';
+      reasonCodes.push('data_reality_low_confidence');
+    }
+    if (typeof rs.daysOld === 'number' && rs.daysOld > 3) reasonCodes.push('data_reality_stale');
+    if (rs.activitySinceCheck) reasonCodes.push('data_reality_activity_since');
+    var gap = typeof rs.gap === 'number' ? rs.gap : null;
+    if (gap != null && gap < -50) reasonCodes.push('signals_conflict');
+  }
+
+  if (cashCritical) reasonCodes.push('cash_leftover_nonpositive');
+  else if (cashHigh) reasonCodes.push('cash_leftover_low_ratio');
+  else if (left <= T.financialTightLeftMax && totalDebt > 0) {
+    reasonCodes.push('cash_debt_tight_combo');
+  }
+  if (hasOverdue) reasonCodes.push('obligation_overdue');
+  if (irregular) reasonCodes.push('profile_irregular_income');
+  if (dependants) reasonCodes.push('profile_dependants');
+  if (feeling) reasonCodes.push('human_feeling_cautious');
+  if (monthWorry) reasonCodes.push('human_month_worry');
+  if (expenseCompleteness === 'minimal') reasonCodes.push('data_expenses_incomplete');
+
+  var band = 'open';
+  var bandConfidence = 'high';
+  if (income <= 0 && geodeIsNoIncomeMode()) {
+    band = 'unknown';
+    bandConfidence = 'low';
+  } else if (hasOverdue || cashCritical) {
+    band = 'critical';
+  } else if (financialTight || cashHigh || left < T.homeStrongLeftBelow) {
+    band = 'pinched';
+  } else if (cashModerate || (income > 0 && left < Math.max(T.homeMildMinLeftAbsolute, income * T.incomeRatioHigh))) {
+    band = 'narrow';
+  }
+  if (dataLevel === 'low') {
+    bandConfidence = bandConfidence === 'high' ? 'moderate' : 'low';
+  }
+
+  var recoveryPhase = 'none';
+  var recoveryCodes = [];
+  var rec = null;
+  try {
+    rec = geodeGetRecoveryState(state);
+  } catch (_eRec) {}
+  if (rec && rec.last >= 3 && rec.current > 0 && rec.current <= 2) {
+    recoveryPhase = 'emerging';
+    recoveryCodes.push('recovery_emerging');
+  }
+
+  var suppressTopics = [];
+  if (band === 'pinched' || band === 'critical') {
+    suppressTopics.push('opportunity', 'growth_alignment');
+  }
+  if (humanLevel === 'high' || humanLevel === 'moderate') {
+    suppressTopics.push('invest_gap', 'cash_in_motion');
+  }
+
+  return {
+    version: 1,
+    assessedAt: Date.now(),
+    ym: ymNow,
+    band: band,
+    bandConfidence: bandConfidence,
+    dimensions: {
+      cashHeadroom: { level: cashHeadroomLevel, drivers: [] },
+      obligationRisk: { level: obligationLevel, drivers: [] },
+      pacingLoad: { level: pacingLevel, drivers: [] },
+      humanLoad: { level: humanLevel, drivers: [] },
+      dataTrust: { level: dataLevel, drivers: [] }
+    },
+    reasonCodes: reasonCodes,
+    signals: {
+      leftover: left,
+      income: income,
+      incomeType: state.incomeType || 'stable',
+      hasDependants: dependants,
+      totalDebt: totalDebt,
+      hasOverdue: hasOverdue,
+      reality: rs,
+      feeling: feeling || null,
+      monthContextPresent: !!(monthWorry || monthProtect),
+      expenseCompleteness: expenseCompleteness
+    },
+    outputs: {
+      postureHint: band === 'critical' || band === 'pinched' ? 'cautious' : band === 'open' ? 'neutral' : 'cautious',
+      suppressTopics: suppressTopics,
+      elevateTopics: hasOverdue || cashCritical ? ['debt', 'tight_month'] : [],
+      pacingMode: recoveryPhase === 'emerging' ? 'gentle' : 'full',
+      affordGateTone: !rs.hasData || dataLevel === 'low' ? 'reality_first' : 'neutral',
+      askBeyndStabilityFirst: band === 'pinched' || band === 'critical' || humanLevel === 'high',
+      humanMomentEligible: humanLevel === 'high' && band !== 'open'
+    },
+    recovery: {
+      phase: recoveryPhase,
+      confidence: recoveryPhase === 'emerging' ? 'moderate' : 'low',
+      reasonCodes: recoveryCodes
+    },
+    shouldAffectPlanMath: false,
+    shouldAffectGoalTargets: false,
+    shouldAffectPayments: false
+  };
+}
+
+function paoToHomePressureLevel(pao) {
+  if (!pao || !pao.signals) return 'ok';
+  var T = PAO_PRESSURE_THRESHOLDS;
+  var left = pao.signals.leftover;
+  var inc = toNum(pao.signals.income);
+  if (left < T.homeStrongLeftBelow) return 'strong';
+  if (inc > 0 && left < Math.max(T.homeMildMinLeftAbsolute, inc * T.incomeRatioHigh)) return 'mild';
+  return 'ok';
+}
+
+function paoToFinancialContext(pao) {
+  if (!pao || !pao.signals) return 'stable';
+  var T = PAO_PRESSURE_THRESHOLDS;
+  var left = pao.signals.leftover;
+  var tDebt = toNum(pao.signals.totalDebt);
+  if (left <= T.ctxCriticalLeftMax || (left <= T.financialTightLeftMax && tDebt > 0)) return 'tight';
+  if (left > T.financialSurplusLeftAbove) return 'surplus';
+  return 'stable';
+}
+
+function paoToCtxPressure(pao) {
+  if (!pao || !pao.signals) return 'low';
+  var T = PAO_PRESSURE_THRESHOLDS;
+  var left = pao.signals.leftover;
+  var income = toNum(pao.signals.income);
+  if (left <= T.ctxCriticalLeftMax) return 'critical';
+  if (income > 0 && left < income * T.incomeRatioHigh) return 'high';
+  if (income > 0 && left < income * T.incomeRatioModerate) return 'moderate';
+  return 'low';
+}
+
+function paoToMessagePressure(pao) {
+  if (!pao || !pao.signals) return 'neutral';
+  var T = PAO_PRESSURE_THRESHOLDS;
+  var left = pao.signals.leftover;
+  var income = toNum(pao.signals.income);
+  if (income <= 0) return 'neutral';
+  if (left < T.messageTightLeftBelow) return 'tight';
+  if (left < income * T.incomeRatioMessageLow) return 'low';
+  return 'comfortable';
+}
+
+/** Legacy ctx pressure inline (parity reference; does not call geodeCtx). */
+function geodeLegacyCtxPressureFromState(state) {
+  state = state || S;
+  var T = PAO_PRESSURE_THRESHOLDS;
+  var income = Number(state.income) || 0;
+  var left = calcMonthlyLeftover(state);
+  if (left <= T.ctxCriticalLeftMax) return 'critical';
+  if (income > 0 && left < income * T.incomeRatioHigh) return 'high';
+  if (income > 0 && left < income * T.incomeRatioModerate) return 'moderate';
+  return 'low';
+}
+
+/** Legacy message pressure (pressure field only; no streak). */
+function geodeLegacyMessagePressureFromState(state) {
+  state = state || S;
+  var T = PAO_PRESSURE_THRESHOLDS;
+  var left = calcMonthlyLeftover(state);
+  var income = Number(state.income || 0);
+  if (income <= 0) return 'neutral';
+  if (left < T.messageTightLeftBelow) return 'tight';
+  if (left < income * T.incomeRatioMessageLow) return 'low';
+  return 'comfortable';
+}
+
+/**
+ * Dev-only: compare PAO adapters to legacy pressure helpers (read-only).
+ */
+function geodePaoShadowDisagreements(state, pao) {
+  state = state || S;
+  var assessment = pao;
+  if (!assessment) {
+    try {
+      assessment = assessPressure(state);
+    } catch (_eAp) {
+      assessment = null;
+    }
+  }
+  var mismatches = [];
+  if (!assessment) {
+    return { ok: false, mismatches: [{ field: 'assessPressure', legacy: null, adapter: null }] };
+  }
+  var legacyHome = geodeHomePressureLevelForState(state);
+  var adapterHome = paoToHomePressureLevel(assessment);
+  if (legacyHome !== adapterHome) {
+    mismatches.push({ field: 'home', legacy: legacyHome, adapter: adapterHome });
+  }
+  var legacyFin = getFinancialContext(state);
+  var adapterFin = paoToFinancialContext(assessment);
+  if (legacyFin !== adapterFin) {
+    mismatches.push({ field: 'financial', legacy: legacyFin, adapter: adapterFin });
+  }
+  var legacyCtx = geodeLegacyCtxPressureFromState(state);
+  var adapterCtx = paoToCtxPressure(assessment);
+  if (legacyCtx !== adapterCtx) {
+    mismatches.push({ field: 'ctx', legacy: legacyCtx, adapter: adapterCtx });
+  }
+  var legacyMsg = geodeLegacyMessagePressureFromState(state);
+  var adapterMsg = paoToMessagePressure(assessment);
+  if (legacyMsg !== adapterMsg) {
+    mismatches.push({ field: 'message', legacy: legacyMsg, adapter: adapterMsg });
+  }
+
+  var leftSnap = assessment.signals ? assessment.signals.leftover : calcMonthlyLeftover(state);
+  var legacyCrossTensions = [];
+  if (legacyFin === 'tight' && legacyHome === 'ok' && leftSnap > 0) {
+    legacyCrossTensions.push('financial_tight_vs_home_ok');
+  }
+  if (legacyCtx === 'moderate' && legacyMsg === 'comfortable') {
+    legacyCrossTensions.push('ctx_moderate_vs_message_comfortable');
+  }
+  if (legacyCtx === 'high' && legacyHome === 'ok') {
+    legacyCrossTensions.push('ctx_high_vs_home_ok');
+  }
+  if (legacyMsg === 'low' && legacyHome === 'ok' && legacyFin === 'stable') {
+    legacyCrossTensions.push('message_low_vs_home_ok_stable');
+  }
+
+  return {
+    ok: mismatches.length === 0,
+    mismatches: mismatches,
+    legacyCrossTensions: legacyCrossTensions,
+    paoBand: assessment.band,
+    legacy: {
+      home: legacyHome,
+      financial: legacyFin,
+      ctx: legacyCtx,
+      message: legacyMsg
+    },
+    adapter: {
+      home: adapterHome,
+      financial: adapterFin,
+      ctx: adapterCtx,
+      message: adapterMsg
+    }
+  };
+}
+
+var _geodePaoShadowLogged = false;
+
+function geodePaoMaybeLogShadowDisagreements(state, pao) {
+  if (!geodePaoDevEnabled() || _geodePaoShadowLogged) return;
+  _geodePaoShadowLogged = true;
+  try {
+    var report = geodePaoShadowDisagreements(state, pao);
+    if (report && report.mismatches && report.mismatches.length) {
+      console.info('[Beynd PAO shadow] adapter parity mismatch', report);
+    } else if (report && report.legacyCrossTensions && report.legacyCrossTensions.length) {
+      console.info('[Beynd PAO shadow] legacy cross-system tension (expected)', report.legacyCrossTensions, report.legacy);
+    }
+  } catch (_eLog) {}
+}
+
+(function geodePaoExposeDevTools() {
+  if (!geodePaoDevEnabled()) return;
+  try {
+    window.geodeAssessPressure = assessPressure;
+    window.geodePaoShadowDisagreements = geodePaoShadowDisagreements;
+    window.geodePaoPRESSURE_THRESHOLDS = PAO_PRESSURE_THRESHOLDS;
+  } catch (_eEx) {}
+})();
+
+// ── END PAO shadow ────────────────────────────────────────────────────────────
+
 function geodeCtx(state) {
   state = state || S;
   var income   = Number(state.income) || 0;
@@ -10180,6 +10564,14 @@ function geodeCtx(state) {
     subsDue = [];
   }
 
+  var _paoShadow = null;
+  try {
+    _paoShadow = assessPressure(state);
+    geodePaoMaybeLogShadowDisagreements(state, _paoShadow);
+  } catch (_ePaoSh) {
+    _paoShadow = null;
+  }
+
   return {
     planType:planType, incType:incType, hasDeps:hasDeps,
     income:income, left:left, pressure:pressure,
@@ -10190,7 +10582,8 @@ function geodeCtx(state) {
     isGrowthPlan: planType==='growth',
     ftRate:ftRate,
     subsDue:subsDue,
-    noIncome: income <= 0
+    noIncome: income <= 0,
+    pao: _paoShadow
   };
 }
 // ── END COACHING CONTEXT ──────────────────────────────────────────────────────
