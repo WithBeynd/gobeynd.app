@@ -9978,8 +9978,59 @@ function geodeExpenseIsSubscriptionRenewalEligible(e) {
 }
 
 var GEODE_SUB_REVIEWED_DAY_LS = 'geode_sub_reviewed_day_v1';
+var GEODE_SUB_REVIEWED_RENEWALS_LS = 'geode_sub_reviewed_renewals_v2';
 
-/** Day-scoped localStorage: which subscription (expense) ids the user confirmed via Keep it today; resets when local calendar day changes. */
+/** Stable key for one subscription renewal instance (id + due date + amount). Empty if id or date missing. */
+function geodeSubRenewalInstanceKey(expense) {
+  if (!expense) return '';
+  var sid = String(expense.id || '');
+  var iso = String(expense.date || '').slice(0, 10);
+  if (!sid || iso.length !== 10 || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
+  return sid + '|' + iso + '|' + toNum(expense.amount).toFixed(2);
+}
+
+/** Renewal-instance localStorage: which subscription renewals the user confirmed via Keep it (persists across days until date/amount/id changes). */
+function geodeSubReviewedRenewalsLoad() {
+  var keys = [];
+  try {
+    var raw = localStorage.getItem(GEODE_SUB_REVIEWED_RENEWALS_LS);
+    if (!raw) return keys;
+    var o = JSON.parse(raw);
+    if (!o || !Array.isArray(o.keys)) return keys;
+    keys = o.keys.map(function (x) {
+      return String(x);
+    });
+  } catch (_e) {
+    return keys;
+  }
+  return keys;
+}
+
+function geodeSubReviewedRenewalsSave(keys) {
+  try {
+    localStorage.setItem(
+      GEODE_SUB_REVIEWED_RENEWALS_LS,
+      JSON.stringify({ keys: keys || [] })
+    );
+  } catch (_e) {}
+}
+
+function geodeSubIsReviewedForRenewal(expense) {
+  var key = geodeSubRenewalInstanceKey(expense);
+  if (!key) return false;
+  return geodeSubReviewedRenewalsLoad().indexOf(key) >= 0;
+}
+
+function geodeSubMarkReviewedForRenewal(expense) {
+  var key = geodeSubRenewalInstanceKey(expense);
+  if (!key) return;
+  var keys = geodeSubReviewedRenewalsLoad();
+  if (keys.indexOf(key) >= 0) return;
+  keys.push(key);
+  geodeSubReviewedRenewalsSave(keys);
+}
+
+/** Legacy day-scoped localStorage (v1); no longer used for suppression — kept for harmless coexistence with old data. */
 function geodeSubReviewedTodayLoad() {
   var today = geodeTodayLocalISO();
   var ids = [];
@@ -10026,7 +10077,7 @@ function geodeSubMarkReviewedToday(expenseId) {
 /**
  * Subscription-type expenses (Spending) on a discrete reminder day; one primary row returned.
  * When present, `_geodeSubReminderExtraCount` on the returned array is how many other eligible rows were sorted after the primary.
- * Rows marked reviewed for the current local day (Keep it) are excluded after the usual sort so primary reflects the next unreviewed item.
+ * Rows marked reviewed for this renewal instance (Keep it: id + date + amount) are excluded after the usual sort so primary reflects the next unreviewed item.
  */
 function geodeListSubscriptionReminderItems(state) {
   var out = [];
@@ -10061,7 +10112,7 @@ function geodeListSubscriptionReminderItems(state) {
     });
     try {
       out = out.filter(function (row) {
-        return !geodeSubIsReviewedToday(row.id);
+        return !geodeSubIsReviewedForRenewal(row);
       });
     } catch (_rf) {}
     if (out.length) {
@@ -20293,7 +20344,7 @@ function geodeOpenSubReview(id, kind, opts) {
   openModal(_subMoInner);
 }
 
-/** Keep it: mark expense row reviewed for today when modal kind is expense (uses window._geodeCurrentSubReviewId / Kind set in geodeOpenSubReview). Does not mutate expense data. */
+/** Keep it: mark this renewal instance reviewed when modal kind is expense (uses window._geodeCurrentSubReviewId / Kind set in geodeOpenSubReview). Does not mutate expense data. */
 function geodeSubKeepIt() {
   var id = null;
   var kind = '';
@@ -20312,7 +20363,10 @@ function geodeSubKeepIt() {
   }
   if (kind === 'expense') {
     try {
-      geodeSubMarkReviewedToday(id);
+      var _subExp = (S.expenses || []).filter(function (e) {
+        return e && e.id === id;
+      })[0];
+      if (_subExp) geodeSubMarkReviewedForRenewal(_subExp);
     } catch (_e0) {}
   }
   var next = [];
