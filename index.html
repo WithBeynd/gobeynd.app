@@ -12025,6 +12025,101 @@ function geodePlanPageNonDebtExplainHtml(step, bufDisp, invDisp, prog) {
   );
 }
 
+/**
+ * Plan tab only: one optional pacing sentence from PAO (read-only). No heading or PAO field names.
+ */
+function geodeFormatPlanPagePacingNote(pao, rs, opts) {
+  if (!pao || !pao.signals) return '';
+  rs = rs || { hasData: false };
+  opts = opts || {};
+
+  var sig = pao.signals;
+  var hasOverdue = !!sig.hasOverdue;
+  var left = Number(sig.leftover) || 0;
+  var band = pao.band;
+  var bandConf = pao.bandConfidence;
+  var expenseCompleteness = sig.expenseCompleteness;
+  var recoveryPhase = pao.recovery && pao.recovery.phase;
+  var pacingMode = pao.outputs && pao.outputs.pacingMode;
+
+  if (
+    band === 'open' &&
+    bandConf === 'high' &&
+    !hasOverdue &&
+    rs.hasData &&
+    expenseCompleteness !== 'minimal' &&
+    recoveryPhase !== 'emerging'
+  ) {
+    return '';
+  }
+
+  if (opts.skipStrongAlignment) return '';
+
+  var balanceSaysTighter = false;
+  var balanceCaution = false;
+  if (!rs.hasData) {
+    balanceCaution = true;
+  } else {
+    var gap = typeof rs.gap === 'number' ? rs.gap : null;
+    if (gap != null && gap < -50) balanceSaysTighter = true;
+    if (
+      rs.confidence === 'low' ||
+      rs.activitySinceCheck ||
+      (typeof rs.daysOld === 'number' && rs.daysOld > 3)
+    ) {
+      balanceCaution = true;
+    }
+  }
+
+  if (hasOverdue) {
+    return 'If something is overdue, handle that before adding new commitments this month.';
+  }
+
+  if (recoveryPhase === 'emerging') {
+    return 'One clear next step is enough for this month.';
+  }
+
+  if (
+    (band === 'narrow' || pacingMode === 'gentle') &&
+    !balanceSaysTighter &&
+    !hasOverdue &&
+    !opts.hasIrregularHint &&
+    !opts.hasMildAlignment
+  ) {
+    return 'This month may suit smaller steps; the sequence stays the same.';
+  }
+
+  if (bandConf === 'low' && !balanceCaution && rs.hasData) {
+    return 'Treat amounts as a guide until you\u2019ve sense-checked with Reality.';
+  }
+
+  if ((!rs.hasData || expenseCompleteness === 'minimal') && !balanceCaution) {
+    return 'Amounts follow what you\u2019ve entered until you add a balance check.';
+  }
+
+  if (left < 0 && !balanceSaysTighter && !opts.hasMildAlignment) {
+    return 'Smaller steps may fit better this month.';
+  }
+
+  if (
+    band !== 'open' &&
+    band !== 'narrow' &&
+    band !== 'unknown' &&
+    left >= 0 &&
+    !balanceSaysTighter &&
+    !balanceCaution &&
+    !opts.hasMildAlignment
+  ) {
+    return 'This month may suit smaller steps; the sequence stays the same.';
+  }
+
+  if (band === 'unknown' && !opts.hasIrregularHint) {
+    return 'Keep the sequence; add more monthly detail when you can.';
+  }
+
+  return '';
+}
+
 function geodePlanPageOverviewHtml(plan) {
   plan = plan || {};
   var steps = plan.steps || [];
@@ -17999,6 +18094,27 @@ function rPlan() {
     var _planLeftover = calcMonthlyLeftover(S);
     if (_planLeftover >= 0) {
       h += geodePlanPageOverviewHtml(plan);
+      var _paceNote = '';
+      try {
+        var _rsPlan = geodeRealityStatus();
+        if (!_rsPlan) _rsPlan = { hasData: false };
+        var _plAlign = geodeHomePressureLevel();
+        var _paceOpts = {
+          skipStrongAlignment: _plAlign === 'strong',
+          hasIrregularHint: false,
+          hasMildAlignment: _plAlign === 'mild'
+        };
+        try {
+          if (geodeGetIncomeContext(S) === 'IRREGULAR') _paceOpts.hasIrregularHint = true;
+        } catch (_ePaceIr) {}
+        _paceNote = geodeFormatPlanPagePacingNote(assessPressure(S), _rsPlan, _paceOpts);
+      } catch (_ePacePlan) {}
+      if (_paceNote) {
+        h +=
+          '<div style="margin:-6px 0 12px;font-size:11px;color:rgba(189,183,220,0.72);line-height:1.45">' +
+          escHtmlLite(_paceNote) +
+          '</div>';
+      }
     }
     if (_planLeftover < 0) {
       // Over budget: replace steps with recovery view — nothing to allocate
