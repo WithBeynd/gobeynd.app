@@ -3259,6 +3259,46 @@ function geodeRenderSinceLastVisit(prevVisitTs) {
   );
 }
 
+/** Display-only: whether Home may show the since-last-visit muted line (read-only guards). */
+function geodeHomeShouldShowSinceLastVisit(prevLastSeen, ctx) {
+  ctx = ctx || {};
+  if (typeof prevLastSeen !== 'number' || !isFinite(prevLastSeen) || prevLastSeen <= 0) return false;
+  if (geodeIsEmptyState()) return false;
+  if (ctx.recoveryActive) return false;
+  try {
+    if (sessionStorage.getItem('geode_post_qs_reality_prompt') === '1') return false;
+    if (sessionStorage.getItem('geode_qs_just_finished') === '1') return false;
+  } catch (_eSess) {}
+  try {
+    if (geodeFindUnacknowledgedCompletedGoal()) return false;
+  } catch (_eGc) {}
+  try {
+    if (geodeHasOverdue(S)) return false;
+    var od = geodeOverdueItems();
+    if (od && od.length > 0) return false;
+  } catch (_eOd) {}
+  try {
+    var _homeLeft = calcMonthlyLeftover(S);
+    var _justFinished = false;
+    try {
+      _justFinished = sessionStorage.getItem('geode_qs_just_finished') === '1';
+    } catch (_e0) {}
+    if (
+      _homeLeft < 0 &&
+      !_justFinished &&
+      S.hasOnboarded &&
+      geodeHasMeaningfulMonthlyExpenses(S)
+    ) {
+      return false;
+    }
+  } catch (_eOb) {}
+  try {
+    var sp = geodeHomeSoftPriorityContext(S);
+    if (sp && sp.band === 'critical') return false;
+  } catch (_eSp) {}
+  return true;
+}
+
 /**
  * Pace vs target date for a goal (null if monthly <= 0, no targetDate, or nothing left to save).
  * monthsEarlyOrLate = monthsToTarget − monthsAtCurrentPace (positive ⇒ ahead of schedule).
@@ -17822,6 +17862,8 @@ function rHome() {
     return;
   }
 
+  var prevLastSeen = S.lastSeenAt;
+
   var h = '<div class="hero" style="padding:24px;margin-bottom:14px">';
   h += '<div style="font-size:11px;font-weight:600;color:var(--tx-4);margin-bottom:4px">' + nm + '</div>';
   h +=
@@ -17840,6 +17882,11 @@ function rHome() {
     '</div>' +
     '</details>';
   h += '</div>';
+  try {
+    if (geodeHomeShouldShowSinceLastVisit(prevLastSeen, { recoveryActive: !!recovery })) {
+      h += geodeRenderSinceLastVisit(prevLastSeen);
+    }
+  } catch (_eSlv) {}
   try {
     if (sessionStorage.getItem('geode_post_qs_reality_prompt') === '1') {
       h +=
