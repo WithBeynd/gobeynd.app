@@ -9168,6 +9168,10 @@ function geodeHomePeekWouldShowInsightStrip() {
 
   if (primary) return true;
   if ((!geodeHasOverdue(S) || _skipOverdueInsight) && (hasPastDueUnconfirmed || needsScheduledContributionReview)) {
+    try {
+      var _spPk = geodeHomeSoftPriorityContext(S);
+      if (_spPk && _spPk.band === 'critical') return false;
+    } catch (_eSpPk) {}
     return true;
   }
   return false;
@@ -9277,6 +9281,63 @@ function geodeHumanMomentSuppressionContext(state) {
     mainActionTitle: mainActionTitle,
     mainActionSub: mainActionSub
   };
+}
+
+/**
+ * Read-only Home soft-priority band (Stage 49C). Does not mutate state or persist.
+ */
+function geodeHomeSoftPriorityContext(state) {
+  state = state || S;
+  var hmCtx = geodeHumanMomentSuppressionContext(state);
+  var hasOverdue = !!hmCtx.hasOverdue;
+  var needsAttentionVisible = !!hmCtx.needsAttentionVisible;
+  var subsDueVisible = !!hmCtx.subsDueVisible;
+  var maNorm = geodeNormalizeHomeMainActionText(
+    String(hmCtx.mainActionTitle || '') + ' ' + String(hmCtx.mainActionSub || '')
+  );
+  var mainActionOverdue =
+    maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('clear overdue') >= 0;
+  var left = calcMonthlyLeftover(state);
+  var inc = toNum(state.income);
+  var pressure = 'ok';
+  if (left < 0) pressure = 'strong';
+  else if (inc > 0 && left < Math.max(40, inc * 0.08)) pressure = 'mild';
+  var contribReviewNeeded = false;
+  try {
+    contribReviewNeeded =
+      geodeHasPastDueUnconfirmedContributions(state) ||
+      geodeHasScheduledContributionsNeedingReview(state);
+  } catch (_eSpCr) {
+    contribReviewNeeded = false;
+  }
+  var critical = needsAttentionVisible || mainActionOverdue || hasOverdue;
+  var focused = !critical && (pressure === 'strong' || left < 0);
+  var band = critical ? 'critical' : focused ? 'focused' : 'open';
+  return {
+    band: band,
+    needsAttentionVisible: needsAttentionVisible,
+    hasOverdue: hasOverdue,
+    mainActionOverdue: mainActionOverdue,
+    pressure: pressure,
+    subsDueVisible: subsDueVisible,
+    contribReviewNeeded: contribReviewNeeded
+  };
+}
+
+/** One muted deferral line under Main Action (display-only; Stage 49C). */
+function geodeHomeSoftDeferLineHtml(text, onClickJs) {
+  var oc = onClickJs
+    ? ' cursor:pointer" onclick="try{if(event&&event.stopPropagation)event.stopPropagation();' +
+      onClickJs +
+      '}catch(_eDf){}"'
+    : '"';
+  return (
+    '<div style="font-size:10px;color:rgba(189,183,220,0.55);line-height:1.4;margin-top:8px' +
+    oc +
+    '>' +
+    escHtmlLite(String(text || '')) +
+    '</div>'
+  );
 }
 
 function geodeHumanMomentShouldSuppress(ctx, state) {
@@ -9421,6 +9482,13 @@ function geodeHomeCoachingStripHtml() {
 function renderInsights() {
   /** When Needs attention lists overdue rows, skip only the generic overdue Insight — not the whole strip. */
   var _skipOverdueInsight = false;
+  try {
+    var _spInEarly = geodeHomeSoftPriorityContext(S);
+    if (_spInEarly && _spInEarly.band === 'critical') {
+      S._pendingLastShownHighlightTopics = [];
+      return '';
+    }
+  } catch (_eSpIn) {}
   if (geodeIsEmptyState()) {
     S._pendingLastShownHighlightTopics = [];
     return '';
@@ -14769,14 +14837,22 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     recovery = window._geodeRecoveryState;
   } catch (e) {}
   var showMsg = geodeShouldShowMessage(S);
+  var _softPriMa = null;
+  try {
+    _softPriMa = window._geodeHomeSoftPriority || geodeHomeSoftPriorityContext(S);
+  } catch (_eSpMa) {
+    _softPriMa = null;
+  }
   var _suppressIdentityPatternLine = false;
   try {
     if (_geodeHomeSubRenewCardVisible) _suppressIdentityPatternLine = true;
     else if (geodeHomePeekWouldShowInsightStrip()) _suppressIdentityPatternLine = true;
   } catch (_eSupPat) {}
+  var _suppressDecorFooters =
+    _softPriMa && (_softPriMa.band === 'critical' || _softPriMa.band === 'focused');
   var streakRecoveryHtml = '';
   var identityStreakHtml = '';
-  if (showMsg) {
+  if (showMsg && !_suppressDecorFooters) {
     if (recovery && !geodeHasOverdue(S) && !cleared && streak < 3) {
       var ctxR = geodeGetMessageContext(S);
       var msgsR;
@@ -14898,7 +14974,15 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     !_anticDelayExpanded
   ) {
     var _antKind = anticipation.kind || 'obligation';
-    if (!(_geodeHomeSubRenewCardVisible && _antKind === 'subscription')) {
+    if (
+      !(_geodeHomeSubRenewCardVisible && _antKind === 'subscription') &&
+      !(
+        _softPriMa &&
+        _softPriMa.band === 'critical' &&
+        _softPriMa.subsDueVisible &&
+        _antKind === 'subscription'
+      )
+    ) {
       var _antNm = escHtmlLite(anticipation.name);
       var _idJs =
         anticipation.id != null && anticipation.id !== '' ? JSON.stringify(anticipation.id) : '';
@@ -15117,7 +15201,15 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     try {
       _skipRcForMoneyPosture = !!(showAmt && window._geodeMainActionGate && window._geodeMainActionGate.needsAffordGate);
     } catch (_eSkp) {}
-    if (!_skipRcForMoneyPosture) {
+    var _skipRcContextDup = false;
+    try {
+      if (geodePickHumanMoment(S)) _skipRcContextDup = true;
+      else {
+        var _poRc = geodeGetContextPosture(S);
+        if (_poRc && _poRc.posture === 'review_first') _skipRcContextDup = true;
+      }
+    } catch (_eRcDup) {}
+    if (!_skipRcForMoneyPosture && !_skipRcContextDup) {
       _contextLine = _confLabel;
     }
   }
@@ -15191,7 +15283,36 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     '<button type="button" class="btn btn-p" onclick="geodeRunMainAction()" style="width:100%">' +
     escHtmlLite(cta || 'Open') +
     '</button>';
-  h += '</div></div>';
+  h += '</div>';
+  try {
+    if (_softPriMa && _softPriMa.band === 'critical') {
+      if (_softPriMa.contribReviewNeeded) {
+        h += geodeHomeSoftDeferLineHtml(
+          'Mark contributions complete in Money if they\u2019ve been paid.',
+          "msub='payments';goTab('money')"
+        );
+      }
+      if (_softPriMa.subsDueVisible) {
+        var _subDf = null;
+        try {
+          _subDf = window._geodeHomeSubDeferReview;
+        } catch (_eSubDf) {}
+        var _subOn =
+          _subDf && _subDf.id
+            ? "geodeOpenSubReview(" +
+              JSON.stringify(String(_subDf.id)) +
+              ',' +
+              JSON.stringify(String(_subDf.kind || 'expense')) +
+              ')'
+            : "msub='expenses';goTab('money')";
+        h += geodeHomeSoftDeferLineHtml(
+          'Subscription renewal can wait until overdue items are cleared.',
+          _subOn
+        );
+      }
+    }
+  } catch (_eSpDf) {}
+  h += '</div>';
 
   window.geodeShowDelayBreakdown = window.geodeShowDelayBreakdown || false;
 
@@ -17781,20 +17902,42 @@ function rHome() {
     }
   } catch (_eOb) {}
   h += geodeOverdueCardHtml();
-  // Subscription nudge (Spending only; discrete days). Shown whenever eligible — not gated on other overdue items.
-  // HTML appended after Main Action so the primary coaching card stays the anchor (Stage 27B).
+  var _homeSoftPri = null;
+  try {
+    _homeSoftPri = geodeHomeSoftPriorityContext(S);
+    window._geodeHomeSoftPriority = _homeSoftPri;
+    window._geodeHomeSubDeferReview = null;
+  } catch (_eHsp) {
+    _homeSoftPri = null;
+  }
+  // Subscription nudge (Spending only). Full card on open/focused; critical band defers to Main Action line (Stage 49C).
   var _homeSubRenewCardVisible = false;
   var _homeSubRenewCardHtml = '';
   var _subsDue = geodeSubsDueSoon(7);
   if (_subsDue.length > 0) {
-    _homeSubRenewCardVisible = true;
     var _sd = _subsDue[0];
     var _sdKind = 'expense';
+    try {
+      window._geodeHomeSubDeferReview = { id: String(_sd.id || ''), kind: _sdKind };
+    } catch (_eSdr) {}
+    if (_homeSoftPri && _homeSoftPri.band === 'critical') {
+      _homeSubRenewCardVisible = false;
+    } else {
+      _homeSubRenewCardVisible = true;
     var _sCardItems = geodeListSubscriptionReminderItems(S);
     var _sCardCp = _sCardItems.length ? geodeSubscriptionReminderCopy(_sCardItems) : null;
     var _sdRenewLine = _sCardCp ? escHtmlLite(_sCardCp.line) : escHtmlLite(_sd.name || '');
+    var _subCardPad = _homeSoftPri && _homeSoftPri.band === 'focused' ? '11px 13px' : '13px 15px';
+    var _subCardBorder =
+      _homeSoftPri && _homeSoftPri.band === 'focused'
+        ? 'border-left:2px solid rgba(245,194,52,0.28)'
+        : 'border-left:2px solid rgba(245,194,52,0.42)';
     _homeSubRenewCardHtml +=
-      '<div class="geode-soft-enter" style="background:var(--bg-surface);border:1px solid var(--bd);border-left:2px solid rgba(245,194,52,0.42);border-radius:14px;padding:13px 15px;margin-bottom:10px;cursor:pointer;box-shadow:none" onclick="geodeOpenSubReview(\'' +
+      '<div class="geode-soft-enter" style="background:var(--bg-surface);border:1px solid var(--bd);' +
+      _subCardBorder +
+      ';border-radius:14px;padding:' +
+      _subCardPad +
+      ';margin-bottom:10px;cursor:pointer;box-shadow:none" onclick="geodeOpenSubReview(\'' +
       _sd.id +
       "','" +
       _sdKind +
@@ -17832,6 +17975,7 @@ function rHome() {
         '</div>';
     }
     _homeSubRenewCardHtml += '</div>';
+    }
   }
   h += geodeHomeGoalCompletionCardHtml();
   h += geodeHomeMainActionHtml(_homeSubRenewCardVisible);
