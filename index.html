@@ -2877,6 +2877,39 @@ function rollupRecurringPaymentDueDates() {
   }
   return changed;
 }
+/** Roll recurring expense due dates forward (expenses have no paid/overdue status — date freshness only). */
+function rollupRecurringExpenseDueDates() {
+  if (!S || !S.expenses || !S.expenses.length) return false;
+  var n = new Date();
+  var startOfMonth = new Date(n.getFullYear(), n.getMonth(), 1);
+  var changed = false;
+  for (var i = 0; i < S.expenses.length; i++) {
+    var e = S.expenses[i];
+    if (!e || !e.date) continue;
+    if (e.rec !== 'yes' && e.rec !== 'annual') continue;
+    try {
+      var d = new Date(e.date + 'T12:00:00');
+      if (isNaN(d.getTime())) continue;
+      if (e.rec === 'yes') {
+        while (d < startOfMonth) {
+          d.setMonth(d.getMonth() + 1);
+          changed = true;
+        }
+      } else if (e.rec === 'annual') {
+        while (d < startOfMonth) {
+          d.setFullYear(d.getFullYear() + 1);
+          changed = true;
+        }
+      }
+      var nd = geodeDateToLocalISO(d);
+      if (nd && nd !== e.date) {
+        e.date = nd;
+        changed = true;
+      }
+    } catch (_eExpRoll) {}
+  }
+  return changed;
+}
 function migratePaymentFlowFields() {
   if (!S.payments || !S.payments.length) return;
   for (var i = 0; i < S.payments.length; i++) {
@@ -2965,18 +2998,21 @@ function geodeRealityStatus() {
 
 /** Recurring payments marked paid reset to upcoming when the calendar month changes (no scheduler). */
 function syncRecurringPayments() {
-  if (!S || !S.payments || !S.payments.length) return;
+  if (!S) return;
   var ym = currentYM();
   var changed = false;
-  for (var i = 0; i < S.payments.length; i++) {
-    var p = S.payments[i];
-    if (p.rec === 'yes' && p.status === 'paid' && p.lastPaidYM && p.lastPaidYM !== ym) {
-      p.status = 'upcoming';
-      p.lastPaidYM = '';
-      changed = true;
+  if (S.payments && S.payments.length) {
+    for (var i = 0; i < S.payments.length; i++) {
+      var p = S.payments[i];
+      if (p.rec === 'yes' && p.status === 'paid' && p.lastPaidYM && p.lastPaidYM !== ym) {
+        p.status = 'upcoming';
+        p.lastPaidYM = '';
+        changed = true;
+      }
     }
   }
   if (rollupRecurringPaymentDueDates()) changed = true;
+  if (rollupRecurringExpenseDueDates()) changed = true;
   if (changed) save();
 }
 function monthlyInterest(aprPercent, balance) {
