@@ -17015,6 +17015,272 @@ function geodeQuickConfirmRealityCheck() {
   toast('Saved.');
 }
 
+/** Stage 55C-1: stable hash for current-month Reality check (no persist; preview engine only). */
+function geodeRealityPlanAlignmentInputsHash(state, rs) {
+  state = state || S;
+  rs = rs || null;
+  try {
+    var ym = currentYM();
+    var rc = state.realityCheck;
+    if (!rc || rc.ym !== ym) return '';
+    if (rc.amount == null || isNaN(Number(rc.amount))) return '';
+    var amt = Math.round(Number(rc.amount));
+    var dt = typeof rc.date === 'number' && isFinite(rc.date) ? rc.date : 0;
+    var gap = rs && typeof rs.gap === 'number' && isFinite(rs.gap) ? Math.round(rs.gap) : 0;
+    return ym + '|' + amt + '|' + dt + '|' + gap;
+  } catch (_eRpaHash) {
+    return '';
+  }
+}
+
+/** Stage 55C-1: stable signature from getMonthPlan() steps (read-only; does not mutate plan). */
+function geodeRealityPlanAlignmentPlanSignature(plan) {
+  try {
+    var steps = plan && plan.steps ? plan.steps : [];
+    if (!steps.length) return '';
+    var parts = [];
+    var i;
+    for (i = 0; i < steps.length; i++) {
+      var st = steps[i];
+      if (!st) continue;
+      parts.push(String(st.label || '').trim() + ':' + Math.round(Number(st.amount) || 0));
+    }
+    return parts.join(';');
+  } catch (_eRpaSig) {
+    return '';
+  }
+}
+
+/** Stage 55C-1: read-only gates for Reality-to-Plan alignment preview (no UI; uses global S for getMonthPlan). */
+function geodeEligibilityForRealityPlanAlignment(state) {
+  state = state || S;
+  var out = { eligible: false, reasonCode: 'no_income', rs: null, plan: null };
+  try {
+    if (!state.incomeExplicitlySet || toNum(state.income) <= 0) {
+      out.reasonCode = 'no_income';
+      return out;
+    }
+    var leftover = calcMonthlyLeftover(state);
+    if (leftover < 0) {
+      out.reasonCode = 'over_budget';
+      return out;
+    }
+    var ym = currentYM();
+    var rc = state.realityCheck;
+    if (!rc || rc.ym !== ym || rc.amount == null || isNaN(Number(rc.amount))) {
+      out.reasonCode = 'no_reality_check';
+      return out;
+    }
+    var rs = null;
+    try {
+      rs = geodeRealityStatus();
+    } catch (_eRsEl) {
+      rs = { hasData: false };
+    }
+    if (!rs || !rs.hasData) {
+      out.reasonCode = 'no_reality_data';
+      out.rs = rs;
+      return out;
+    }
+    out.rs = rs;
+    if (geodeHasOverdue(state)) {
+      out.reasonCode = 'overdue';
+      return out;
+    }
+    if (state.planCommitted) {
+      var rp = state.reductionPlan && typeof state.reductionPlan === 'object' ? state.reductionPlan : {};
+      var rk;
+      for (rk in rp) {
+        if (Object.prototype.hasOwnProperty.call(rp, rk) && rp[rk] && rp[rk].applied) {
+          out.reasonCode = 'committed_reductions';
+          return out;
+        }
+      }
+    }
+    var plan = null;
+    try {
+      plan = getMonthPlan();
+    } catch (_eGpEl) {
+      plan = { steps: [] };
+    }
+    out.plan = plan;
+    var steps = plan && plan.steps ? plan.steps : [];
+    if (!steps.length) {
+      out.reasonCode = 'no_plan_steps';
+      return out;
+    }
+    var gap = typeof rs.gap === 'number' && isFinite(rs.gap) ? rs.gap : 0;
+    if (Math.abs(gap) <= 50) {
+      out.reasonCode = 'aligned';
+      return out;
+    }
+    if (gap > 50) {
+      out.reasonCode = 'positive_gap';
+      return out;
+    }
+    if (
+      rs.confidence === 'low' ||
+      rs.activitySinceCheck ||
+      (typeof rs.daysOld === 'number' && rs.daysOld > 7)
+    ) {
+      out.reasonCode = 'stale_reality';
+      return out;
+    }
+    if (gap >= -50) {
+      out.reasonCode = 'aligned';
+      return out;
+    }
+    out.eligible = true;
+    out.reasonCode = 'eligible';
+    return out;
+  } catch (_eElig) {
+    out.reasonCode = 'no_income';
+    return out;
+  }
+}
+
+/** Stage 55C-1: v1 protected debt step labels (extra overpay not reduced in first build). */
+function geodeRealityPlanAlignmentProtectedDebtStep(step) {
+  var lb = String(step && step.label || '');
+  return lb.indexOf('Reduce high') === 0 || lb.indexOf('Pay down ') === 0;
+}
+
+/**
+ * Stage 55C-1: deterministic before/after plan-step preview (read-only).
+ * No UI, no persist, no mutation of S/plan/payments/expenses. Returns null when not eligible.
+ */
+function geodeBuildRealityPlanAlignmentPreview(state) {
+  state = state || S;
+  var elig = geodeEligibilityForRealityPlanAlignment(state);
+  if (!elig || !elig.eligible) return null;
+  try {
+    var rs = elig.rs || geodeRealityStatus();
+    if (!rs || !rs.hasData) return null;
+    var gap = typeof rs.gap === 'number' && isFinite(rs.gap) ? rs.gap : 0;
+    if (gap >= -50) return null;
+
+    var plan = elig.plan;
+    if (!plan || !plan.steps || !plan.steps.length) {
+      try {
+        plan = getMonthPlan();
+      } catch (_eGpPr) {
+        return null;
+      }
+    }
+    var steps = plan.steps || [];
+    if (!steps.length) return null;
+
+    var ym = currentYM();
+    var estimate = calcMonthlyLeftover(state);
+    var available = Number(state.realityCheck && state.realityCheck.amount) || 0;
+    var gapAbs = Math.abs(gap);
+    var need = gapAbs;
+    var rows = [];
+    var flexIndices = [];
+    var i;
+
+    for (i = 0; i < steps.length; i++) {
+      var step = steps[i];
+      var prog = geodePlanStepProgress(state, step);
+      var beforeAmount = toNum(prog.suggested);
+      if (beforeAmount <= 0 && step && step.amount != null) {
+        beforeAmount = toNum(step.amount);
+      }
+      var appliedAmount = toNum(prog.applied);
+      var remainingAmount = toNum(prog.remaining);
+      var phase = prog.phase || 'none';
+      var action = 'keep';
+      var afterAmount = beforeAmount;
+      var lockedReason = '';
+
+      if (beforeAmount <= 0) {
+        action = 'not_touched';
+        afterAmount = 0;
+        lockedReason = 'no_amount';
+      } else if (phase === 'done') {
+        action = 'keep';
+        afterAmount = beforeAmount;
+        lockedReason = 'completed';
+      } else if (geodeRealityPlanAlignmentProtectedDebtStep(step)) {
+        action = 'keep';
+        afterAmount = beforeAmount;
+        lockedReason = 'protected_debt';
+      } else if (remainingAmount > 0) {
+        flexIndices.push(i);
+      } else {
+        action = 'keep';
+        lockedReason = 'no_remaining';
+      }
+
+      rows.push({
+        stepIndex: i,
+        stepLabel: String(step.label || ''),
+        priority: step.priority != null ? step.priority : i + 1,
+        phase: phase,
+        beforeAmount: beforeAmount,
+        appliedAmount: appliedAmount,
+        remainingAmount: remainingAmount,
+        afterAmount: afterAmount,
+        delta: 0,
+        action: action,
+        lockedReason: lockedReason
+      });
+    }
+
+    flexIndices.sort(function (a, b) {
+      return b - a;
+    });
+
+    var closedAmount = 0;
+    var fi;
+    for (fi = 0; fi < flexIndices.length; fi++) {
+      if (closedAmount >= need) break;
+      var ix = flexIndices[fi];
+      var row = rows[ix];
+      var reducible = row.remainingAmount;
+      if (reducible <= 0) continue;
+      var take = Math.min(reducible, need - closedAmount);
+      if (take <= 0) continue;
+      if (take >= reducible) {
+        row.action = 'pause';
+        row.afterAmount = row.appliedAmount;
+      } else {
+        row.action = 'reduce';
+        row.afterAmount = Math.max(row.appliedAmount, row.beforeAmount - take);
+      }
+      row.delta = row.afterAmount - row.beforeAmount;
+      closedAmount += row.beforeAmount - row.afterAmount;
+    }
+
+    for (i = 0; i < rows.length; i++) {
+      if (rows[i].action === 'keep' || rows[i].action === 'not_touched') {
+        rows[i].delta = rows[i].afterAmount - rows[i].beforeAmount;
+      }
+    }
+
+    var shortfall = Math.max(0, need - closedAmount);
+    return {
+      version: 1,
+      ym: ym,
+      estimate: estimate,
+      available: available,
+      gap: gap,
+      gapAbs: gapAbs,
+      confidence: rs.confidence || 'estimated',
+      daysOld: typeof rs.daysOld === 'number' ? rs.daysOld : 0,
+      activitySinceCheck: !!rs.activitySinceCheck,
+      inputsHash: geodeRealityPlanAlignmentInputsHash(state, rs),
+      planSignature: geodeRealityPlanAlignmentPlanSignature(plan),
+      closedAmount: closedAmount,
+      shortfall: shortfall,
+      canFullyClose: shortfall <= 0,
+      rows: rows
+    };
+  } catch (_eBldPrev) {
+    return null;
+  }
+}
+
 // ── END REALITY CHECK ──────────────────────────────────────────────────────
 
 
