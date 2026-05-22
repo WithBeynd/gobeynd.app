@@ -9427,6 +9427,9 @@ function geodeHumanMomentShouldSuppress(ctx, state) {
   if (ctx.subsDueVisible) return true;
   if (ctx.hasOverdue) return true;
   if (ctx.needsAttentionVisible) return true;
+  try {
+    if (geodeGetActiveRealityPlanAlignment(state)) return true;
+  } catch (_eHmRpaSup) {}
   var maNorm = geodeNormalizeHomeMainActionText(ctx.mainActionTitle + ' ' + ctx.mainActionSub);
   if (maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('clear overdue') >= 0) return true;
   return false;
@@ -17540,6 +17543,17 @@ function geodeRealityPlanAlignmentPlanBannerHtml() {
   return h;
 }
 
+/** Stage 55C-4C: true when preview has at least one reduce/pause row (offer/modal eligible). */
+function geodeRealityPlanAlignmentHasShiftRows(preview) {
+  if (!preview || !preview.rows || !preview.rows.length) return false;
+  var i;
+  for (i = 0; i < preview.rows.length; i++) {
+    var row = preview.rows[i];
+    if (row && (row.action === 'reduce' || row.action === 'pause')) return true;
+  }
+  return false;
+}
+
 /** Stage 55C-2: compact Reality offer when alignment preview is available (read-only; no persist). */
 function geodeRealityPlanAlignmentOfferHtml() {
   if (geodeGetActiveRealityPlanAlignment(S)) return '';
@@ -17549,7 +17563,7 @@ function geodeRealityPlanAlignmentOfferHtml() {
   } catch (_eRpaOff) {
     return '';
   }
-  if (!preview) return '';
+  if (!preview || !geodeRealityPlanAlignmentHasShiftRows(preview)) return '';
   var h = '';
   h +=
     '<div style="margin-bottom:16px;padding:10px 12px;border-radius:11px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02)">';
@@ -17578,6 +17592,19 @@ function geodeOpenRealityPlanAlignmentPreview() {
     return;
   }
   if (!preview) return;
+  if (!geodeRealityPlanAlignmentHasShiftRows(preview)) {
+    openModal(
+      mh('How this month could shift') +
+        '<div style="font-size:12px;color:rgba(189,183,220,0.72);line-height:1.45;margin-top:-4px">' +
+        escHtmlLite('Nothing flexible to shift this month.') +
+        '</div>' +
+        '<div style="margin-top:14px">' +
+        '<button type="button" class="btn btn-s" style="width:100%" onclick="closeModal()">' +
+        escHtmlLite('Not now') +
+        '</button></div>'
+    );
+    return;
+  }
   var body = '';
   try {
     body = geodeRealityPlanAlignmentPreviewModalHtml(preview);
@@ -17701,7 +17728,7 @@ function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
     var sumLine =
       unchangedCount +
       (unchangedCount === 1 ? ' earlier step unchanged' : ' earlier steps unchanged');
-    if (hasProtected) sumLine += ' \u00b7 debt priorities protected';
+    if (hasProtected) sumLine += ' \u00b7 Protected priorities stay as they are';
     h +=
       '<div style="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.45;padding:10px 0 4px">' +
       escHtmlLite(sumLine) +
@@ -17709,7 +17736,7 @@ function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
   } else if (showAll && hasProtected) {
     h +=
       '<div style="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.45;padding:10px 0 4px">' +
-      escHtmlLite('Debt priorities protected') +
+      escHtmlLite('Protected priorities stay as they are') +
       '</div>';
   }
   if (preview.canFullyClose === false) {
@@ -17724,7 +17751,7 @@ function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
       escHtmlLite(
         'About ' +
           shortfallStr +
-          ' would still sit outside these shifts. Debt steps stay as they are.'
+          ' would still sit outside these shifts. Protected priorities stay as they are.'
       ) +
       '</div>';
   }
