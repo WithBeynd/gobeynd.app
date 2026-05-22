@@ -16698,6 +16698,8 @@ function geodeRealityPageHtml() {
     h += '</div>';
   }
 
+  h += geodeRealityPlanAlignmentOfferHtml();
+
   h +=
     '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.3;letter-spacing:0.01em">' +
     escHtmlLite('Update check') +
@@ -17118,11 +17120,8 @@ function geodeEligibilityForRealityPlanAlignment(state) {
       out.reasonCode = 'positive_gap';
       return out;
     }
-    if (
-      rs.confidence === 'low' ||
-      rs.activitySinceCheck ||
-      (typeof rs.daysOld === 'number' && rs.daysOld > 7)
-    ) {
+    // Stage 55C-2E: stale only when the balance check is old — not low confidence or post-check activity.
+    if (typeof rs.daysOld === 'number' && rs.daysOld > 7) {
       out.reasonCode = 'stale_reality';
       return out;
     }
@@ -17279,6 +17278,200 @@ function geodeBuildRealityPlanAlignmentPreview(state) {
   } catch (_eBldPrev) {
     return null;
   }
+}
+
+/** Stage 55C-2: compact Reality offer when alignment preview is available (read-only; no persist). */
+function geodeRealityPlanAlignmentOfferHtml() {
+  var preview = null;
+  try {
+    preview = geodeBuildRealityPlanAlignmentPreview(S);
+  } catch (_eRpaOff) {
+    return '';
+  }
+  if (!preview) return '';
+  var h = '';
+  h +=
+    '<div style="margin-bottom:16px;padding:10px 12px;border-radius:11px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02)">';
+  h +=
+    '<div style="font-size:13px;font-weight:700;color:var(--tx-1);line-height:1.35;margin-bottom:6px;letter-spacing:-0.15px">' +
+    escHtmlLite('See how this month could shift') +
+    '</div>';
+  h +=
+    '<div style="font-size:11px;color:rgba(189,183,220,0.72);line-height:1.45;margin-bottom:10px">' +
+    escHtmlLite('Your plan steps, before and after.') +
+    '</div>';
+  h +=
+    '<button type="button" class="btn btn-s" style="width:100%" onclick="geodeOpenRealityPlanAlignmentPreview()">' +
+    escHtmlLite('View shift') +
+    '</button>';
+  h += '</div>';
+  return h;
+}
+
+/** Stage 55C-2: open step-focused alignment preview modal (inspection only; no persist). */
+function geodeOpenRealityPlanAlignmentPreview() {
+  var preview = null;
+  try {
+    preview = geodeBuildRealityPlanAlignmentPreview(S);
+  } catch (_eRpaOpen) {
+    return;
+  }
+  if (!preview) return;
+  var body = '';
+  try {
+    body = geodeRealityPlanAlignmentPreviewModalHtml(preview);
+  } catch (_eRpaMo) {
+    return;
+  }
+  if (!body) {
+    toast('Nothing flexible to shift this month.', 'warn');
+    return;
+  }
+  openModal(body);
+}
+
+/** Stage 55C-2: one plan-step row for alignment preview modal (display only). */
+function geodeRealityPlanAlignmentPreviewRowHtml(row, step, prog) {
+  if (!row) return '';
+  var title = '';
+  try {
+    title = geodePlanPageStepTitle(step, prog);
+  } catch (_eRpaRowT) {
+    title = String(row.stepLabel || '');
+  }
+  if (!title) title = String(row.stepLabel || 'Plan step');
+  var actionLabel = '';
+  if (row.action === 'reduce') actionLabel = 'Reduce';
+  else if (row.action === 'pause') actionLabel = 'Pause this month';
+  else if (row.action === 'keep') actionLabel = 'Keep';
+  else actionLabel = '';
+  var beforeStr = '';
+  var afterStr = '';
+  try {
+    beforeStr = fm(row.beforeAmount);
+    afterStr = fm(row.afterAmount);
+  } catch (_eRpaFm) {
+    beforeStr = String(row.beforeAmount);
+    afterStr = String(row.afterAmount);
+  }
+  var deltaNote = '';
+  if (row.action === 'reduce') {
+    var dMag = Math.abs(toNum(row.beforeAmount) - toNum(row.afterAmount));
+    if (dMag > 0) {
+      try {
+        deltaNote = 'Reduce by ' + fm(dMag);
+      } catch (_eRpaDm) {
+        deltaNote = 'Reduce by ' + dMag;
+      }
+    }
+  }
+  var h = '';
+  h +=
+    '<div style="padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.06)">';
+  h +=
+    '<div style="font-size:13px;font-weight:600;color:var(--tx-1);line-height:1.35;margin-bottom:6px">' +
+    escHtmlLite(title) +
+    '</div>';
+  if (actionLabel) {
+    h +=
+      '<div style="font-size:10px;font-weight:600;color:rgba(189,183,220,0.72);letter-spacing:0.02em;margin-bottom:6px">' +
+      escHtmlLite(actionLabel) +
+      '</div>';
+  }
+  h +=
+    '<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;font-size:15px;font-weight:700;color:var(--tx-1);line-height:1.3">';
+  h += '<span style="white-space:nowrap">' + escHtmlLite(beforeStr) + '</span>';
+  h +=
+    '<span style="font-size:12px;font-weight:600;color:rgba(189,183,220,0.55)">\u2192</span>';
+  h += '<span style="white-space:nowrap;color:#9b7fe8">' + escHtmlLite(afterStr) + '</span>';
+  h += '</div>';
+  if (deltaNote) {
+    h +=
+      '<div style="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.4;margin-top:5px">' +
+      escHtmlLite(deltaNote) +
+      '</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+/** Stage 55C-2: alignment preview modal body (changed steps; no figures strip; Done only). */
+function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
+  if (!preview || !preview.rows || !preview.rows.length) return '';
+  var rows = preview.rows;
+  var plan = null;
+  try {
+    plan = getMonthPlan();
+  } catch (_eRpaGp) {
+    plan = { steps: [] };
+  }
+  var steps = plan && plan.steps ? plan.steps : [];
+  var changed = [];
+  var unchangedCount = 0;
+  var hasProtected = false;
+  var i;
+  for (i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (r.action === 'reduce' || r.action === 'pause') {
+      changed.push(r);
+    } else {
+      unchangedCount++;
+      if (r.lockedReason === 'protected_debt') hasProtected = true;
+    }
+  }
+  if (!changed.length) return '';
+  var showAll = rows.length <= 4;
+  var displayRows = showAll ? rows : changed;
+  var h = mh('How this month could shift');
+  h += '<div style="margin-top:-6px">';
+  for (i = 0; i < displayRows.length; i++) {
+    var row = displayRows[i];
+    var step = steps[row.stepIndex] || { label: row.stepLabel };
+    var prog = null;
+    try {
+      prog = geodePlanStepProgress(S, step);
+    } catch (_eRpaPr) {
+      prog = { phase: row.phase || 'none', suggested: row.beforeAmount, applied: row.appliedAmount, remaining: row.remainingAmount };
+    }
+    h += geodeRealityPlanAlignmentPreviewRowHtml(row, step, prog);
+  }
+  h += '</div>';
+  if (!showAll && unchangedCount > 0) {
+    var sumLine =
+      unchangedCount +
+      (unchangedCount === 1 ? ' earlier step unchanged' : ' earlier steps unchanged');
+    if (hasProtected) sumLine += ' \u00b7 debt priorities protected';
+    h +=
+      '<div style="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.45;padding:10px 0 4px">' +
+      escHtmlLite(sumLine) +
+      '</div>';
+  } else if (showAll && hasProtected) {
+    h +=
+      '<div style="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.45;padding:10px 0 4px">' +
+      escHtmlLite('Debt priorities protected') +
+      '</div>';
+  }
+  if (preview.canFullyClose === false) {
+    var shortfallStr = '';
+    try {
+      shortfallStr = fm(preview.shortfall);
+    } catch (_eRpaSf) {
+      shortfallStr = String(preview.shortfall);
+    }
+    h +=
+      '<div style="font-size:11px;color:rgba(189,183,220,0.72);line-height:1.5;padding:8px 0 4px">' +
+      escHtmlLite(
+        'About ' +
+          shortfallStr +
+          ' would still sit outside these shifts. Debt steps stay as they are.'
+      ) +
+      '</div>';
+  }
+  h +=
+    '<button type="button" class="btn btn-p" style="width:100%;margin-top:14px" onclick="closeModal()">' +
+    escHtmlLite('Done') +
+    '</button>';
+  return h;
 }
 
 // ── END REALITY CHECK ──────────────────────────────────────────────────────
