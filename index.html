@@ -1070,6 +1070,7 @@ function load() {
   }
   geodeNormalizeIncomeTypeFields();
   geodeNormalizeMonthContext(S);
+  geodeNormalizeRealityPlanAlignment(S);
   if (S.beyondAiProvider !== 'anthropic' && S.beyondAiProvider !== 'openai') {
     S.beyondAiProvider = S.beyondApiKey
       ? (String(S.beyondApiKey).trim().indexOf('sk-ant-') === 0 ? 'anthropic' : 'openai')
@@ -12755,6 +12756,12 @@ function geodePlanStepDetailPageHtml(plan, ix) {
   } else if (sug > 0 && prog.phase === 'done') {
     amtShown = fm(step.amount);
   }
+  var _rpaDetCap = '';
+  var _rpaDetDisp = geodePlanStepRealityDisplay(S, step, prog, ix, amtShown, _rpaDetCap);
+  if (_rpaDetDisp) {
+    amtShown = _rpaDetDisp.amtShown;
+    _rpaDetCap = _rpaDetDisp.capShown || '';
+  }
   var statusLb = geodePlanStepStatusDisplayLabel(prog);
   var statusCls = prog.phase === 'done' ? 'pl-status done' : prog.phase === 'partial' ? 'pl-status inp' : 'pl-status';
   var stepY = steps.length;
@@ -12889,6 +12896,12 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     '">' +
     escHtmlLite(amtShown) +
     '</div>';
+  if (_rpaDetCap) {
+    h +=
+      '<div style="font-size:11px;color:var(--tx-3);margin-top:8px;line-height:1.35">' +
+      escHtmlLite(_rpaDetCap) +
+      '</div>';
+  }
   h += '<div class="geode-plan-detail-status"><span class="' + statusCls + '">' + escHtmlLite(statusLb) + '</span></div>';
   h +=
     '<div class="geode-plan-detail-trust">' +
@@ -13494,6 +13507,11 @@ function geodePlanPagePrioritiesStackHtml(plan) {
     } else if (sug > 0 && prog.phase === 'done') {
       amtShown = fm(s.amount);
       capShown = '';
+    }
+    var _rpaDisp = geodePlanStepRealityDisplay(S, s, prog, i, amtShown, capShown);
+    if (_rpaDisp) {
+      amtShown = _rpaDisp.amtShown;
+      capShown = _rpaDisp.capShown;
     }
     var statusLb = geodePlanStepStatusDisplayLabel(prog);
     var statusCls = prog.phase === 'done' ? 'pl-status done' : prog.phase === 'partial' ? 'pl-status inp' : 'pl-status';
@@ -16504,6 +16522,7 @@ function geodeSaveRealityCheckFromPage() {
     toast('Enter a valid amount.', 'warn');
     return;
   }
+  geodeClearRealityPlanAlignment({ silent: true, render: false });
   S.realityCheck = { amount: Number(val), ym: currentYM(), date: Date.now() };
   persistGeodeToLocalStorage();
   render();
@@ -16997,6 +17016,7 @@ function geodeSaveRealityCheck() {
     toast('Enter a valid amount.', 'warn');
     return;
   }
+  geodeClearRealityPlanAlignment({ silent: true, render: false });
   S.realityCheck = { amount: Number(val), ym: currentYM(), date: Date.now() };
   persistGeodeToLocalStorage();
   closeModal();
@@ -17280,8 +17300,249 @@ function geodeBuildRealityPlanAlignmentPreview(state) {
   }
 }
 
+/** Stage 55C-3: drop invalid month-scoped Reality plan alignment from state (no base plan mutation). */
+function geodeNormalizeRealityPlanAlignment(state) {
+  state = state || S;
+  try {
+    var a = state.realityPlanAlignment;
+    if (!a || typeof a !== 'object') {
+      delete state.realityPlanAlignment;
+      return;
+    }
+    if (a.status !== 'approved' || a.version !== 1) {
+      delete state.realityPlanAlignment;
+      return;
+    }
+    if (String(a.ym || '') !== currentYM()) {
+      delete state.realityPlanAlignment;
+      return;
+    }
+    if (!Array.isArray(a.stepAdjustments) || !a.stepAdjustments.length) {
+      delete state.realityPlanAlignment;
+      return;
+    }
+    if (geodeRealityPlanAlignmentIsStale(state, a)) {
+      delete state.realityPlanAlignment;
+    }
+  } catch (_eRpaNorm) {
+    try {
+      delete state.realityPlanAlignment;
+    } catch (_eRpaNorm2) {}
+  }
+}
+
+/** Stage 55C-3: true when approved alignment no longer matches Reality, plan, or step progress. */
+function geodeRealityPlanAlignmentIsStale(state, alignment) {
+  state = state || S;
+  if (!alignment || typeof alignment !== 'object') return true;
+  if (String(alignment.ym || '') !== currentYM()) return true;
+  var rs = null;
+  try {
+    rs = geodeRealityStatus();
+  } catch (_eRpaSt) {
+    rs = { hasData: false };
+  }
+  var curHash = '';
+  try {
+    curHash = geodeRealityPlanAlignmentInputsHash(state, rs);
+  } catch (_eRpaH) {
+    return true;
+  }
+  if (!curHash || curHash !== String(alignment.inputsHash || '')) return true;
+  var plan = null;
+  try {
+    plan = getMonthPlan();
+  } catch (_eRpaGp) {
+    return true;
+  }
+  var curSig = '';
+  try {
+    curSig = geodeRealityPlanAlignmentPlanSignature(plan);
+  } catch (_eRpaSg) {
+    return true;
+  }
+  if (!curSig || curSig !== String(alignment.planSignature || '')) return true;
+  var steps = plan && plan.steps ? plan.steps : [];
+  var adj = alignment.stepAdjustments || [];
+  var ai;
+  for (ai = 0; ai < adj.length; ai++) {
+    var ad = adj[ai];
+    if (!ad) continue;
+    var ix = ad.stepIndex;
+    if (typeof ix !== 'number' || ix < 0 || ix >= steps.length) return true;
+    var step = steps[ix];
+    if (String(ad.stepLabel || '') && String(step.label || '') !== String(ad.stepLabel || '')) return true;
+    var prog = null;
+    try {
+      prog = geodePlanStepProgress(state, step);
+    } catch (_eRpaPr) {
+      return true;
+    }
+    if (prog && prog.phase === 'done') return true;
+  }
+  return false;
+}
+
+/** Stage 55C-3: active approved alignment for current month, or null after normalize/stale clear. */
+function geodeGetActiveRealityPlanAlignment(state) {
+  state = state || S;
+  geodeNormalizeRealityPlanAlignment(state);
+  var a = state.realityPlanAlignment;
+  if (!a || a.status !== 'approved') return null;
+  return a;
+}
+
+/** Stage 55C-3: clear overlay state only (does not change getMonthPlan or money records). */
+function geodeClearRealityPlanAlignment(opts) {
+  opts = opts || {};
+  try {
+    if (S.realityPlanAlignment) delete S.realityPlanAlignment;
+    persistGeodeToLocalStorage();
+    if (opts.revert) {
+      toast('Back to your usual plan.', 'ok');
+    }
+    if (!opts.silent && opts.render !== false) {
+      render();
+    }
+  } catch (_eRpaClr) {}
+}
+
+/** Stage 55C-3: user revert from Plan banner. */
+function geodeRevertRealityPlanAlignment() {
+  geodeClearRealityPlanAlignment({ revert: true, silent: false });
+}
+
+/** Stage 55C-3: persist approved preview snapshot (reduce/pause rows only). */
+function geodeApproveRealityPlanAlignmentFromPreview() {
+  var preview = null;
+  try {
+    preview = geodeBuildRealityPlanAlignmentPreview(S);
+  } catch (_eRpaAp) {
+    toast('Nothing to apply this month.', 'warn');
+    return;
+  }
+  if (!preview || !preview.rows || !preview.rows.length) {
+    toast('Nothing to apply this month.', 'warn');
+    return;
+  }
+  var stepAdjustments = [];
+  var ri;
+  for (ri = 0; ri < preview.rows.length; ri++) {
+    var row = preview.rows[ri];
+    if (!row || (row.action !== 'reduce' && row.action !== 'pause')) continue;
+    stepAdjustments.push({
+      stepIndex: row.stepIndex,
+      action: row.action,
+      baselineAmount: toNum(row.beforeAmount),
+      displayAmount: toNum(row.afterAmount),
+      appliedAmountAtApproval: toNum(row.appliedAmount),
+      stepLabel: String(row.stepLabel || '')
+    });
+  }
+  if (!stepAdjustments.length) {
+    toast('Nothing flexible to shift this month.', 'warn');
+    return;
+  }
+  S.realityPlanAlignment = {
+    version: 1,
+    ym: currentYM(),
+    status: 'approved',
+    approvedAt: Date.now(),
+    source: 'reality_preview',
+    inputsHash: String(preview.inputsHash || ''),
+    planSignature: String(preview.planSignature || ''),
+    stepAdjustments: stepAdjustments
+  };
+  persistGeodeToLocalStorage();
+  closeModal();
+  render();
+  toast('This month\u2019s plan view updated.', 'ok');
+}
+
+/** Stage 55C-3: lookup one approved step adjustment (display overlay only). */
+function geodeGetRealityPlanStepAdjustment(state, stepIndex, stepLabel) {
+  var a = geodeGetActiveRealityPlanAlignment(state);
+  if (!a || !a.stepAdjustments) return null;
+  var list = a.stepAdjustments;
+  var i;
+  for (i = 0; i < list.length; i++) {
+    if (list[i] && list[i].stepIndex === stepIndex) return list[i];
+  }
+  return null;
+}
+
+/** Stage 55C-3: Plan stack/detail display overlay for approved Reality shift (no plan math change). */
+function geodePlanStepRealityDisplay(state, step, prog, stepIndex, existingAmount, existingCaption) {
+  var adj = geodeGetRealityPlanStepAdjustment(state, stepIndex, step && step.label);
+  if (!adj) {
+    return { amtShown: existingAmount, capShown: existingCaption || '' };
+  }
+  var baselineStr = '';
+  var displayStr = '';
+  try {
+    baselineStr = fm(adj.baselineAmount);
+    displayStr = fm(adj.displayAmount);
+  } catch (_eRpaFd) {
+    baselineStr = String(adj.baselineAmount);
+    displayStr = String(adj.displayAmount);
+  }
+  var applied = prog ? toNum(prog.applied) : toNum(adj.appliedAmountAtApproval);
+  var capShown = '';
+  var amtShown = existingAmount;
+  if (adj.action === 'pause') {
+    amtShown = 'Paused this month';
+    capShown = 'Usual step ' + baselineStr;
+    if (applied > 0) {
+      capShown =
+        fm(applied) + ' marked complete \u00b7 ' + capShown;
+    }
+  } else if (adj.action === 'reduce') {
+    amtShown = displayStr;
+    capShown = 'Was ' + baselineStr + ' \u00b7 from Reality';
+    if (applied > 0) {
+      try {
+        var leftOn = Math.max(0, toNum(adj.displayAmount) - applied);
+        amtShown = fm(leftOn);
+        capShown =
+          fm(applied) +
+          ' marked complete, ' +
+          fm(leftOn) +
+          ' left on this step \u00b7 Was ' +
+          baselineStr +
+          ' \u00b7 from Reality';
+      } catch (_eRpaPc) {
+        capShown = fm(applied) + ' marked complete \u00b7 ' + capShown;
+      }
+    }
+  }
+  return { amtShown: amtShown, capShown: capShown };
+}
+
+/** Stage 55C-3: slim Plan banner when following approved Reality shift. */
+function geodeRealityPlanAlignmentPlanBannerHtml() {
+  if (!geodeGetActiveRealityPlanAlignment(S)) return '';
+  var h = '';
+  h +=
+    '<div style="margin:0 0 14px;padding:10px 12px;border-radius:11px;border:1px solid rgba(155,127,232,0.22);background:rgba(155,127,232,0.06)">';
+  h +=
+    '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:4px;opacity:0.85">' +
+    escHtmlLite('This month') +
+    '</div>';
+  h +=
+    '<div style="font-size:12px;font-weight:600;color:var(--tx-1);line-height:1.4;margin-bottom:8px">' +
+    escHtmlLite('Following your Reality shift') +
+    '</div>';
+  h +=
+    '<button type="button" class="btn btn-s" style="width:100%" onclick="geodeRevertRealityPlanAlignment()">' +
+    escHtmlLite('Use your usual plan this month') +
+    '</button>';
+  h += '</div>';
+  return h;
+}
+
 /** Stage 55C-2: compact Reality offer when alignment preview is available (read-only; no persist). */
 function geodeRealityPlanAlignmentOfferHtml() {
+  if (geodeGetActiveRealityPlanAlignment(S)) return '';
   var preview = null;
   try {
     preview = geodeBuildRealityPlanAlignmentPreview(S);
@@ -17467,10 +17728,16 @@ function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
       ) +
       '</div>';
   }
+  h += '<div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">';
   h +=
-    '<button type="button" class="btn btn-p" style="width:100%;margin-top:14px" onclick="closeModal()">' +
-    escHtmlLite('Done') +
+    '<button type="button" class="btn btn-p" style="width:100%" onclick="geodeApproveRealityPlanAlignmentFromPreview()">' +
+    escHtmlLite('Use this month\u2019s shift') +
     '</button>';
+  h +=
+    '<button type="button" class="btn btn-s" style="width:100%" onclick="closeModal()">' +
+    escHtmlLite('Not now') +
+    '</button>';
+  h += '</div>';
   return h;
 }
 
@@ -18827,6 +19094,8 @@ function rPlan() {
       escHtmlLite('Compare today\u2019s position with this month\u2019s plan.') +
       '</div>' +
       '</div>';
+
+    h += geodeRealityPlanAlignmentPlanBannerHtml();
 
     var _planLeftover = calcMonthlyLeftover(S);
     if (_planLeftover >= 0) {
@@ -22974,7 +23243,8 @@ function geodeBeyndBackupRestorableKeyWhitelist() {
     '_schemaVersion',
     'ignoredMerchants',
     'reductionPlan',
-    'planCommitted'
+    'planCommitted',
+    'realityPlanAlignment'
   ];
 }
 
