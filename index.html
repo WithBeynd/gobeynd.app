@@ -20618,10 +20618,10 @@ function rHome() {
       h += '<div style="font-size:16px;font-weight:800;color:#f07070">−' + escHtmlLite(fm(_homeOver)) + '</div>';
       h += '</div>';
       h += '<div style="font-size:11px;color:rgba(237,234,255,0.8);line-height:1.5;margin-bottom:10px">' +
-        escHtmlLite('Your spending exceeds income by ' + fm(_homeOver) + ' this month. The plan shows exactly what to reduce.') +
+        escHtmlLite('Your spending exceeds income by ' + fm(_homeOver) + ' this month. Review where this month is under pressure.') +
         '</div>';
       h += '<button type="button" class="btn btn-p" style="width:100%;font-size:12px;padding:10px" onclick="goTab(\'plan\')">' +
-        'See what to reduce \u2192</button>';
+        'Review this month \u2192</button>';
       h += '</div>';
     }
   } catch (_eOb) {}
@@ -20958,6 +20958,17 @@ function rPlan() {
       return;
     }
     if (!plan.steps.length) {
+      var _planLeftOb = calcMonthlyLeftover(S);
+      if (_planLeftOb < 0) {
+        h += geodePlanPageStatusSectionHtml(true);
+        h += geodePlanPageStyleSectionHtml();
+        h += geodeOverBudgetPlanBlockHtml(_planLeftOb);
+        h += geodePlanPageHowPlanWorksSectionHtml();
+        h += geodePlanPageAlignmentSectionHtml();
+        h += '</div>';
+        c.innerHTML = h;
+        return;
+      }
       h += geodePlanPageStatusSectionHtml();
       h += geodePlanPageStyleSectionHtml();
       h +=
