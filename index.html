@@ -16495,12 +16495,12 @@ function geodeRealityMonthContextExpand() {
 
 function geodeRealityMonthContextCompactSummary(mc) {
   if (!mc || !mc.hasAny) {
-    return 'Add what you want to protect, watch, or keep steady.';
+    return 'Add what to keep in mind, watch, or aim for this month.';
   }
   if (mc.protect) {
     var s = String(mc.protect);
     if (s.length > 52) s = s.slice(0, 49) + '\u2026';
-    return 'Protecting: ' + s;
+    return 'In mind: ' + s;
   }
   return 'Month context saved';
 }
@@ -16552,7 +16552,7 @@ function geodeRealityHumanMomentMonthContextOverlay(body, postureObj, state, rs,
   var hasDiff = diff != null && isFinite(diff);
   var tighter = (hasDiff && diff < -50) || (rs && rs.status === 'overstated');
   if (mc.protect && (p === 'protect_flexibility' || p === 'review_first' || tone === 'cautious')) {
-    return 'Keep some room for what you are protecting this month.';
+    return 'You shared what matters this month — keep flexibility before adding more.';
   }
   if (mc.worried && tighter) {
     return 'Since this month already has a concern, keeping flexibility may help.';
@@ -16965,6 +16965,8 @@ function geodeRealityMonthContextExpandedFormHtml(mc) {
     '<label style="font-size:11px;font-weight:500;color:var(--tx-3);display:block;margin-bottom:6px">' +
     escHtmlLite('Protect') +
     '</label>';
+  h +=
+    '<div style="font-size:9px;color:rgba(189,183,220,0.52);line-height:1.4;margin:-4px 0 8px">What matters to you — coaching tone only, not a reserve.</div>';
   h +=
     '<input type="text" id="mc_protect" class="fi" value="' +
     escHtmlLite(mc.protect) +
@@ -17669,7 +17671,7 @@ function geodeRealityPlanAlignmentOfferHtml() {
     '</div>';
   h +=
     '<div style="font-size:11px;color:rgba(189,183,220,0.72);line-height:1.45;margin-bottom:10px">' +
-    escHtmlLite('Your plan steps, before and after.') +
+    escHtmlLite('Your plan steps, before and after. Debt-focused steps stay in place in this preview.') +
     '</div>';
   h +=
     '<button type="button" class="btn btn-s" style="width:100%" onclick="geodeOpenRealityPlanAlignmentPreview()">' +
@@ -17727,6 +17729,7 @@ function geodeRealityPlanAlignmentPreviewRowHtml(row, step, prog) {
   var actionLabel = '';
   if (row.action === 'reduce') actionLabel = 'Reduce';
   else if (row.action === 'pause') actionLabel = 'Pause this month';
+  else if (row.action === 'keep' && row.lockedReason === 'protected_debt') actionLabel = 'Debt step stays in preview';
   else if (row.action === 'keep') actionLabel = 'Keep';
   else actionLabel = '';
   var beforeStr = '';
@@ -17824,7 +17827,7 @@ function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
     var sumLine =
       unchangedCount +
       (unchangedCount === 1 ? ' earlier step unchanged' : ' earlier steps unchanged');
-    if (hasProtected) sumLine += ' \u00b7 Protected priorities stay as they are';
+    if (hasProtected) sumLine += ' \u00b7 Debt-focused steps stay unchanged in this preview';
     h +=
       '<div style="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.45;padding:10px 0 4px">' +
       escHtmlLite(sumLine) +
@@ -17832,7 +17835,7 @@ function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
   } else if (showAll && hasProtected) {
     h +=
       '<div style="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.45;padding:10px 0 4px">' +
-      escHtmlLite('Protected priorities stay as they are') +
+      escHtmlLite('Debt-focused steps stay unchanged in this preview.') +
       '</div>';
   }
   if (preview.canFullyClose === false) {
@@ -17847,7 +17850,7 @@ function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
       escHtmlLite(
         'About ' +
           shortfallStr +
-          ' would still sit outside these shifts. Protected priorities stay as they are.'
+          ' would still sit outside these shifts. Debt-focused steps stay unchanged in this preview.'
       ) +
       '</div>';
   }
@@ -18014,7 +18017,7 @@ function geodeOverdueCardHtml() {
 // ── ASK BEYND — conversational AI coach ──────────────────────────────────────
 
 function geodeContextPostureLabel(posture) {
-  if (posture === 'protect_flexibility') return 'protect flexibility';
+  if (posture === 'protect_flexibility') return 'keep flexibility (coaching posture)';
   if (posture === 'review_first') return 'review first';
   if (posture === 'steady_progress') return 'steady progress';
   if (posture === 'growth_room') return 'growth room';
@@ -18213,8 +18216,8 @@ function geodeFormatAskBeyndPaoContextBlock(pao, rs) {
 function geodeFormatAskBeyndMonthContextBlock(state) {
   var mc = geodeGetMonthContext(state);
   if (!mc.hasAny) return '';
-  var lines = [];
-  if (mc.protect) lines.push('Protecting: ' + mc.protect);
+  var lines = ['Coaching tone only — does not change plan numbers or reserves.'];
+  if (mc.protect) lines.push('Keeps in mind: ' + mc.protect);
   if (mc.worried) lines.push('Worried about: ' + mc.worried);
   if (mc.success) lines.push('Success this month: ' + mc.success);
   return lines.join('\n');
