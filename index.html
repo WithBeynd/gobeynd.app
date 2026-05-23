@@ -9402,6 +9402,394 @@ function geodeHomeSoftPriorityContext(state) {
   };
 }
 
+/**
+ * Read-only orchestration snapshot (Stage 57A/57C). Instrumentation only — does not mutate state,
+ * affect plan math, or change render output. Callers may inspect load, focus, deferrals, and disclosure.
+ */
+function geodeOrchestrationSnapshot(state) {
+  state = state || S;
+  var snap = {
+    version: 1,
+    homeBand: 'open',
+    userLoad: 'low',
+    decisionMode: 'none',
+    primaryFocus: { type: 'none', label: '' },
+    deferredItems: [],
+    disclosureNeeded: [],
+    askBeyndMode: 'neutral',
+    askBeyndModifiers: [],
+    reasonCodes: []
+  };
+
+  function pushReason(code) {
+    if (!code || snap.reasonCodes.indexOf(code) >= 0) return;
+    snap.reasonCodes.push(code);
+  }
+
+  function pushModifier(code) {
+    if (!code || snap.askBeyndModifiers.indexOf(code) >= 0) return;
+    snap.askBeyndModifiers.push(code);
+  }
+
+  function pushDeferred(item) {
+    if (!item || !item.kind) return;
+    snap.deferredItems.push(item);
+  }
+
+  function pushDisclosure(code, surface, copy) {
+    if (!code || !copy) return;
+    snap.disclosureNeeded.push({ code: code, surface: surface || 'home', copy: copy });
+  }
+
+  var softPri = null;
+  try {
+    softPri = geodeHomeSoftPriorityContext(state);
+    snap.homeBand = softPri.band || 'open';
+  } catch (_eSpSnap) {
+    softPri = null;
+  }
+
+  if (snap.homeBand === 'critical') pushReason('home_band_critical');
+  else if (snap.homeBand === 'focused') pushReason('home_band_focused');
+
+  var pao = null;
+  try {
+    pao = assessPressure(state);
+  } catch (_ePaoSnap) {
+    pao = null;
+  }
+
+  if (pao) {
+    if (pao.band === 'critical') pushReason('pao_band_critical');
+    else if (pao.band === 'pinched') pushReason('pao_band_pinched');
+    if (pao.dimensions && pao.dimensions.humanLoad && pao.dimensions.humanLoad.level === 'high') {
+      pushReason('human_load_high');
+    }
+    if (pao.outputs && pao.outputs.askBeyndStabilityFirst) pushReason('ask_beynd_stability_first');
+  }
+
+  var left = 0;
+  try {
+    left = calcMonthlyLeftover(state);
+  } catch (_eLeftSnap) {
+    left = 0;
+  }
+  if (left < 0) pushReason('cash_leftover_negative');
+
+  var hasOverdue = false;
+  try {
+    hasOverdue = !!geodeHasOverdue(state);
+  } catch (_eOdSnap) {
+    hasOverdue = false;
+  }
+  if (hasOverdue) pushReason('obligation_overdue');
+
+  try {
+    if (window._geodeAffordGatePending) {
+      snap.decisionMode = 'scheduling';
+      pushReason('afford_gate_pending');
+    }
+  } catch (_eGateSnap) {}
+
+  if (snap.decisionMode === 'none') {
+    try {
+      if (geodeGetActiveRealityPlanAlignment(state)) {
+        snap.decisionMode = 'aligning';
+        pushReason('alignment_active');
+      }
+    } catch (_eAlignSnap) {}
+  }
+
+  if (snap.decisionMode === 'none') {
+    var reviewFirst = false;
+    try {
+      var poRev = geodeGetContextPosture(state);
+      reviewFirst = !!(poRev && poRev.posture === 'review_first');
+    } catch (_ePoRev) {}
+    var gapReview = false;
+    try {
+      var rsRev = geodeRealityStatus();
+      if (
+        rsRev &&
+        rsRev.hasData &&
+        typeof rsRev.gap === 'number' &&
+        rsRev.gap < -50 &&
+        !geodeGetActiveRealityPlanAlignment(state)
+      ) {
+        gapReview = true;
+        pushReason('reality_gap');
+      }
+    } catch (_eRsRev) {}
+    var feelReview = false;
+    try {
+      var feel = geodeGetRealityFeeling() || '';
+      feelReview = feel === 'unsure' || feel === 'slow';
+      if (feelReview) pushReason('human_feeling_cautious');
+    } catch (_eFeelRev) {}
+    if (reviewFirst || gapReview || feelReview) {
+      snap.decisionMode = 'review';
+      if (reviewFirst) pushReason('posture_review_first');
+    }
+  }
+
+  var loadRank = { low: 0, moderate: 1, high: 2, critical: 3 };
+  var resolvedLoad = 'low';
+
+  if (snap.homeBand === 'critical') resolvedLoad = 'critical';
+  else if (pao && pao.band === 'critical') resolvedLoad = 'critical';
+
+  if (loadRank[resolvedLoad] < loadRank.critical) {
+    if (
+      snap.homeBand === 'focused' ||
+      left < 0 ||
+      (pao && pao.band === 'pinched') ||
+      (pao && pao.dimensions && pao.dimensions.humanLoad && pao.dimensions.humanLoad.level === 'high') ||
+      snap.decisionMode === 'scheduling' ||
+      snap.decisionMode === 'aligning'
+    ) {
+      resolvedLoad = 'high';
+    }
+  }
+
+  if (loadRank[resolvedLoad] < loadRank.high) {
+    var moderateSignal = false;
+    if (pao && pao.recovery && pao.recovery.phase === 'emerging') moderateSignal = true;
+    if (state.incomeType === 'irregular') moderateSignal = true;
+    if (state.hasDependants) moderateSignal = true;
+    if (pao && pao.band === 'narrow') moderateSignal = true;
+    if (pao && pao.dimensions && pao.dimensions.humanLoad && pao.dimensions.humanLoad.level === 'moderate') {
+      moderateSignal = true;
+    }
+    try {
+      var mcMod = geodeGetMonthContext(state);
+      if (mcMod && mcMod.worried) moderateSignal = true;
+    } catch (_eMcMod) {}
+    if (snap.decisionMode === 'review') moderateSignal = true;
+    if (moderateSignal) resolvedLoad = 'moderate';
+  }
+
+  snap.userLoad = resolvedLoad;
+
+  if (geodeIsEmptyState()) {
+    snap.primaryFocus = { type: 'setup', label: 'Start setup' };
+    pushReason('empty_state');
+  } else {
+    try {
+      if (geodeGetIncomeContext(state) === 'NONE') {
+        snap.primaryFocus = { type: 'setup', label: 'Set income' };
+        pushReason('income_none');
+      } else if (softPri && (softPri.needsAttentionVisible || softPri.mainActionOverdue || softPri.hasOverdue)) {
+        snap.primaryFocus = { type: 'overdue', label: 'Clear overdue items first' };
+      } else if (
+        left < 0 &&
+        state.hasOnboarded &&
+        geodeHasMeaningfulMonthlyExpenses(state)
+      ) {
+        snap.primaryFocus = { type: 'over_budget', label: 'Over budget' };
+      } else {
+        var maSnap = geodeGetMainAction(state) || {};
+        var maLabel = maSnap.title ? String(maSnap.title) : '';
+        var planStepSnap = null;
+        try {
+          planStepSnap = geodeHomeResolvedPlanStepForDedup(state);
+        } catch (_ePsSnap) {
+          planStepSnap = null;
+        }
+        if (planStepSnap && planStepSnap.label) {
+          snap.primaryFocus = { type: 'plan', label: String(planStepSnap.label) };
+        } else if (maLabel) {
+          snap.primaryFocus = { type: 'main_action', label: maLabel };
+        }
+      }
+    } catch (_ePfSnap) {}
+  }
+
+  var subsDueSnap = [];
+  try {
+    subsDueSnap = geodeSubsDueSoon(7);
+  } catch (_eSubSnap) {
+    subsDueSnap = [];
+  }
+  var subsDueVisible = subsDueSnap.length > 0;
+
+  if (snap.homeBand === 'critical' && subsDueVisible) {
+    var subId = subsDueSnap[0] && subsDueSnap[0].id != null ? String(subsDueSnap[0].id) : '';
+    pushDeferred({
+      kind: 'subscription',
+      id: subId,
+      reason: 'home_band_critical',
+      resurfaceAfter: 'band_below_critical'
+    });
+    pushReason('subscription_card_deferred');
+    pushDisclosure(
+      'defer_subscription',
+      'home_main_action',
+      'Subscription renewal can wait until overdue items are cleared.'
+    );
+  }
+
+  if (softPri && softPri.contribReviewNeeded && snap.homeBand === 'critical') {
+    pushDeferred({
+      kind: 'contribution',
+      id: '',
+      reason: 'home_band_critical',
+      resurfaceAfter: 'band_below_critical'
+    });
+    pushReason('contribution_reminder_deferred');
+    pushDisclosure(
+      'defer_contribution',
+      'home_main_action',
+      'Mark contributions complete in Money if they\u2019ve been paid.'
+    );
+  }
+
+  if (snap.homeBand === 'critical') {
+    pushDeferred({
+      kind: 'insight_strip',
+      id: '',
+      reason: 'home_band_critical',
+      resurfaceAfter: 'band_below_critical'
+    });
+    pushReason('insight_strip_suppressed');
+  }
+
+  var hmSnap = null;
+  try {
+    hmSnap = geodePickHumanMoment(state);
+  } catch (_eHmSnap) {
+    hmSnap = null;
+  }
+  if (!hmSnap && geodeHumanMomentShouldSuppress(geodeHumanMomentSuppressionContext(state), state)) {
+    pushDeferred({
+      kind: 'human_moment',
+      id: '',
+      reason: 'competing_home_priority',
+      resurfaceAfter: 'load_below_high'
+    });
+    pushReason('human_moment_suppressed');
+  }
+
+  if (pao && pao.outputs && pao.outputs.suppressTopics && pao.outputs.suppressTopics.length) {
+    var sti;
+    for (sti = 0; sti < pao.outputs.suppressTopics.length; sti++) {
+      pushDeferred({
+        kind: 'insight_topic',
+        id: String(pao.outputs.suppressTopics[sti] || ''),
+        reason: 'pao_topic_suppress',
+        resurfaceAfter: 'pao_band_open'
+      });
+    }
+    pushReason('insight_topics_suppressed');
+  }
+
+  if (snap.homeBand === 'focused') {
+    var stripWouldShow = false;
+    try {
+      stripWouldShow = !!geodeHomePeekWouldShowInsightStrip();
+    } catch (_ePeekSnap) {
+      stripWouldShow = false;
+    }
+    if (!stripWouldShow && !hmSnap) {
+      pushDisclosure(
+        'home_focused_quiet',
+        'home_strip',
+        'Keeping Home focused on what needs you first.'
+      );
+    }
+  }
+
+  var famSnap = ['debt', 'goal', 'invest', 'buffer'];
+  var fi;
+  for (fi = 0; fi < famSnap.length; fi++) {
+    var famMode = 'full';
+    try {
+      famMode = getAdaptiveDisplayModeForFamily(famSnap[fi]);
+    } catch (_eAdSnap) {
+      famMode = 'full';
+    }
+    if (famMode !== 'full') {
+      pushReason('adaptive_display_' + famMode);
+      pushDisclosure(
+        'adaptive_lighter_step',
+        'suggested_action',
+        'Showing a lighter step; full suggestion is on Plan.'
+      );
+      break;
+    }
+  }
+
+  if (snap.decisionMode === 'scheduling') {
+    snap.askBeyndMode = 'pressure_test';
+  } else {
+    var feelAsk = '';
+    try {
+      feelAsk = geodeGetRealityFeeling() || '';
+    } catch (_eFeelAsk) {}
+    var feelUnsureOrSlow = feelAsk === 'unsure' || feelAsk === 'slow';
+
+    var materialGap = snap.reasonCodes.indexOf('reality_gap') >= 0;
+    var staleReality = false;
+    try {
+      var rsAsk = geodeRealityStatus();
+      if (!rsAsk || !rsAsk.hasData) {
+        staleReality = true;
+      } else {
+        if (rsAsk.confidence === 'low') staleReality = true;
+        if (typeof rsAsk.daysOld === 'number' && rsAsk.daysOld > 3) staleReality = true;
+        if (rsAsk.activitySinceCheck) staleReality = true;
+      }
+    } catch (_eRsAsk) {}
+
+    var afterActionSnap = false;
+    try {
+      afterActionSnap = !!window._geodeOverdueCleared;
+    } catch (_eAaSnap2) {}
+
+    var thinPlanSnap = false;
+    try {
+      if (geodeIsEmptyState() || geodeGetIncomeContext(state) === 'NONE') {
+        thinPlanSnap = true;
+      } else if (geodeHasPlanContext()) {
+        var planThin = getMonthPlan();
+        thinPlanSnap = !(planThin && planThin.steps && planThin.steps.length);
+      } else {
+        thinPlanSnap = true;
+      }
+    } catch (_eThinSnap) {
+      thinPlanSnap = snap.primaryFocus.type === 'setup';
+    }
+
+    var primaryMode = 'neutral';
+    if (afterActionSnap) {
+      primaryMode = 'after_action';
+    } else if (snap.decisionMode === 'aligning' || materialGap) {
+      primaryMode = 'reality_mismatch';
+    } else if (snap.decisionMode === 'review' && (feelUnsureOrSlow || staleReality)) {
+      primaryMode = 'still_deciding';
+    } else if (snap.primaryFocus.type === 'setup' || thinPlanSnap) {
+      primaryMode = 'explain_plan';
+    } else if (snap.userLoad === 'critical' || snap.userLoad === 'high') {
+      primaryMode = 'second_opinion';
+    }
+    snap.askBeyndMode = primaryMode;
+  }
+
+  if (pao && pao.outputs && pao.outputs.askBeyndStabilityFirst) {
+    pushModifier('stability_first');
+  }
+  if (snap.userLoad === 'critical') {
+    pushModifier('stability_first');
+  }
+  try {
+    var mcAskMod = geodeGetMonthContext(state);
+    if (mcAskMod && (mcAskMod.protect || mcAskMod.worried)) {
+      pushModifier('protect_priority');
+    }
+  } catch (_eMcAskMod) {}
+
+  return snap;
+}
+
 /** One muted deferral line under Main Action (display-only; Stage 49C). */
 function geodeHomeSoftDeferLineHtml(text, onClickJs) {
   var oc = onClickJs
@@ -10713,6 +11101,8 @@ function geodePaoMaybeLogShadowDisagreements(state, pao) {
     window.geodeAssessPressure = assessPressure;
     window.geodePaoShadowDisagreements = geodePaoShadowDisagreements;
     window.geodePaoPRESSURE_THRESHOLDS = PAO_PRESSURE_THRESHOLDS;
+    window.geodeOrchestrationSnapshot = geodeOrchestrationSnapshot;
+    window.geodeGetAskBeyndUiCopy = geodeGetAskBeyndUiCopy;
   } catch (_eEx) {}
 })();
 
@@ -18508,22 +18898,150 @@ function geodeOpenAskBeyndApiKeySetup() {
   if (!geodeReplaceMoPanelHtml(html)) geodeOpenApiKeyModal();
 }
 
+/** Read-only Ask Beynd modal copy from orchestration snapshot (Stage 57D). Does not mutate state. */
+function geodeGetAskBeyndUiCopyNeutralFallback() {
+  return {
+    intro: 'I\u2019m ready when you are. Ask about your plan, money, or next move.',
+    subIntro: 'Choose a prompt or type your own question.',
+    starters: [
+      'How should I prioritise this month?',
+      'Am I on track?',
+      'What\u2019s costing me the most in interest?',
+      'What does my plan suggest this month?'
+    ],
+    mode: 'neutral'
+  };
+}
+
+function geodeGetAskBeyndProtectModifierStarter(state) {
+  try {
+    var mc = geodeGetMonthContext(state);
+    if (mc && mc.worried && !mc.protect) {
+      return 'What\u2019s worth not rushing right now?';
+    }
+  } catch (_eProtSt) {}
+  return 'What should I keep in mind this month?';
+}
+
+function geodeGetAskBeyndUiCopy(state) {
+  state = state || S;
+  var fallback = geodeGetAskBeyndUiCopyNeutralFallback();
+  var snap = null;
+  try {
+    snap = geodeOrchestrationSnapshot(state);
+  } catch (_eSnapUi) {
+    return fallback;
+  }
+  if (!snap || typeof snap !== 'object') return fallback;
+
+  var mode = snap.askBeyndMode || 'neutral';
+  var mods = snap.askBeyndModifiers || [];
+  var hasProtect = mods.indexOf('protect_priority') >= 0;
+  var hasStability = mods.indexOf('stability_first') >= 0;
+
+  var introByMode = {
+    neutral: 'I\u2019m ready when you are. Ask about your plan, money, or next move.',
+    second_opinion: 'If you want to think it through before acting, ask here.',
+    pressure_test: 'Want to sense-check this move before you schedule it?',
+    reality_mismatch:
+      'Your plan and balance check tell slightly different stories. I can help you think through that.',
+    still_deciding: 'No rush. I can help you sort the next useful step.',
+    explain_plan: 'I can walk through what your plan is suggesting and why.',
+    after_action: 'You\u2019ve made progress. Ask if you want help choosing what\u2019s next.'
+  };
+
+  var startersByMode = {
+    neutral: [
+      'How should I prioritise this month?',
+      'Am I on track?',
+      'What\u2019s costing me the most in interest?',
+      'What does my plan suggest this month?'
+    ],
+    second_opinion: [
+      'What needs me first this month?',
+      'What can safely wait?',
+      'Talk me through my plan\u2019s first step.'
+    ],
+    pressure_test: [
+      'What would make this payment feel safer?',
+      'What trade-offs should I consider?',
+      'What does my plan assume I still have room for?'
+    ],
+    reality_mismatch: [
+      'Help me understand this gap.',
+      'What might have changed since my balance check?',
+      'Should I adjust anything, or just watch for now?'
+    ],
+    still_deciding: [
+      'What would help me decide?',
+      'What\u2019s the smallest useful next step?',
+      'What should I check before I act?'
+    ],
+    explain_plan: [
+      'Walk me through this month\u2019s plan.',
+      'What does my plan suggest first?',
+      'Why is this the next step?'
+    ],
+    after_action: [
+      'What should I watch for next?',
+      'What\u2019s a sensible next move from here?',
+      'How should I keep this momentum?'
+    ]
+  };
+
+  var intro = introByMode[mode] || introByMode.neutral;
+  var subIntro = 'Choose a prompt or type your own question.';
+  var starters = (startersByMode[mode] || startersByMode.neutral).slice();
+
+  if (hasStability) {
+    starters = starters.filter(function (q) {
+      var n = String(q || '').toLowerCase();
+      if (n.indexOf('invest') >= 0) return false;
+      if (n.indexOf('growth') >= 0) return false;
+      if (n.indexOf('opportunity') >= 0) return false;
+      if (n.indexOf('interest') >= 0) return false;
+      if (n.indexOf('savings') >= 0) return false;
+      return true;
+    });
+    if (starters.length < 3) {
+      starters = startersByMode.second_opinion.slice();
+    }
+    if (snap.userLoad === 'critical' || snap.userLoad === 'high') {
+      starters = starters.slice(0, 3);
+    }
+  }
+
+  if (hasProtect && starters.length) {
+    starters[starters.length - 1] = geodeGetAskBeyndProtectModifierStarter(state);
+  }
+
+  if (starters.length > 4) starters = starters.slice(0, 4);
+  if (!starters.length) starters = fallback.starters.slice();
+
+  return {
+    intro: intro,
+    subIntro: subIntro,
+    starters: starters,
+    mode: mode
+  };
+}
+
 function geodeOpenAskBeynd() {
   _beynd_chat_history = [];
+  var uiCopy = geodeGetAskBeyndUiCopy(S);
   var h = mh('Ask Beynd');
   h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.45;margin:-4px 0 10px">Ask from your plan and the picture you have built in Beynd. Bank connection is not live yet.</div>';
   h += '<div class="beynd-ask-sheet">';
   h += '<div id="beynd-chat-messages" class="beynd-ask-messages">';
   h +=
     '<div class="geode-bubble-in" style="align-self:flex-start;background:var(--bg-raised);border-radius:12px 12px 12px 3px;padding:9px 12px;font-size:13px;color:var(--tx-1);max-width:88%;line-height:1.55">' +
-    escHtmlLite('I\u2019m ready when you are. Ask about your plan, money, or next move.') +
+    escHtmlLite(uiCopy.intro) +
     '<div style="margin-top:7px;font-size:12px;color:var(--tx-3)">' +
-    escHtmlLite('Choose a prompt or type your own question.') +
+    escHtmlLite(uiCopy.subIntro) +
     '</div></div>';
   h += '</div>';
   h += '<div id="beynd-starters" class="beynd-ask-starters">';
-  var starters = ['How should I prioritise this month?','Am I on track?','What\u2019s costing me the most in interest?','What does my plan suggest for savings this month?'];
-  starters.forEach(function(q) {
+  uiCopy.starters.forEach(function(q) {
     h += '<button type="button" class="btn-sm" style="font-size:10px" onclick=\'geodeAskBeynd(' + JSON.stringify(q) + ')\'>' + escHtmlLite(q) + '</button>';
   });
   h += '</div>';
