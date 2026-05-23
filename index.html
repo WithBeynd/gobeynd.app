@@ -10913,7 +10913,8 @@ function geodeHomeHumanMomentStripHtml(hm) {
   return h;
 }
 
-function geodeHomeCoachingStripHtml() {
+/** Legacy Home coaching strip: Human Moment wins, else Insight (Stage 60D.2 fallback). */
+function geodeHomeCoachingStripLegacyHtml() {
   var hm = null;
   try {
     hm = geodePickHumanMoment(S);
@@ -10925,6 +10926,70 @@ function geodeHomeCoachingStripHtml() {
     return geodeHomeHumanMomentStripHtml(hm);
   }
   return renderInsights();
+}
+
+/** Blank coaching strip when resolver lane is safely empty (pre-combine early exits only). */
+function geodeHomeCoachingStripSafeBlankHtml() {
+  S._pendingLastShownHighlightTopics = [];
+  return '';
+}
+
+/** True when show:false matches renderInsights paths that return before combineHighlightsNudges. */
+function geodeHomeCoachingStripCanSafelySkip(resolvedStrip) {
+  if (!resolvedStrip || resolvedStrip.show !== false) return false;
+  if (resolvedStrip.reason === 'home_band_critical') return true;
+  if (geodeIsEmptyState()) return true;
+  if (geodeGetIncomeContext(S) === 'NONE') return true;
+  if (geodeGetIncomeContext(S) !== 'NONE' && !geodeHasMeaningfulMonthlyExpenses(S)) return true;
+  return false;
+}
+
+function geodeHomeCoachingStripHtml() {
+  var _orchStrip = null;
+  try {
+    var _homeOrchResolve = window._geodeHomeOrchestrationResolve;
+    if (
+      _homeOrchResolve &&
+      _homeOrchResolve.surfaces &&
+      _homeOrchResolve.surfaces.coachingStrip &&
+      typeof _homeOrchResolve.surfaces.coachingStrip.show === 'boolean'
+    ) {
+      _orchStrip = _homeOrchResolve.surfaces.coachingStrip;
+    }
+  } catch (_eOrchStrip) {
+    _orchStrip = null;
+  }
+
+  if (!_orchStrip) {
+    return geodeHomeCoachingStripLegacyHtml();
+  }
+
+  if (_orchStrip.show === false) {
+    if (geodeHomeCoachingStripCanSafelySkip(_orchStrip)) {
+      return geodeHomeCoachingStripSafeBlankHtml();
+    }
+    return geodeHomeCoachingStripLegacyHtml();
+  }
+
+  if (_orchStrip.show === true && _orchStrip.type === 'human_moment') {
+    var hm = null;
+    try {
+      hm = geodePickHumanMoment(S);
+    } catch (_eHmStrip) {
+      hm = null;
+    }
+    if (hm) {
+      S._pendingLastShownHighlightTopics = [];
+      return geodeHomeHumanMomentStripHtml(hm);
+    }
+    return geodeHomeCoachingStripLegacyHtml();
+  }
+
+  if (_orchStrip.show === true && _orchStrip.type === 'insight') {
+    return renderInsights();
+  }
+
+  return geodeHomeCoachingStripLegacyHtml();
 }
 
 /**
