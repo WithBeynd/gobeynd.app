@@ -2782,15 +2782,15 @@ function geodeCoachingLineForDelta(delta, linkKind) {
     };
   if (delta <= -0.5)
     return {
-      line: 'Expect less left this month — trim elsewhere if needed.',
+      line: 'Expect less left this month. Trim elsewhere if needed.',
       why: 'It increases outflows counted this month, which reduces your remaining plan room this month.'
     };
   if (delta >= 0.5)
     return {
-      line: 'You gain plan room — use it on purpose.',
+      line: 'You gain plan room. Use it on purpose.',
       why: 'It lowers scheduled outflows counted this month, leaving more room after bills and spending.'
     };
-  return { line: 'Small change — your plan stays steady.', why: 'The change is small relative to your current plan room this month.' };
+  return { line: 'Small change. Your plan stays steady.', why: 'The change is small relative to your current plan room this month.' };
 }
 
 /** Display-only: one coaching line + optional left-this-month row + single Why? */
@@ -3242,12 +3242,12 @@ function geodeRenderSinceLastVisit(prevVisitTs) {
   var msg = '';
   if (geodeActivityLogSince(prevVisitTs)) {
     msg = geodeIsNoIncomeMode()
-      ? 'You made updates recently — your snapshot reflects those changes'
-      : 'You made updates recently — your plan has adjusted';
+      ? 'You made updates recently. Your snapshot reflects those changes.'
+      : 'You made updates recently. Your plan has adjusted.';
   } else if (now - prevVisitTs > 3 * 24 * 60 * 60 * 1000) {
     msg = geodeIsNoIncomeMode()
-      ? 'It\u2019s been a few days — your last setup is still what we\u2019re showing'
-      : 'It\u2019s been a few days — your plan still reflects your last setup';
+      ? 'It\u2019s been a few days. Your last setup is still what we\u2019re showing.'
+      : 'It\u2019s been a few days. Your plan still reflects your last setup.';
   } else {
     msg = 'No major changes since your last visit.';
   }
@@ -16708,10 +16708,10 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
           if (_actFamily) {
             if (_actFamily !== _mainKind) {
               // Cross-family: acknowledge divergence only when it clarifies the next decision.
-              if      (_actFamily === 'invest' && _mainKind === 'buffer') _bhvLine = 'Recent invest log. Your plan still leads with buffer.';
-              else if (_actFamily === 'invest' && _mainKind === 'debt')   _bhvLine = 'Recent invest log. Your plan still leads with debt.';
+              if      (_actFamily === 'invest' && _mainKind === 'buffer') _bhvLine = 'Recent invest log.';
+              else if (_actFamily === 'invest' && _mainKind === 'debt')   _bhvLine = 'Recent invest log.';
               else if (_actFamily === 'goal'   && _mainKind === 'debt')   _bhvLine = 'Recent goal log.';
-              else if (_actFamily === 'debt'   && _mainKind === 'invest') _bhvLine = 'Recent debt log. Your plan now leads with investing.';
+              else if (_actFamily === 'debt'   && _mainKind === 'invest') _bhvLine = 'Recent debt log.';
               else _bhvLine = '';
               if (_bhvLine) _bhvIsConflict = true;
             }
@@ -18085,7 +18085,7 @@ function geodeRealityPageHtml() {
       'Your balance today and monthly estimate look meaningfully different. Beynd won\u2019t change anything unless you choose to.';
   } else if (rs.activitySinceCheck || (typeof rs.daysOld === 'number' && rs.daysOld > 3) || rs.confidence === 'moderate') {
     statusLabel = 'Needs caution';
-    statusDetail = 'Your balance today reads tighter than your monthly estimate \u2014 a lighter next step may fit this month.';
+    statusDetail = 'Your balance today reads tighter than your monthly estimate. A lighter next step may fit this month.';
   } else {
     statusLabel = 'Broadly aligned';
     statusDetail = 'Your balance today is close to your monthly estimate.';
