@@ -10816,9 +10816,30 @@ function geodeHumanMomentDuplicatesMainAction(hm, ctx) {
   if (geodeWhySkipsGoalRepeat(body, mainT) === '') return true;
   if (geodeWhySkipsGoalRepeat(mainT, title) === '') return true;
   var mn = geodeNormalizeHomeMainActionText(mainT + ' ' + mainS);
+  var bodyLo = body.toLowerCase();
+  var maHasBuffer = mn.indexOf('buffer') >= 0;
+  var hmBodyHasFlex = bodyLo.indexOf('flexibility') >= 0;
+  var hmBodyHasRoom =
+    bodyLo.indexOf('room before') >= 0 || bodyLo.indexOf('some room') >= 0;
   if (mn.indexOf('buffer') >= 0 && hm.topic === 'protect_flexibility') return true;
   if (mn.indexOf('dependant') >= 0 && body.indexOf('supports others') >= 0) return true;
   if (mn.indexOf('flexibility') >= 0 && body.indexOf('room before') >= 0) return true;
+  // Stage 61B A/B: buffer-led MA + worried/protect flexibility or room language.
+  if (
+    maHasBuffer &&
+    (hmBodyHasFlex || hmBodyHasRoom) &&
+    (hm.topic === 'protect_flexibility' || hm.topic === 'review_first')
+  ) {
+    return true;
+  }
+  // Stage 61B C: spend-back-to-plan MA + generic slow-down/review HM.
+  if (
+    hm.topic === 'review_first' &&
+    (bodyLo.indexOf('slower pace') >= 0 || bodyLo.indexOf('review what has changed') >= 0) &&
+    (mn.indexOf('bring spend') >= 0 || mn.indexOf('back to plan') >= 0)
+  ) {
+    return true;
+  }
   return false;
 }
 
