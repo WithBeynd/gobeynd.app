@@ -11192,13 +11192,13 @@ function getMonthPlan() {
   }
   var summary = steps.length
     ? (_sumHasHighDebt
-        ? 'One way to use this month\'s room: ' + fm(left) + ' available. Reduce high‑interest debt first, build your safety buffer next, then review what is left for longer-term goals.'
+        ? 'One way to use part of this month\u2019s plan room (' + fm(left) + '): reduce high\u2011interest debt first, build your safety buffer next, then review what is left for longer-term goals.'
         : _sumHasModDebt
           ? (_sumHasBuffer
-              ? 'One way to use this month\'s room: ' + fm(left) + ' available. Build your safety buffer first, address debt pressure, then review what is left for longer-term goals.'
-              : 'One way to use this month\'s room: ' + fm(left) + ' available. Address debt pressure, keep goals in view, then review what is left for longer-term goals.')
-          : 'One way to use this month\'s room: ' + fm(left) + ' available. Build your safety buffer, keep goals on track, then review what is left for longer-term goals.')
-    : ('One place to start: set aside a clear plan for this month’s cash.');
+              ? 'One way to use part of this month\u2019s plan room (' + fm(left) + '): build your safety buffer first, address debt pressure, then review what is left for longer-term goals.'
+              : 'One way to use part of this month\u2019s plan room (' + fm(left) + '): address debt pressure, keep goals in view, then review what is left for longer-term goals.')
+          : 'One way to use part of this month\u2019s plan room (' + fm(left) + '): build your safety buffer, keep goals on track, then review what is left for longer-term goals.')
+    : ('One place to start: set aside a clear plan for this month\u2019s cash.');
 
   var hasInvest = false;
   for (var i = 0; i < steps.length; i++) {
@@ -11312,7 +11312,7 @@ function getSuggestedActions(state) {
       debtA = {
         type: 'debt_payment',
         title: 'Pay toward debt',
-        subtitle: 'Schedule the suggested amount toward ' + (dn || 'debt'),
+        subtitle: 'Plan an extra payment toward ' + (dn || 'debt'),
         amount: stp.amount,
         targetId: findDebtIdByName(dn),
         targetName: dn
@@ -11326,14 +11326,14 @@ function getSuggestedActions(state) {
         bufA = {
           type: 'buffer_contribution',
           title: 'Schedule contribution',
-          subtitle: 'Schedule the suggested amount toward your safety buffer',
+          subtitle: 'Start with a suggested contribution toward your safety buffer',
           amount: stp.amount
         };
       } else {
         bufA = {
           type: 'buffer_contribution',
           title: 'Schedule contribution',
-          subtitle: 'Schedule a contribution toward your safety buffer',
+          subtitle: 'Plan a contribution toward your safety buffer',
           amount: stp.amount
         };
       }
@@ -11342,7 +11342,7 @@ function getSuggestedActions(state) {
       goalA = {
         type: 'goal_contribution',
         title: 'Contribute to goal',
-        subtitle: 'Schedule the suggested amount toward ' + (gn || 'your goal'),
+        subtitle: 'Choose a contribution toward ' + (gn || 'your goal'),
         amount: stp.amount,
         targetId: findGoalIdByName(gn),
         targetName: gn
@@ -11352,7 +11352,7 @@ function getSuggestedActions(state) {
       invA = {
         type: 'investment_contribution',
         title: 'Schedule contribution',
-        subtitle: 'Schedule the suggested amount toward your portfolio',
+        subtitle: 'Start with a suggested contribution toward your portfolio',
         amount: stp.amount,
         targetId: inv0 ? inv0.id : '',
         targetName: inv0 ? inv0.name : ''
@@ -11604,7 +11604,7 @@ function geodePlanPageStepTitle(step, prog) {
     var g2 = lb.slice('Catch up on '.length).trim();
     if (ph === 'done') return g2 || 'Goal';
     if (ph === 'partial') return g2 ? 'Contribute to ' + g2 : 'Contribute to goal';
-    return g2 ? 'Catch up: ' + g2 : 'Catch up on goal';
+    return g2 ? 'Close the gap on ' + g2 : 'Steady this goal';
   }
   if (lb === 'Invest what remains') {
     var stInv = geodeInvestmentContributionState(S);
@@ -12446,7 +12446,7 @@ function geodePlanPageStatusSectionHtml(optSkipNegDup) {
     col = '#f5c234';
     why = fm(totalA) + ' of ' + fm(totalS) + ' suggested marked complete so far this month.';
   } else {
-    headline = 'Catch up on plan steps';
+    headline = 'Plan steps to steady';
     col = '#f5c234';
     why = 'Marking contributions as paid helps keep the plan status accurate.';
   }
@@ -12856,7 +12856,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
       whyShort = geodeHomeInsightShortLine(goalWhyMerged, 160);
     } else {
       whyShort =
-        'This step helps close the gap on this goal using this month\u2019s available plan amount — based on what Beynd is reading from your setup.';
+        'This step helps close the gap on this goal from this month\u2019s plan room \u2014 based on what Beynd is reading from your setup.';
     }
   } else if (detailInvest) {
     whyShort =
@@ -14163,12 +14163,12 @@ function geodeHomePlanStepRibbonTitle(step, prog) {
   if (lb.indexOf('Restart progress on ') === 0) {
     var r1 = lb.slice('Restart progress on '.length).trim();
     if (ph === 'done') return 'Next plan step';
-    return r1 ? 'Restart progress on ' + r1 : 'Catch up on your goal';
+    return r1 ? 'Restart progress on ' + r1 : 'Support your pace on your goal';
   }
   if (lb.indexOf('Catch up on ') === 0) {
     var r2 = lb.slice('Catch up on '.length).trim();
     if (ph === 'done') return 'Next plan step';
-    return r2 ? 'Catch up on ' + r2 : 'Catch up on your goal';
+    return r2 ? 'Close the gap on ' + r2 : 'Steady this goal';
   }
   if (lb === 'Invest what remains') {
     var st = geodeInvestmentContributionState(S);
@@ -16565,7 +16565,7 @@ function geodeRealityHumanMomentMonthContextOverlay(body, postureObj, state, rs,
 /** Reality Human Moment copy from Context Posture (display-only). */
 function geodeRealityHumanMomentBodyFromPosture(postureObj, state, rs, difference) {
   if (!postureObj) {
-    return 'Add today\u2019s available balance when you want a clearer check against your monthly estimate.';
+    return 'Add the balance you want Beynd to use when you want a clearer check against your monthly estimate.';
   }
   var p = postureObj.posture;
   var dependants = postureObj.inputs && postureObj.inputs.hasDependants;
@@ -16581,7 +16581,7 @@ function geodeRealityHumanMomentBodyFromPosture(postureObj, state, rs, differenc
   } else if (p === 'growth_room') {
     body = 'Today looks a little stronger than your monthly estimate. Choose the next move carefully.';
   } else {
-    body = 'Add today\u2019s available balance when you want a clearer check against your monthly estimate.';
+    body = 'Add the balance you want Beynd to use when you want a clearer check against your monthly estimate.';
   }
   return geodeRealityHumanMomentMonthContextOverlay(body, postureObj, state, rs, difference);
 }
@@ -16650,9 +16650,9 @@ function geodeRealityLastCheckedLabel(daysOld) {
 /** Display-only: plain-language Difference helper (same sign as avail − estimate). */
 function geodeRealityDifferenceExplain(diffNum) {
   if (diffNum == null || !isFinite(diffNum)) return '';
-  if (Math.abs(diffNum) <= 50) return 'Your available balance is close to your monthly estimate.';
-  if (diffNum < 0) return 'You have less available than your monthly estimate suggests.';
-  return 'You have more available than your monthly estimate suggests.';
+  if (Math.abs(diffNum) <= 50) return 'Your balance today is close to your monthly estimate.';
+  if (diffNum < 0) return 'Your balance today reads tighter than your monthly estimate.';
+  return 'Your balance today looks higher than your monthly estimate.';
 }
 
 /** Lightweight Reality tap-through page (Money · msub reality). */
@@ -16668,17 +16668,17 @@ function geodeRealityPageHtml() {
   var statusDetail = '';
   if (!rs.hasData) {
     statusLabel = 'Unknown';
-    statusDetail = 'Add today\u2019s available balance to compare it with your monthly estimate.';
+    statusDetail = 'Add the balance you want Beynd to use to compare it with your monthly estimate.';
   } else if (rs.confidence === 'low' || rs.status !== 'aligned') {
     statusLabel = 'Worth reviewing';
     statusDetail =
-      'Your available balance and monthly estimate look meaningfully different. Beynd won\u2019t change anything unless you choose to.';
+      'Your balance today and monthly estimate look meaningfully different. Beynd won\u2019t change anything unless you choose to.';
   } else if (rs.activitySinceCheck || (typeof rs.daysOld === 'number' && rs.daysOld > 3) || rs.confidence === 'moderate') {
     statusLabel = 'Needs caution';
-    statusDetail = 'Today\u2019s available balance may not support the plan as expected.';
+    statusDetail = 'Your balance today reads tighter than your monthly estimate \u2014 a lighter next step may fit this month.';
   } else {
     statusLabel = 'Broadly aligned';
-    statusDetail = 'Your available balance is close to your monthly estimate.';
+    statusDetail = 'Your balance today is close to your monthly estimate.';
   }
 
   var curAmt = '';
@@ -20010,7 +20010,7 @@ function rMoney() {
     escHtmlLite('Reality check') +
     '</div>' +
     '<div style="font-size:12px;color:rgba(237,234,255,0.88);line-height:1.45">' +
-    escHtmlLite('Compare against today\u2019s available balance.') +
+    escHtmlLite('Compare your monthly estimate with today\u2019s balance.') +
     '</div></div>' +
     '<span style="font-size:16px;color:rgba(155,127,232,0.55);line-height:1;margin-top:2px;flex-shrink:0" aria-hidden="true">\u203a</span>' +
     '</div></div>';
