@@ -10348,6 +10348,137 @@ function geodeHomeSoftDeferLineHtml(text, onClickJs) {
   );
 }
 
+/** Render-time cache from rHome; avoids duplicate snapshot calls per Home render (Stage 59D). */
+function geodeHomeResolvedDeferredQueueSnap(state) {
+  try {
+    if (window._geodeHomeDeferredQueueSnap && typeof window._geodeHomeDeferredQueueSnap === 'object') {
+      return window._geodeHomeDeferredQueueSnap;
+    }
+  } catch (_eDqCache) {}
+  try {
+    return geodeDeferredQueueSnapshot(state || S);
+  } catch (_eDqResolve) {
+    return null;
+  }
+}
+
+/** Fallback click routes when snapshot line text matches known defer copy (Stage 59D). */
+function geodeHomeMutedDeferLineFallbackClick(text) {
+  var t = String(text || '');
+  if (t.indexOf('Mark contributions') >= 0) {
+    return "msub='payments';goTab('money')";
+  }
+  if (t.indexOf('Subscription renewal') >= 0) {
+    var _subDf = null;
+    try {
+      _subDf = window._geodeHomeSubDeferReview;
+    } catch (_eSubFb) {}
+    if (_subDf && _subDf.id) {
+      return (
+        'geodeOpenSubReview(' +
+        JSON.stringify(String(_subDf.id)) +
+        ',' +
+        JSON.stringify(String(_subDf.kind || 'expense')) +
+        ')'
+      );
+    }
+    return "msub='expenses';goTab('money')";
+  }
+  return null;
+}
+
+/** Stage 49C fallback when deferred queue snapshot is unavailable (Stage 59D). */
+function geodeHomeLegacyCriticalDeferLinesHtml(state) {
+  state = state || S;
+  var h = '';
+  var _softPriMa = null;
+  try {
+    _softPriMa = window._geodeHomeSoftPriority || geodeHomeSoftPriorityContext(state);
+  } catch (_eSpLeg) {
+    _softPriMa = null;
+  }
+  if (!_softPriMa || _softPriMa.band !== 'critical') return h;
+  if (_softPriMa.contribReviewNeeded) {
+    h += geodeHomeSoftDeferLineHtml(
+      'Mark contributions complete in Money if they\u2019ve been paid.',
+      "msub='payments';goTab('money')"
+    );
+  }
+  if (_softPriMa.subsDueVisible) {
+    var _subDf = null;
+    try {
+      _subDf = window._geodeHomeSubDeferReview;
+    } catch (_eSubLeg) {}
+    var _subOn =
+      _subDf && _subDf.id
+        ? 'geodeOpenSubReview(' +
+          JSON.stringify(String(_subDf.id)) +
+          ',' +
+          JSON.stringify(String(_subDf.kind || 'expense')) +
+          ')'
+        : "msub='expenses';goTab('money')";
+    h += geodeHomeSoftDeferLineHtml(
+      'Subscription renewal can wait until overdue items are cleared.',
+      _subOn
+    );
+  }
+  return h;
+}
+
+/** Muted defer lines under Main Action from deferred queue snapshot (Stage 59D). */
+function geodeHomeDeferredMutedLinesHtml(state) {
+  state = state || S;
+  var dq = null;
+  try {
+    dq = geodeHomeResolvedDeferredQueueSnap(state);
+  } catch (_eDqMl0) {
+    dq = null;
+  }
+  if (!dq) {
+    return geodeHomeLegacyCriticalDeferLinesHtml(state);
+  }
+  var lines =
+    dq.activeHomeSurfaces && dq.activeHomeSurfaces.mutedLines ? dq.activeHomeSurfaces.mutedLines : [];
+  if (!lines.length) return '';
+  var html = '';
+  var li;
+  for (li = 0; li < lines.length; li++) {
+    var txt = lines[li];
+    var onClick = null;
+    if (dq.deferredItems && dq.deferredItems.length) {
+      var ki;
+      for (ki = 0; ki < dq.deferredItems.length; ki++) {
+        var it = dq.deferredItems[ki];
+        if (it && it.humanCopy === txt && it.onClickRoute) {
+          onClick = it.onClickRoute;
+          break;
+        }
+      }
+    }
+    if (!onClick) {
+      onClick = geodeHomeMutedDeferLineFallbackClick(txt);
+    }
+    html += geodeHomeSoftDeferLineHtml(txt, onClick);
+  }
+  return html;
+}
+
+/** Optional focused-band meta line from deferred queue snapshot (Stage 59D). */
+function geodeHomeDeferredMetaLineHtml(state) {
+  state = state || S;
+  try {
+    var dq = geodeHomeResolvedDeferredQueueSnap(state);
+    var meta =
+      dq && dq.activeHomeSurfaces && dq.activeHomeSurfaces.metaLine
+        ? String(dq.activeHomeSurfaces.metaLine).trim()
+        : '';
+    if (!meta) return '';
+    return geodeHomeSoftDeferLineHtml(meta, null);
+  } catch (_eDqMeta) {
+    return '';
+  }
+}
+
 function geodeHumanMomentShouldSuppress(ctx, state, opts) {
   state = state || S;
   opts = opts || {};
@@ -16377,33 +16508,12 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     '</button>';
   h += '</div>';
   try {
-    if (_softPriMa && _softPriMa.band === 'critical') {
-      if (_softPriMa.contribReviewNeeded) {
-        h += geodeHomeSoftDeferLineHtml(
-          'Mark contributions complete in Money if they\u2019ve been paid.',
-          "msub='payments';goTab('money')"
-        );
-      }
-      if (_softPriMa.subsDueVisible) {
-        var _subDf = null;
-        try {
-          _subDf = window._geodeHomeSubDeferReview;
-        } catch (_eSubDf) {}
-        var _subOn =
-          _subDf && _subDf.id
-            ? "geodeOpenSubReview(" +
-              JSON.stringify(String(_subDf.id)) +
-              ',' +
-              JSON.stringify(String(_subDf.kind || 'expense')) +
-              ')'
-            : "msub='expenses';goTab('money')";
-        h += geodeHomeSoftDeferLineHtml(
-          'Subscription renewal can wait until overdue items are cleared.',
-          _subOn
-        );
-      }
-    }
-  } catch (_eSpDf) {}
+    h += geodeHomeDeferredMutedLinesHtml(S);
+  } catch (_eSpDf) {
+    try {
+      h += geodeHomeLegacyCriticalDeferLinesHtml(S);
+    } catch (_eSpDfLeg) {}
+  }
   h += '</div>';
 
   window.geodeShowDelayBreakdown = window.geodeShowDelayBreakdown || false;
@@ -20202,9 +20312,19 @@ function rHome() {
     }
   }
   h += geodeHomeGoalCompletionCardHtml();
+  try {
+    window._geodeHomeDeferredQueueSnap = geodeDeferredQueueSnapshot(S);
+  } catch (_eDqRh) {
+    try {
+      window._geodeHomeDeferredQueueSnap = null;
+    } catch (_eDqRh2) {}
+  }
   h += geodeHomeMainActionHtml(_homeSubRenewCardVisible);
   h += _homeSubRenewCardHtml;
   h += geodeHomeCoachingStripHtml();
+  try {
+    h += geodeHomeDeferredMetaLineHtml(S);
+  } catch (_eDqMetaRh) {}
   // Reality check balance removed — use bank sync in v2
   h += geodeHomeAskBeyndButtonHtml(S);
   var _homeShowGoalPreview = S.goals.length > 0;
