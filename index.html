@@ -20560,10 +20560,33 @@ function rHome() {
     try {
       window._geodeHomeSubDeferReview = { id: String(_sd.id || ''), kind: _sdKind };
     } catch (_eSdr) {}
-    if (_homeSoftPri && _homeSoftPri.band === 'critical') {
+    var _homeSubCardShowResolved = null;
+    try {
+      window._geodeHomeOrchestrationResolve = geodeHomeOrchestrationResolve(S);
+      var _homeOrchResolve = window._geodeHomeOrchestrationResolve;
+      if (
+        _homeOrchResolve &&
+        _homeOrchResolve.surfaces &&
+        _homeOrchResolve.surfaces.subscriptionCard &&
+        typeof _homeOrchResolve.surfaces.subscriptionCard.show === 'boolean'
+      ) {
+        _homeSubCardShowResolved = _homeOrchResolve.surfaces.subscriptionCard.show;
+      }
+    } catch (_eOrchRh) {
+      try {
+        window._geodeHomeOrchestrationResolve = null;
+      } catch (_eOrchRh2) {}
+    }
+    if (_homeSubCardShowResolved === true) {
+      _homeSubRenewCardVisible = true;
+    } else if (_homeSubCardShowResolved === false) {
+      _homeSubRenewCardVisible = false;
+    } else if (_homeSoftPri && _homeSoftPri.band === 'critical') {
       _homeSubRenewCardVisible = false;
     } else {
       _homeSubRenewCardVisible = true;
+    }
+    if (_homeSubRenewCardVisible) {
     var _sCardItems = geodeListSubscriptionReminderItems(S);
     var _sCardCp = _sCardItems.length ? geodeSubscriptionReminderCopy(_sCardItems) : null;
     var _sdRenewLine = _sCardCp ? escHtmlLite(_sCardCp.line) : escHtmlLite(_sd.name || '');
