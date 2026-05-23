@@ -18613,6 +18613,108 @@ function geodeFormatAskBeyndMonthContextBlock(state) {
   return lines.join('\n');
 }
 
+/**
+ * Compact Home pacing lines for Ask Beynd context (Stage 57E). Read-only; human phrases only.
+ */
+function geodeFormatAskBeyndOrchestrationBlock(state) {
+  state = state || S;
+  var snap = null;
+  try {
+    snap = geodeOrchestrationSnapshot(state);
+  } catch (_eOrb) {
+    return '';
+  }
+  if (!snap || typeof snap !== 'object') return '';
+
+  var mode = snap.askBeyndMode || 'neutral';
+  var mods = snap.askBeyndModifiers || [];
+  var load = snap.userLoad || 'low';
+  var decision = snap.decisionMode || 'none';
+
+  if (mode === 'neutral' && load === 'low' && decision === 'none' && (!mods || !mods.length)) {
+    return '';
+  }
+
+  var body = [];
+  var seen = {};
+  function pushLine(line) {
+    var t = String(line || '').trim();
+    if (!t || seen[t] || body.length >= 4) return;
+    seen[t] = true;
+    body.push(t);
+  }
+
+  var focus = snap.primaryFocus;
+  var focusLabel = focus && focus.label ? String(focus.label).trim() : '';
+  if (focusLabel) {
+    pushLine('Home is centring on: ' + focusLabel + '.');
+  }
+
+  if (mode === 'pressure_test') {
+    pushLine(
+      'Coaching emphasis: Help them sense-check this move before scheduling. Explore trade-offs, not certainty.'
+    );
+  } else if (mode === 'reality_mismatch') {
+    pushLine(
+      'Plan and balance check may tell slightly different stories. Stay observational and do not imply automatic changes.'
+    );
+  } else if (mode === 'still_deciding') {
+    pushLine('They may still be deciding. Help them find the smallest useful next step.');
+  } else if (mode === 'explain_plan') {
+    pushLine('Help explain the plan clearly before suggesting more action.');
+  } else if (mode === 'after_action') {
+    pushLine('They recently made progress. Help them choose what to watch next without rushing.');
+  } else if (mode === 'second_opinion') {
+    pushLine(
+      'Coaching emphasis: Offer a calm second opinion before they act — what matters first, what can wait.'
+    );
+  }
+
+  if (decision === 'aligning') {
+    pushLine(
+      'They may be reviewing a plan adjustment after a balance sense-check. Describe options; do not apply changes.'
+    );
+  }
+
+  if (load === 'high' || load === 'critical' || mods.indexOf('stability_first') >= 0) {
+    pushLine('This month may need gentler pacing. Favour stability over new commitments.');
+  }
+
+  if (mods.indexOf('protect_priority') >= 0) {
+    pushLine(
+      'They noted something to keep in mind this month. Treat it as coaching context, not a reserved amount.'
+    );
+  }
+
+  if (!body.length) return '';
+
+  var hasHomeOrDecisionEmphasis = false;
+  if (focusLabel) hasHomeOrDecisionEmphasis = true;
+  if (mode !== 'neutral') hasHomeOrDecisionEmphasis = true;
+  if (decision === 'aligning' || decision === 'scheduling' || decision === 'review') {
+    hasHomeOrDecisionEmphasis = true;
+  }
+  if (!hasHomeOrDecisionEmphasis) {
+    var bi;
+    for (bi = 0; bi < body.length; bi++) {
+      var bl = body[bi];
+      if (
+        bl.indexOf('gentler pacing') < 0 &&
+        bl.indexOf('keep in mind this month') < 0
+      ) {
+        hasHomeOrDecisionEmphasis = true;
+        break;
+      }
+    }
+    if (!hasHomeOrDecisionEmphasis) return '';
+  }
+
+  var header = 'HOME PACING (coaching tone only; does not change plan numbers)';
+  var out = [header].concat(body);
+  if (out.length > 6) out = out.slice(0, 6);
+  return out.join('\n');
+}
+
 /** Build a financial summary string for the AI system prompt. No raw transaction names. */
 function geodeBuildCoachingContext() {
   try {
@@ -18732,6 +18834,15 @@ function geodeBuildCoachingContext() {
     }
     if (monthCtxBlock) {
       ctx.push('', 'MONTH CONTEXT', monthCtxBlock);
+    }
+    var orchBlock = '';
+    try {
+      orchBlock = geodeFormatAskBeyndOrchestrationBlock(S);
+    } catch (_eOrchCtx) {
+      orchBlock = '';
+    }
+    if (orchBlock) {
+      ctx.push('', orchBlock);
     }
     ctx.push(
       '',
