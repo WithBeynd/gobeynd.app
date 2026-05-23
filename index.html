@@ -7914,9 +7914,10 @@ function highlightOutHasBehaviourHabitGap(arr) {
 var geodeHighlightFullRankedCache = [];
 
 /** Max 2 cards: intent-aware first, behaviour habit gaps second, then context-ranked core + v2; topic dedupe + light warning pairing. */
-function combineHighlightsNudges(state) {
+function combineHighlightsNudges(state, opts) {
   state = state || S;
-  if (!isEmptyFinancialProfile(state)) {
+  opts = opts || {};
+  if (!isEmptyFinancialProfile(state) && !opts.observeOnly) {
     maybeMarkSuggestionIgnored(state);
   }
   if (isEmptyFinancialProfile(state)) {
@@ -9152,7 +9153,8 @@ function geodeInsightPolishBody(topic, msg, vIx) {
  * Display-only peek: would Home render a non-empty Insight strip this frame? Does not touch S._pendingLastShownHighlightTopics.
  * Mirrors renderInsights primary/awareness resolution (keep in sync when those filters change).
  */
-function geodeHomePeekWouldShowInsightStrip() {
+function geodeHomePeekWouldShowInsightStrip(opts) {
+  opts = opts || {};
   var _skipOverdueInsight = false;
   if (geodeIsEmptyState()) return false;
   if (geodeGetIncomeContext(S) === 'NONE') return false;
@@ -9167,7 +9169,7 @@ function geodeHomePeekWouldShowInsightStrip() {
     }
   }
 
-  combineHighlightsNudges(S);
+  combineHighlightsNudges(S, opts.observeOnly ? { observeOnly: true } : null);
   var latest = geodeGetLatestActivity(S);
   var latestKind = geodeLatestActionKind(latest);
   var pressure = geodeHomePressureLevel();
@@ -9493,7 +9495,7 @@ function geodeOrchestrationSnapshot(state) {
 
   if (snap.decisionMode === 'none') {
     try {
-      if (geodeGetActiveRealityPlanAlignment(state)) {
+      if (geodePeekActiveRealityPlanAlignment(state)) {
         snap.decisionMode = 'aligning';
         pushReason('alignment_active');
       }
@@ -9514,7 +9516,7 @@ function geodeOrchestrationSnapshot(state) {
         rsRev.hasData &&
         typeof rsRev.gap === 'number' &&
         rsRev.gap < -50 &&
-        !geodeGetActiveRealityPlanAlignment(state)
+        !geodePeekActiveRealityPlanAlignment(state)
       ) {
         gapReview = true;
         pushReason('reality_gap');
@@ -9659,7 +9661,12 @@ function geodeOrchestrationSnapshot(state) {
   } catch (_eHmSnap) {
     hmSnap = null;
   }
-  if (!hmSnap && geodeHumanMomentShouldSuppress(geodeHumanMomentSuppressionContext(state), state)) {
+  if (
+    !hmSnap &&
+    geodeHumanMomentShouldSuppress(geodeHumanMomentSuppressionContext(state), state, {
+      observeOnly: true
+    })
+  ) {
     pushDeferred({
       kind: 'human_moment',
       id: '',
@@ -9682,14 +9689,16 @@ function geodeOrchestrationSnapshot(state) {
     pushReason('insight_topics_suppressed');
   }
 
+  var insightStripWouldShow = false;
+  try {
+    insightStripWouldShow = !!geodeHomePeekWouldShowInsightStrip({ observeOnly: true });
+  } catch (_ePeekOrch) {
+    insightStripWouldShow = false;
+  }
+  snap.insightStripWouldShow = insightStripWouldShow;
+
   if (snap.homeBand === 'focused') {
-    var stripWouldShow = false;
-    try {
-      stripWouldShow = !!geodeHomePeekWouldShowInsightStrip();
-    } catch (_ePeekSnap) {
-      stripWouldShow = false;
-    }
-    if (!stripWouldShow && !hmSnap) {
+    if (!insightStripWouldShow && !hmSnap) {
       pushDisclosure(
         'home_focused_quiet',
         'home_strip',
@@ -9974,7 +9983,12 @@ function geodeDeferredQueueSnapshot(state) {
   } catch (_eHmDq) {
     hmSnap = null;
   }
-  if (!hmSnap && geodeHumanMomentShouldSuppress(geodeHumanMomentSuppressionContext(state), state)) {
+  if (
+    !hmSnap &&
+    geodeHumanMomentShouldSuppress(geodeHumanMomentSuppressionContext(state), state, {
+      observeOnly: true
+    })
+  ) {
     pushDeferred(
       deferOpts({
         kind: 'human_moment',
@@ -10129,7 +10143,7 @@ function geodeDeferredQueueSnapshot(state) {
   var subRenewCardVisible = subsDueVisible && homeBand !== 'critical';
   var stripWouldShow = false;
   try {
-    stripWouldShow = !!geodeHomePeekWouldShowInsightStrip();
+    stripWouldShow = !!(orch && orch.insightStripWouldShow);
   } catch (_ePeekDq) {
     stripWouldShow = false;
   }
@@ -10334,8 +10348,9 @@ function geodeHomeSoftDeferLineHtml(text, onClickJs) {
   );
 }
 
-function geodeHumanMomentShouldSuppress(ctx, state) {
+function geodeHumanMomentShouldSuppress(ctx, state, opts) {
   state = state || S;
+  opts = opts || {};
   ctx = ctx || geodeHumanMomentSuppressionContext(state);
   if (geodeIsEmptyState()) return true;
   if (geodeGetIncomeContext(state) === 'NONE') return true;
@@ -10345,7 +10360,11 @@ function geodeHumanMomentShouldSuppress(ctx, state) {
   if (ctx.hasOverdue) return true;
   if (ctx.needsAttentionVisible) return true;
   try {
-    if (geodeGetActiveRealityPlanAlignment(state)) return true;
+    if (opts.observeOnly) {
+      if (geodePeekActiveRealityPlanAlignment(state)) return true;
+    } else if (geodeGetActiveRealityPlanAlignment(state)) {
+      return true;
+    }
   } catch (_eHmRpaSup) {}
   var maNorm = geodeNormalizeHomeMainActionText(ctx.mainActionTitle + ' ' + ctx.mainActionSub);
   if (maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('clear overdue') >= 0) return true;
@@ -18402,6 +18421,22 @@ function geodeRealityPlanAlignmentIsStale(state, alignment) {
     if (prog && prog.phase === 'done') return true;
   }
   return false;
+}
+
+/** Read-only: inspect approved alignment without mutating or deleting state.realityPlanAlignment (Stage 59C.6). */
+function geodePeekActiveRealityPlanAlignment(state) {
+  state = state || S;
+  try {
+    var a = state.realityPlanAlignment;
+    if (!a || typeof a !== 'object') return null;
+    if (a.status !== 'approved' || a.version !== 1) return null;
+    if (String(a.ym || '') !== currentYM()) return null;
+    if (!Array.isArray(a.stepAdjustments) || !a.stepAdjustments.length) return null;
+    if (geodeRealityPlanAlignmentIsStale(state, a)) return null;
+    return a;
+  } catch (_eRpaPeek) {
+    return null;
+  }
 }
 
 /** Stage 55C-3: active approved alignment for current month, or null after normalize/stale clear. */
