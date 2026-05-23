@@ -1644,7 +1644,7 @@ function geodeDashboardV2SinceLastUpdateBlock() {
       l2 = '-' + fm(Math.abs(dLeft)) + ' spent';
       c2 = '#f5c234';
     } else {
-      l2 = '+' + fm(dLeft) + ' headroom';
+      l2 = '+' + fm(dLeft) + ' plan room';
       c2 = '#34d5a0';
     }
   } else {
@@ -2783,14 +2783,14 @@ function geodeCoachingLineForDelta(delta, linkKind) {
   if (delta <= -0.5)
     return {
       line: 'Expect less left this month — trim elsewhere if needed.',
-      why: 'It increases outflows counted this month, which reduces your remaining monthly headroom.'
+      why: 'It increases outflows counted this month, which reduces your remaining plan room this month.'
     };
   if (delta >= 0.5)
     return {
-      line: 'You gain headroom — use it on purpose.',
+      line: 'You gain plan room — use it on purpose.',
       why: 'It lowers scheduled outflows counted this month, leaving more room after bills and spending.'
     };
-  return { line: 'Small change — your plan stays steady.', why: 'The change is small relative to your current monthly headroom.' };
+  return { line: 'Small change — your plan stays steady.', why: 'The change is small relative to your current plan room this month.' };
 }
 
 /** Display-only: one coaching line + optional left-this-month row + single Why? */
@@ -3185,7 +3185,7 @@ function geodeHomeMonthlyPlanActionSentence() {
     if (pg && pg.targetDate && toNum(pg.amount) > 0) {
       var intel = calcGoalIntelligence(pg);
       if (intel && intel.requiredMonthly != null && isFinite(intel.requiredMonthly) && intel.requiredMonthly > 0) {
-        return 'Keeping your goal pace at about ' + fm(intel.requiredMonthly) + '/month keeps you on schedule.';
+        return 'About ' + fm(intel.requiredMonthly) + '/month is a pace guide if you choose to stay on this track.';
       }
     }
   }
@@ -4007,7 +4007,7 @@ function geodeApplyInvestmentBehaviourToSuggestedActions(actions) {
       out.push(c);
       continue;
     }
-    c.title = 'Schedule contribution';
+    c.title = 'Plan a contribution';
     c.subtitle = 'Build on the portfolio and contributions you already have.';
     c._investBehaviour = 'IN_PROGRESS';
     out.push(c);
@@ -6763,7 +6763,7 @@ function geodeSyntheticSpending(latest, pressure) {
   var msgs = [
     'Left this month shifted after that spending change.',
     'Spending moved \u2014 quick check on left this month.',
-    'Spending totals changed \u2014 plan headroom moved with them.'
+    'Spending totals changed \u2014 plan room moved with them.'
   ];
   var msg = msgs[reps % msgs.length];
   var d = latest ? toNum(latest.delta) : 0;
@@ -7435,7 +7435,7 @@ function getCoreNudges(state) {
       variants: [
         'This month reads tight on your plan.',
         'Little room left on the plan this month.',
-        'Plan headroom is low this month.'
+        'Plan room is low this month.'
       ]
     });
   }
@@ -7611,7 +7611,7 @@ function getCoreNudges(state) {
       }
     } else {
       add({
-        title: 'Headroom',
+        title: 'Plan room',
         message:
           'You have about ' +
           fm(left) +
@@ -7620,7 +7620,7 @@ function getCoreNudges(state) {
         topic: 'opportunity',
         variants: [
           'You have about ' + fm(left) + ' left after bills — staying aligned with your plan keeps momentum.',
-          'You have about ' + fm(left) + ' headroom — small, consistent allocations matter.',
+          'You have about ' + fm(left) + ' plan room — small, consistent allocations matter.',
           'About ' + fm(left) + ' is left after bills — keep it intentional (debt, buffer, goals).'
         ]
       });
@@ -7756,7 +7756,7 @@ function getIntentAwareNudges(state) {
         variants: [
           'You still have room this month, but your focus goal "' + pnm + '" has not been funded recently.',
           'There is spare capacity this month, while your focus goal "' + pnm + '" has not seen a contribution lately.',
-          'You have headroom this month, but "' + pnm + '" — your focus goal — has not received funds in recent updates.'
+          'You have room in your plan this month, but "' + pnm + '" — your focus goal — has not received funds in recent updates.'
         ]
       }
     });
@@ -8361,7 +8361,7 @@ function applyAdaptiveLayerToSuggestedActions(actions) {
       o.subtitle =
         'Start with a smaller extra payment this month — your plan still targets the full amount when you are ready.';
     } else if (a.type === 'goal_contribution') {
-      o.subtitle = 'A smaller contribution still keeps progress moving — the full plan amount is available when you want it.';
+      o.subtitle = 'A smaller contribution still keeps progress moving — the full suggestion is on Plan when you want it.';
     } else if (a.type === 'investment_contribution') {
       o.subtitle = 'Start smaller on the recurring amount — match the full plan when ready.';
     } else {
@@ -8842,7 +8842,7 @@ function geodeHomeNudgeMessage(src, latestKind, pressure, opts) {
   ) {
     msg +=
       pressure === 'strong' || pressure === 'mild'
-        ? ' Recent investing activity is noted \u2014 keep it aligned with cash headroom.'
+        ? ' Recent investing activity is noted \u2014 keep it aligned with your plan room.'
         : ' Nice \u2014 you\u2019ve started moving money into investments recently.';
   }
   msg = geodeStripCelebrationWhenPressure(msg, pressure);
@@ -11035,7 +11035,7 @@ function getMonthPlan() {
     };
     if (left > 0) {
       debtStep.explain =
-        'Uses part of your ' + fm(left) + ' left this month on your plan (' + stratWord + ' strategy).';
+        'Uses part of your ' + fm(left) + ' plan room this month (' + stratWord + ' strategy).';
     }
     var dProjPlan = getDebtProjection(worstDebt, toNum(worstDebt.minp), overpay);
     if (dProjPlan && dProjPlan.monthsSaved !== null && dProjPlan.monthsSaved >= 1) {
@@ -11207,7 +11207,7 @@ function getMonthPlan() {
   var noInvestNote = '';
   if (!hasInvest && left > 0 && steps.length > 0) {
     noInvestNote =
-      'No investing step this month. Earlier steps use this month\u2019s headroom first.';
+      'No investing step this month. Earlier steps use this month\u2019s plan room first.';
   }
 
   // One forward-looking sentence (rule-based; does not affect allocation).
@@ -11325,14 +11325,14 @@ function getSuggestedActions(state) {
       } else if (egBuf && esvBuf > 0) {
         bufA = {
           type: 'buffer_contribution',
-          title: 'Schedule contribution',
+          title: 'Plan a contribution',
           subtitle: 'Start with a suggested contribution toward your safety buffer',
           amount: stp.amount
         };
       } else {
         bufA = {
           type: 'buffer_contribution',
-          title: 'Schedule contribution',
+          title: 'Plan a contribution',
           subtitle: 'Plan a contribution toward your safety buffer',
           amount: stp.amount
         };
@@ -11351,7 +11351,7 @@ function getSuggestedActions(state) {
       var inv0 = (S.investments && S.investments[0]) || null;
       invA = {
         type: 'investment_contribution',
-        title: 'Schedule contribution',
+        title: 'Plan a contribution',
         subtitle: 'Start with a suggested contribution toward your portfolio',
         amount: stp.amount,
         targetId: inv0 ? inv0.id : '',
@@ -11408,8 +11408,8 @@ function mergeFrozenSuggestedActionsWithPlan(frozen) {
             : fj.type === 'goal_contribution'
               ? 'Contribute to goal'
               : fj.type === 'investment_contribution'
-                ? 'Schedule contribution'
-                : 'Schedule contribution',
+                ? 'Plan a contribution'
+                : 'Plan a contribution',
         subtitle: 'Amount from your plan when this suggestion was shown — still matches follow-through tracking.',
         amount: amt,
         targetId: fj.targetId || '',
@@ -12116,7 +12116,7 @@ function geodePlanPageGoalPriorityBodyHtml(step, prog) {
     prog.phase === 'done'
       ? 'Suggested amount met for ' + gName + '.'
       : prog.phase === 'partial'
-        ? 'Add what\u2019s left this month toward ' + gName + ' to keep it moving.'
+        ? 'Add from this month\u2019s plan room toward ' + gName + ' to keep it moving.'
         : 'Use the amount on this step toward ' + gName + ' this month.';
   h +=
     '<div style="font-size:11px;color:rgba(189,183,220,0.93);line-height:1.45">' +
@@ -14388,7 +14388,7 @@ function geodeMainActionFromPriorityStep(state, p1, prog) {
     return {
       title: gTitle,
       amount: payAmt,
-      cta: 'Schedule contribution',
+      cta: 'Plan a contribution',
       sub: gSub,
       run: function () {
         if (!gid) {
@@ -15812,6 +15812,7 @@ function geodeAffordGateBuildForPlanMoneyAction(amount, cta, sigFam) {
       _ctaAff === 'Schedule extra payment' ||
       _ctaAff === 'Plan a buffer contribution' ||
       _ctaAff === 'Schedule contribution' ||
+      _ctaAff === 'Plan a contribution' ||
       _ctaAff === 'Begin contributing' ||
       _ctaAff === 'Schedule investment' ||
       (_ctaAff === 'Add investment' && Math.round(amt) >= 1);
@@ -23978,7 +23979,7 @@ function geodeIntelBuildCardHtml(data) {
         'onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeToggleExplain(\'intelSafeSpend\');}}catch(__pk2){}" ' +
         'style="font-size:9px;color:rgba(237,234,255,0.88);line-height:1.45;margin:0 0 3px;cursor:pointer;transition:opacity 120ms ease" ' +
         'onmouseenter="this.style.opacity=0.9" onmouseleave="this.style.opacity=1">' +
-        'Plan headroom: ' +
+        'Plan room: ' +
         escHtmlLite(fm(money.safeToSpend)) +
         '</div>';
       h += '<div style="font-size:9px;color:rgba(237,234,255,0.8);line-height:1.45;margin:0 0 2px">' +
