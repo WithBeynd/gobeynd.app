@@ -9790,6 +9790,534 @@ function geodeOrchestrationSnapshot(state) {
   return snap;
 }
 
+/**
+ * Read-only deferred queue snapshot (Stage 59C). Instrumentation only — does not mutate state,
+ * affect plan math, or change Home render output. Centralises "not now, still reachable" decisions.
+ */
+function geodeDeferredQueueSnapshot(state) {
+  state = state || S;
+  var now = Date.now();
+  var snap = {
+    version: 1,
+    deferredItems: [],
+    disclosureNeeded: [],
+    activeHomeSurfaces: {
+      mainAction: false,
+      coachingStrip: null,
+      mutedLines: [],
+      metaLine: null
+    },
+    reasonCodes: []
+  };
+
+  function pushReason(code) {
+    if (!code || snap.reasonCodes.indexOf(code) >= 0) return;
+    snap.reasonCodes.push(code);
+  }
+
+  function pushDisclosure(code, surface, copy) {
+    if (!code || !copy) return;
+    snap.disclosureNeeded.push({ code: code, surface: surface || 'home', copy: copy });
+  }
+
+  function pushDeferred(opts) {
+    if (!opts || !opts.kind) return;
+    snap.deferredItems.push({
+      kind: opts.kind,
+      id: opts.id != null ? String(opts.id) : '',
+      reason: opts.reason || '',
+      createdAt: now,
+      resurfaceAfter: opts.resurfaceAfter || '',
+      expiresAt: null,
+      acknowledged: false,
+      sourceSurface: opts.sourceSurface || 'home',
+      targetSurface: opts.targetSurface || 'plan',
+      priority: typeof opts.priority === 'number' ? opts.priority : 50,
+      visibilityPolicy: opts.visibilityPolicy || 'defer',
+      humanCopy: opts.humanCopy || '',
+      onClickRoute: opts.onClickRoute || null,
+      signalSnapshot: {
+        homeBand: opts._homeBand || 'open',
+        userLoad: opts._userLoad || 'low',
+        primaryFocusType: opts._primaryFocusType || 'none'
+      }
+    });
+  }
+
+  var orch = null;
+  try {
+    orch = geodeOrchestrationSnapshot(state);
+  } catch (_eOrchDq) {
+    orch = null;
+  }
+  var homeBand = orch && orch.homeBand ? orch.homeBand : 'open';
+  var userLoad = orch && orch.userLoad ? orch.userLoad : 'low';
+  var primaryFocus = orch && orch.primaryFocus ? orch.primaryFocus : { type: 'none', label: '' };
+  var primaryFocusType = primaryFocus.type || 'none';
+
+  function deferOpts(extra) {
+    extra = extra || {};
+    extra._homeBand = homeBand;
+    extra._userLoad = userLoad;
+    extra._primaryFocusType = primaryFocusType;
+    return extra;
+  }
+
+  if (geodeIsEmptyState()) {
+    pushReason('empty_state');
+    return snap;
+  }
+
+  var softPri = null;
+  try {
+    softPri = geodeHomeSoftPriorityContext(state);
+    if (softPri && softPri.band) homeBand = softPri.band;
+  } catch (_eSpDq) {
+    softPri = null;
+  }
+
+  if (homeBand === 'critical') pushReason('home_band_critical');
+  else if (homeBand === 'focused') pushReason('home_band_focused');
+
+  var pao = null;
+  try {
+    pao = assessPressure(state);
+  } catch (_ePaoDq) {
+    pao = null;
+  }
+
+  var subsDueSnap = [];
+  try {
+    subsDueSnap = geodeSubsDueSoon(7);
+  } catch (_eSubDq) {
+    subsDueSnap = [];
+  }
+  var subsDueVisible = subsDueSnap.length > 0;
+  var subId =
+    subsDueSnap[0] && subsDueSnap[0].id != null ? String(subsDueSnap[0].id) : '';
+  var subOnClick =
+    subId !== ''
+      ? "geodeOpenSubReview(" +
+        JSON.stringify(subId) +
+        ',' +
+        JSON.stringify('expense') +
+        ')'
+      : "msub='expenses';goTab('money')";
+
+  if (homeBand === 'critical' && subsDueVisible) {
+    pushDeferred(
+      deferOpts({
+        kind: 'subscription',
+        id: subId,
+        reason: 'home_band_critical',
+        resurfaceAfter: 'band_below_critical',
+        sourceSurface: 'home',
+        targetSurface: 'home_muted_line',
+        priority: 10,
+        visibilityPolicy: 'mute',
+        humanCopy: 'Subscription renewal can wait until overdue items are cleared.',
+        onClickRoute: subOnClick
+      })
+    );
+    pushReason('subscription_card_deferred');
+    pushDisclosure(
+      'defer_subscription',
+      'home_main_action',
+      'Subscription renewal can wait until overdue items are cleared.'
+    );
+  }
+
+  if (softPri && softPri.contribReviewNeeded && homeBand === 'critical') {
+    pushDeferred(
+      deferOpts({
+        kind: 'contribution',
+        id: '',
+        reason: 'home_band_critical',
+        resurfaceAfter: 'band_below_critical',
+        sourceSurface: 'home',
+        targetSurface: 'home_muted_line',
+        priority: 10,
+        visibilityPolicy: 'mute',
+        humanCopy: 'Mark contributions complete in Money if they\u2019ve been paid.',
+        onClickRoute: "msub='payments';goTab('money')"
+      })
+    );
+    pushReason('contribution_reminder_deferred');
+    pushDisclosure(
+      'defer_contribution',
+      'home_main_action',
+      'Mark contributions complete in Money if they\u2019ve been paid.'
+    );
+  }
+
+  if (homeBand === 'critical') {
+    pushDeferred(
+      deferOpts({
+        kind: 'insight_strip',
+        id: '',
+        reason: 'home_band_critical',
+        resurfaceAfter: 'band_below_critical',
+        sourceSurface: 'home',
+        targetSurface: 'plan',
+        priority: 30,
+        visibilityPolicy: 'defer',
+        humanCopy: '',
+        onClickRoute: "goTab('plan')"
+      })
+    );
+    pushReason('insight_strip_suppressed');
+  }
+
+  var hmSnap = null;
+  try {
+    hmSnap = geodePickHumanMoment(state);
+  } catch (_eHmDq) {
+    hmSnap = null;
+  }
+  if (!hmSnap && geodeHumanMomentShouldSuppress(geodeHumanMomentSuppressionContext(state), state)) {
+    pushDeferred(
+      deferOpts({
+        kind: 'human_moment',
+        id: '',
+        reason: 'competing_home_priority',
+        resurfaceAfter: 'load_below_high',
+        sourceSurface: 'home',
+        targetSurface: 'home_card',
+        priority: 40,
+        visibilityPolicy: 'defer',
+        humanCopy: '',
+        onClickRoute: null
+      })
+    );
+    pushReason('human_moment_suppressed');
+  }
+
+  if (pao && pao.outputs && pao.outputs.suppressTopics && pao.outputs.suppressTopics.length) {
+    var sti;
+    for (sti = 0; sti < pao.outputs.suppressTopics.length; sti++) {
+      var topicId = String(pao.outputs.suppressTopics[sti] || '');
+      pushDeferred(
+        deferOpts({
+          kind: 'insight_topic',
+          id: topicId,
+          reason: 'pao_topic_suppress',
+          resurfaceAfter: 'pao_band_open',
+          sourceSurface: 'pao',
+          targetSurface: 'plan',
+          priority: 35,
+          visibilityPolicy: 'defer',
+          humanCopy: '',
+          onClickRoute: "goTab('plan')"
+        })
+      );
+    }
+    pushReason('insight_topics_suppressed');
+  }
+
+  var suppressDecorFooters =
+    softPri && (softPri.band === 'critical' || softPri.band === 'focused');
+  var showMsg = false;
+  try {
+    showMsg = geodeShouldShowMessage(state);
+  } catch (_eSmDq) {
+    showMsg = false;
+  }
+  var hasOverdue = false;
+  try {
+    hasOverdue = !!geodeHasOverdue(state);
+  } catch (_eOdDq) {
+    hasOverdue = false;
+  }
+  var clearedOverdue = false;
+  try {
+    clearedOverdue = !!window._geodeOverdueCleared;
+  } catch (_eClDq) {}
+  var streakCount = 0;
+  try {
+    streakCount = Number(localStorage.getItem('geode_streak_count') || '0');
+  } catch (_eStDq) {
+    streakCount = 0;
+  }
+  var recovery = null;
+  try {
+    recovery = geodeGetRecoveryState(state);
+  } catch (_eRecDq) {
+    recovery = null;
+  }
+  var planStepsComplete = false;
+  try {
+    planStepsComplete = geodeHomeMonthlyPlanStepsComplete(state);
+  } catch (_ePscDq) {
+    planStepsComplete = false;
+  }
+
+  if (showMsg && suppressDecorFooters) {
+    if (recovery && !hasOverdue && !clearedOverdue && streakCount < 3) {
+      pushDeferred(
+        deferOpts({
+          kind: 'recovery_line',
+          id: '',
+          reason: 'home_band_load',
+          resurfaceAfter: 'band_below_focused',
+          sourceSurface: 'main_action_footer',
+          targetSurface: 'home_card',
+          priority: 55,
+          visibilityPolicy: 'defer',
+          humanCopy: '',
+          onClickRoute: null
+        })
+      );
+      pushReason('recovery_line_deferred');
+    }
+    if (
+      !recovery &&
+      streakCount >= 2 &&
+      !hasOverdue &&
+      !clearedOverdue &&
+      !planStepsComplete
+    ) {
+      pushDeferred(
+        deferOpts({
+          kind: 'streak_line',
+          id: '',
+          reason: 'home_band_load',
+          resurfaceAfter: 'band_below_focused',
+          sourceSurface: 'main_action_footer',
+          targetSurface: 'home_card',
+          priority: 55,
+          visibilityPolicy: 'defer',
+          humanCopy: '',
+          onClickRoute: null
+        })
+      );
+      pushReason('streak_line_deferred');
+    }
+  }
+
+  var prevLastSeen = state.lastSeenAt;
+  var wouldSinceLastVisit = false;
+  try {
+    wouldSinceLastVisit = geodeHomeShouldShowSinceLastVisit(prevLastSeen, {
+      recoveryActive: !!recovery
+    });
+  } catch (_eSlvDq) {}
+  if (
+    typeof prevLastSeen === 'number' &&
+    isFinite(prevLastSeen) &&
+    prevLastSeen > 0 &&
+    !wouldSinceLastVisit &&
+    homeBand === 'critical' &&
+    !hasOverdue
+  ) {
+    pushDeferred(
+      deferOpts({
+        kind: 'since_last_visit',
+        id: '',
+        reason: 'home_band_critical',
+        resurfaceAfter: 'band_below_critical',
+        sourceSurface: 'home',
+        targetSurface: 'home_card',
+        priority: 60,
+        visibilityPolicy: 'defer',
+        humanCopy: '',
+        onClickRoute: null
+      })
+    );
+    pushReason('since_last_visit_deferred');
+  }
+
+  var subRenewCardVisible = subsDueVisible && homeBand !== 'critical';
+  var stripWouldShow = false;
+  try {
+    stripWouldShow = !!geodeHomePeekWouldShowInsightStrip();
+  } catch (_ePeekDq) {
+    stripWouldShow = false;
+  }
+  if (showMsg && suppressDecorFooters) {
+    var anticipation = null;
+    try {
+      anticipation = geodeGetAnticipation(state);
+    } catch (_eAntDq) {
+      anticipation = null;
+    }
+    if (anticipation) {
+      var antKind = anticipation.kind || 'obligation';
+      var antSuppressed =
+        (subRenewCardVisible && antKind === 'subscription') ||
+        (softPri &&
+          softPri.band === 'critical' &&
+          softPri.subsDueVisible &&
+          antKind === 'subscription');
+      if (antSuppressed) {
+        pushDeferred(
+          deferOpts({
+            kind: 'anticipation',
+            id: anticipation.id != null ? String(anticipation.id) : '',
+            reason: 'dedup_main_action',
+            resurfaceAfter: 'band_below_critical',
+            sourceSurface: 'main_action_footer',
+            targetSurface: 'money',
+            priority: 25,
+            visibilityPolicy: 'dedup_hide',
+            humanCopy: '',
+            onClickRoute: "msub='payments';goTab('money')"
+          })
+        );
+        pushReason('anticipation_footer_deferred');
+      }
+    }
+  }
+
+  try {
+    if (geodeHomeMainActionInsightKind() === 'goal' && (state.goals || []).length > 0) {
+      var gFocus = selectPrimaryGoal(state.goals) || state.goals[0];
+      var dedSt = geodeHomeResolvedPlanStepForDedup(state);
+      var dedIds = dedSt ? geodeHomePlanStepDebtGoalIds(dedSt) : { goalId: '' };
+      if (dedIds.goalId && gFocus && String(gFocus.id) === String(dedIds.goalId)) {
+        pushDeferred(
+          deferOpts({
+            kind: 'focus_goal_compact',
+            id: String(gFocus.id),
+            reason: 'dedup_main_action',
+            resurfaceAfter: 'main_action_completed',
+            sourceSurface: 'home',
+            targetSurface: 'home_card',
+            priority: 45,
+            visibilityPolicy: 'dedup_hide',
+            humanCopy: '',
+            onClickRoute: "goTab('goals')"
+          })
+        );
+        pushReason('focus_goal_compact');
+      }
+    }
+  } catch (_eFgDq) {}
+
+  try {
+    var planDq = getMonthPlan();
+    if (planDq && planDq.steps && planDq.steps.length > 1 && geodeHasPlanContext()) {
+      pushDeferred(
+        deferOpts({
+          kind: 'secondary_plan_hint',
+          id: '',
+          reason: 'home_single_step_focus',
+          resurfaceAfter: 'user_visited_plan',
+          sourceSurface: 'home',
+          targetSurface: 'plan',
+          priority: 70,
+          visibilityPolicy: 'plan_only',
+          humanCopy: '',
+          onClickRoute: "goTab('plan')"
+        })
+      );
+      pushReason('secondary_plan_steps_on_plan');
+    }
+  } catch (_eSecDq) {}
+
+  if (hasOverdue) {
+    try {
+      if (geodeHomeMainActionInsightKind() === 'goal') {
+        var futuresDq = geodeComputeCompetingFutures(state);
+        if (
+          futuresDq &&
+          futuresDq.current &&
+          futuresDq.current.months &&
+          futuresDq.improve &&
+          futuresDq.improve.months &&
+          (futuresDq.current.months - futuresDq.improve.months > 0 ||
+            (futuresDq.optimal &&
+              futuresDq.optimal.months != null &&
+              futuresDq.current.months - futuresDq.optimal.months > 0))
+        ) {
+          pushDeferred(
+            deferOpts({
+              kind: 'competing_futures',
+              id: '',
+              reason: 'competing_home_priority',
+              resurfaceAfter: 'overdue_cleared',
+              sourceSurface: 'home',
+              targetSurface: 'plan',
+              priority: 40,
+              visibilityPolicy: 'defer',
+              humanCopy: '',
+              onClickRoute: "goTab('plan')"
+            })
+          );
+          pushReason('competing_futures_deferred');
+        }
+      }
+    } catch (_eCfDq) {}
+  }
+
+  if (homeBand === 'focused') {
+    if (!stripWouldShow && !hmSnap) {
+      pushDisclosure(
+        'home_focused_quiet',
+        'home_meta',
+        'Keeping Home focused on what needs you first.'
+      );
+      pushReason('home_focused_meta');
+    }
+  }
+
+  var famSnap = ['debt', 'goal', 'invest', 'buffer'];
+  var fi;
+  for (fi = 0; fi < famSnap.length; fi++) {
+    var famMode = 'full';
+    try {
+      famMode = getAdaptiveDisplayModeForFamily(famSnap[fi]);
+    } catch (_eAdDq) {
+      famMode = 'full';
+    }
+    if (famMode !== 'full') {
+      pushReason('adaptive_display_' + famMode);
+      pushDisclosure(
+        'adaptive_lighter_step',
+        'suggested_action',
+        'Showing a lighter step; full suggestion is on Plan.'
+      );
+      break;
+    }
+  }
+
+  var mainAction = null;
+  try {
+    mainAction = geodeGetMainAction(state);
+  } catch (_eMaDq) {
+    mainAction = null;
+  }
+  snap.activeHomeSurfaces.mainAction = !!(mainAction && (mainAction.title || mainAction.cta));
+
+  if (homeBand === 'critical') {
+    snap.activeHomeSurfaces.coachingStrip = null;
+  } else if (hmSnap) {
+    snap.activeHomeSurfaces.coachingStrip = 'human_moment';
+  } else if (stripWouldShow) {
+    snap.activeHomeSurfaces.coachingStrip = 'insight';
+  } else {
+    snap.activeHomeSurfaces.coachingStrip = null;
+  }
+
+  if (homeBand === 'critical') {
+    if (softPri && softPri.contribReviewNeeded) {
+      snap.activeHomeSurfaces.mutedLines.push(
+        'Mark contributions complete in Money if they\u2019ve been paid.'
+      );
+    }
+    if (subsDueVisible) {
+      snap.activeHomeSurfaces.mutedLines.push(
+        'Subscription renewal can wait until overdue items are cleared.'
+      );
+    }
+  }
+
+  if (homeBand === 'focused' && !stripWouldShow && !hmSnap) {
+    snap.activeHomeSurfaces.metaLine = 'Keeping Home focused on what needs you first.';
+  }
+
+  return snap;
+}
+
 /** One muted deferral line under Main Action (display-only; Stage 49C). */
 function geodeHomeSoftDeferLineHtml(text, onClickJs) {
   var oc = onClickJs
@@ -11102,6 +11630,7 @@ function geodePaoMaybeLogShadowDisagreements(state, pao) {
     window.geodePaoShadowDisagreements = geodePaoShadowDisagreements;
     window.geodePaoPRESSURE_THRESHOLDS = PAO_PRESSURE_THRESHOLDS;
     window.geodeOrchestrationSnapshot = geodeOrchestrationSnapshot;
+    window.geodeDeferredQueueSnapshot = geodeDeferredQueueSnapshot;
     window.geodeGetAskBeyndUiCopy = geodeGetAskBeyndUiCopy;
     window.geodeAskBeyndVisualState = geodeAskBeyndVisualState;
   } catch (_eEx) {}
