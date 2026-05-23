@@ -16710,10 +16710,10 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
           if (_actFamily) {
             if (_actFamily !== _mainKind) {
               // Cross-family: acknowledge divergence only when it clarifies the next decision.
-              if      (_actFamily === 'invest' && _mainKind === 'buffer') _bhvLine = 'Recent invest log \u2014 plan still leads with buffer.';
-              else if (_actFamily === 'invest' && _mainKind === 'debt')   _bhvLine = 'Recent invest log \u2014 plan still leads with debt.';
-              else if (_actFamily === 'goal'   && _mainKind === 'debt')   _bhvLine = 'Recent goal log \u2014 plan still leads with debt.';
-              else if (_actFamily === 'debt'   && _mainKind === 'invest') _bhvLine = 'Recent debt log \u2014 plan now leads with investing.';
+              if      (_actFamily === 'invest' && _mainKind === 'buffer') _bhvLine = 'Recent invest log. Your plan still leads with buffer.';
+              else if (_actFamily === 'invest' && _mainKind === 'debt')   _bhvLine = 'Recent invest log. Your plan still leads with debt.';
+              else if (_actFamily === 'goal'   && _mainKind === 'debt')   _bhvLine = 'Recent goal log. Your plan still leads with debt.';
+              else if (_actFamily === 'debt'   && _mainKind === 'invest') _bhvLine = 'Recent debt log. Your plan now leads with investing.';
               else _bhvLine = '';
               if (_bhvLine) _bhvIsConflict = true;
             }
@@ -18352,7 +18352,7 @@ function geodeRealityMonthContextCollapsedRowHtml(mc) {
     '</div>';
   h +=
     '<div style="font-size:10px;color:rgba(189,183,220,0.52);line-height:1.4;margin-bottom:4px">' +
-    escHtmlLite('Optional \u2014 helps Beynd coach this month. Your numbers stay the same.') +
+    escHtmlLite('Optional. Helps Beynd coach this month. Your numbers stay the same.') +
     '</div>';
   h +=
     '<div style="font-size:12px;color:rgba(237,234,255,0.78);line-height:1.45">' +
@@ -18380,14 +18380,14 @@ function geodeRealityMonthContextExpandedFormHtml(mc) {
     '</div>';
   h +=
     '<div style="font-size:10px;color:rgba(189,183,220,0.52);line-height:1.4;margin-bottom:8px">' +
-    escHtmlLite('Optional \u2014 helps Beynd coach this month. Your numbers stay the same.') +
+    escHtmlLite('Optional. Helps Beynd coach this month. Your numbers stay the same.') +
     '</div>';
   h +=
     '<label style="font-size:11px;font-weight:500;color:var(--tx-3);display:block;margin-bottom:6px">' +
     escHtmlLite('Protect') +
     '</label>';
   h +=
-    '<div style="font-size:9px;color:rgba(189,183,220,0.52);line-height:1.4;margin:-4px 0 8px">What matters to you — coaching tone only, not a reserve.</div>';
+    '<div style="font-size:9px;color:rgba(189,183,220,0.52);line-height:1.4;margin:-4px 0 8px">What matters most this month.</div>';
   h +=
     '<input type="text" id="mc_protect" class="fi" value="' +
     escHtmlLite(mc.protect) +
@@ -19108,7 +19108,7 @@ function geodeRealityPlanAlignmentOfferHtml() {
     '</div>';
   h +=
     '<div style="font-size:11px;color:rgba(189,183,220,0.72);line-height:1.45;margin-bottom:10px">' +
-    escHtmlLite('Your plan steps, before and after. Debt-focused steps stay in place in this preview.') +
+    escHtmlLite('Debt-focused steps stay in place in this preview.') +
     '</div>';
   h +=
     '<button type="button" class="btn btn-s" style="width:100%" onclick="geodeOpenRealityPlanAlignmentPreview()">' +
