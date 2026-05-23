@@ -10479,6 +10479,312 @@ function geodeHomeDeferredMetaLineHtml(state) {
   }
 }
 
+/**
+ * Read-only Home orchestration resolver (Stage 60B). Composes orchestration + deferred queue
+ * snapshots into surface instructions. Instrumentation only — does not mutate state or render.
+ */
+function geodeHomeOrchestrationResolve(state) {
+  state = state || S;
+  var resolve = {
+    version: 1,
+    surfaces: {
+      overBudget: { show: false, reason: null },
+      needsAttention: { show: false, reason: null },
+      mainAction: { show: false, reason: null },
+      mutedLines: [],
+      subscriptionCard: { show: false, reason: null },
+      coachingStrip: { show: false, type: null, reason: null },
+      metaLine: { show: false, text: null, reason: null },
+      askBeynd: { show: true, emphasis: 'normal', reason: null },
+      shortcuts: { show: true, reason: null },
+      focusGoal: { show: false, mode: 'none', reason: null },
+      sinceLastVisit: { show: false, reason: null },
+      decorativeFooters: { show: false, reason: null }
+    },
+    deferredItems: [],
+    disclosureNeeded: [],
+    reasonCodes: [],
+    orchestration: {
+      homeBand: 'open',
+      userLoad: 'low',
+      decisionMode: 'none',
+      primaryFocus: { type: 'none', label: '' },
+      askBeyndMode: 'neutral',
+      askBeyndModifiers: []
+    }
+  };
+
+  function pushReason(code) {
+    if (!code || resolve.reasonCodes.indexOf(code) >= 0) return;
+    resolve.reasonCodes.push(code);
+  }
+
+  if (geodeIsEmptyState()) {
+    pushReason('empty_state');
+    return resolve;
+  }
+
+  var orch = null;
+  var dq = null;
+  try {
+    orch = geodeOrchestrationSnapshot(state);
+  } catch (_eOrchRes) {
+    orch = null;
+  }
+  try {
+    dq = geodeDeferredQueueSnapshot(state);
+  } catch (_eDqRes) {
+    dq = null;
+  }
+
+  if (orch && typeof orch === 'object') {
+    resolve.orchestration.homeBand = orch.homeBand || 'open';
+    resolve.orchestration.userLoad = orch.userLoad || 'low';
+    resolve.orchestration.decisionMode = orch.decisionMode || 'none';
+    resolve.orchestration.primaryFocus = orch.primaryFocus || { type: 'none', label: '' };
+    resolve.orchestration.askBeyndMode = orch.askBeyndMode || 'neutral';
+    resolve.orchestration.askBeyndModifiers = orch.askBeyndModifiers
+      ? orch.askBeyndModifiers.slice()
+      : [];
+    if (orch.reasonCodes && orch.reasonCodes.length) {
+      var oi;
+      for (oi = 0; oi < orch.reasonCodes.length; oi++) {
+        pushReason(orch.reasonCodes[oi]);
+      }
+    }
+  }
+
+  if (dq && typeof dq === 'object') {
+    resolve.deferredItems = dq.deferredItems ? dq.deferredItems.slice() : [];
+    resolve.disclosureNeeded = dq.disclosureNeeded ? dq.disclosureNeeded.slice() : [];
+    if (dq.reasonCodes && dq.reasonCodes.length) {
+      var di;
+      for (di = 0; di < dq.reasonCodes.length; di++) {
+        pushReason(dq.reasonCodes[di]);
+      }
+    }
+  }
+
+  var homeBand = resolve.orchestration.homeBand;
+  var softPri = null;
+  try {
+    softPri = geodeHomeSoftPriorityContext(state);
+    if (softPri && softPri.band) homeBand = softPri.band;
+  } catch (_eSpRes) {
+    softPri = null;
+  }
+
+  try {
+    var _homeLeft = calcMonthlyLeftover(state);
+    var _justFinished = false;
+    try {
+      _justFinished = sessionStorage.getItem('geode_qs_just_finished') === '1';
+    } catch (_eJfRes) {}
+    if (
+      _homeLeft < 0 &&
+      !_justFinished &&
+      state.hasOnboarded &&
+      geodeHasMeaningfulMonthlyExpenses(state)
+    ) {
+      resolve.surfaces.overBudget.show = true;
+      resolve.surfaces.overBudget.reason = 'cash_leftover_negative';
+      pushReason('surface_over_budget');
+    }
+  } catch (_eObRes) {}
+
+  try {
+    var _naItems = geodeOverdueItems();
+    if (_naItems.length) {
+      var _stepDedup = geodeHomeResolvedPlanStepForDedup(state);
+      var _dg = _stepDedup ? geodeHomePlanStepDebtGoalIds(_stepDedup) : { debtId: '', goalId: '' };
+      if (_stepDedup && (_dg.debtId || _dg.goalId)) {
+        _naItems = _naItems.filter(function (item) {
+          if (item.kind === 'goal' && _dg.goalId && String(item.id) === String(_dg.goalId)) {
+            return false;
+          }
+          if (
+            item.kind === 'payment' &&
+            _dg.debtId &&
+            item.debtId &&
+            String(item.debtId) === String(_dg.debtId)
+          ) {
+            return false;
+          }
+          return true;
+        });
+      }
+      if (_naItems.length) {
+        resolve.surfaces.needsAttention.show = true;
+        resolve.surfaces.needsAttention.reason = 'obligation_overdue';
+        pushReason('surface_needs_attention');
+      }
+    }
+  } catch (_eNaRes) {}
+
+  try {
+    var _ma = geodeGetMainAction(state);
+    if (_ma && (_ma.title || _ma.cta)) {
+      resolve.surfaces.mainAction.show = true;
+      resolve.surfaces.mainAction.reason = 'main_action_available';
+    }
+  } catch (_eMaRes) {}
+
+  var _rawMuted =
+    dq && dq.activeHomeSurfaces && dq.activeHomeSurfaces.mutedLines
+      ? dq.activeHomeSurfaces.mutedLines
+      : [];
+  if (_rawMuted.length) {
+    var _ml;
+    for (_ml = 0; _ml < _rawMuted.length; _ml++) {
+      var _txt = _rawMuted[_ml];
+      var _onClick = null;
+      var _kind = '';
+      var _reason = 'home_band_critical';
+      if (dq.deferredItems && dq.deferredItems.length) {
+        var _ki;
+        for (_ki = 0; _ki < dq.deferredItems.length; _ki++) {
+          var _it = dq.deferredItems[_ki];
+          if (_it && _it.humanCopy === _txt) {
+            if (_it.onClickRoute) _onClick = _it.onClickRoute;
+            if (_it.kind) _kind = String(_it.kind);
+            if (_it.reason) _reason = String(_it.reason);
+            break;
+          }
+        }
+      }
+      if (!_onClick) {
+        _onClick = geodeHomeMutedDeferLineFallbackClick(_txt);
+      }
+      resolve.surfaces.mutedLines.push({
+        text: String(_txt),
+        onClickRoute: _onClick,
+        kind: _kind,
+        reason: _reason
+      });
+    }
+    pushReason('surface_muted_lines');
+  }
+
+  var _subsDueVisible = false;
+  try {
+    _subsDueVisible = geodeSubsDueSoon(7).length > 0;
+  } catch (_eSubRes) {
+    _subsDueVisible = false;
+  }
+  if (_subsDueVisible) {
+    if (homeBand === 'critical') {
+      resolve.surfaces.subscriptionCard.show = false;
+      resolve.surfaces.subscriptionCard.reason = 'deferred_critical';
+    } else {
+      resolve.surfaces.subscriptionCard.show = true;
+      resolve.surfaces.subscriptionCard.reason = 'subs_due';
+      pushReason('surface_subscription_card');
+    }
+  }
+
+  var _hmSnap = null;
+  try {
+    _hmSnap = geodePickHumanMoment(state);
+  } catch (_eHmRes) {
+    _hmSnap = null;
+  }
+  var _stripWouldShow = false;
+  if (orch && typeof orch.insightStripWouldShow === 'boolean') {
+    _stripWouldShow = orch.insightStripWouldShow;
+  } else if (dq && dq.activeHomeSurfaces && dq.activeHomeSurfaces.coachingStrip === 'insight') {
+    _stripWouldShow = true;
+  }
+  if (
+    geodeGetIncomeContext(state) !== 'NONE' &&
+    geodeHasMeaningfulMonthlyExpenses(state)
+  ) {
+    if (homeBand === 'critical') {
+      resolve.surfaces.coachingStrip.show = false;
+      resolve.surfaces.coachingStrip.type = null;
+      resolve.surfaces.coachingStrip.reason = 'home_band_critical';
+    } else if (_hmSnap) {
+      resolve.surfaces.coachingStrip.show = true;
+      resolve.surfaces.coachingStrip.type = 'human_moment';
+      resolve.surfaces.coachingStrip.reason = 'human_moment_eligible';
+      pushReason('surface_coaching_human_moment');
+    } else if (_stripWouldShow) {
+      resolve.surfaces.coachingStrip.show = true;
+      resolve.surfaces.coachingStrip.type = 'insight';
+      resolve.surfaces.coachingStrip.reason = 'insight_primary';
+      pushReason('surface_coaching_insight');
+    }
+  }
+
+  var _metaText =
+    dq && dq.activeHomeSurfaces && dq.activeHomeSurfaces.metaLine
+      ? String(dq.activeHomeSurfaces.metaLine).trim()
+      : '';
+  if (_metaText) {
+    resolve.surfaces.metaLine.show = true;
+    resolve.surfaces.metaLine.text = _metaText;
+    resolve.surfaces.metaLine.reason = 'home_focused_quiet';
+    pushReason('surface_meta_line');
+  }
+
+  var _userLoad = resolve.orchestration.userLoad;
+  if (_userLoad === 'critical' || _userLoad === 'high') {
+    resolve.surfaces.askBeynd.emphasis = 'quiet';
+    resolve.surfaces.askBeynd.reason = 'user_load_' + _userLoad;
+  }
+
+  var _goals = state.goals || [];
+  if (_goals.length > 0) {
+    resolve.surfaces.focusGoal.show = true;
+    var _focusCompact = false;
+    try {
+      if (geodeHomeMainActionInsightKind() === 'goal') {
+        var _gFocus = selectPrimaryGoal(_goals) || _goals[0];
+        var _dedStFg = geodeHomeResolvedPlanStepForDedup(state);
+        var _dedIdsFg = _dedStFg ? geodeHomePlanStepDebtGoalIds(_dedStFg) : { goalId: '' };
+        _focusCompact = !!(
+          _dedIdsFg.goalId &&
+          _gFocus &&
+          String(_gFocus.id) === String(_dedIdsFg.goalId)
+        );
+      }
+    } catch (_eFgRes) {}
+    if (_focusCompact) {
+      resolve.surfaces.focusGoal.mode = 'compact';
+      resolve.surfaces.focusGoal.reason = 'dedup_main_action';
+    } else {
+      resolve.surfaces.focusGoal.mode = 'full';
+      resolve.surfaces.focusGoal.reason = 'goals_present';
+    }
+    pushReason('surface_focus_goal');
+  }
+
+  try {
+    var _recoverySlv = geodeGetRecoveryState(state);
+    var _slvShow = geodeHomeShouldShowSinceLastVisit(state.lastSeenAt, {
+      recoveryActive: !!_recoverySlv
+    });
+    if (_slvShow) {
+      resolve.surfaces.sinceLastVisit.show = true;
+      resolve.surfaces.sinceLastVisit.reason = 'since_last_visit_eligible';
+      pushReason('surface_since_last_visit');
+    }
+  } catch (_eSlvRes) {}
+
+  try {
+    var _showMsg = geodeShouldShowMessage(state);
+    var _suppressDecor =
+      softPri && (softPri.band === 'critical' || softPri.band === 'focused');
+    if (_showMsg && !_suppressDecor) {
+      resolve.surfaces.decorativeFooters.show = true;
+      resolve.surfaces.decorativeFooters.reason = 'message_eligible';
+    } else if (_suppressDecor) {
+      resolve.surfaces.decorativeFooters.reason = 'home_band_load';
+    }
+  } catch (_eDecRes) {}
+
+  return resolve;
+}
+
 function geodeHumanMomentShouldSuppress(ctx, state, opts) {
   state = state || S;
   opts = opts || {};
@@ -11781,6 +12087,7 @@ function geodePaoMaybeLogShadowDisagreements(state, pao) {
     window.geodePaoPRESSURE_THRESHOLDS = PAO_PRESSURE_THRESHOLDS;
     window.geodeOrchestrationSnapshot = geodeOrchestrationSnapshot;
     window.geodeDeferredQueueSnapshot = geodeDeferredQueueSnapshot;
+    window.geodeHomeOrchestrationResolve = geodeHomeOrchestrationResolve;
     window.geodeGetAskBeyndUiCopy = geodeGetAskBeyndUiCopy;
     window.geodeAskBeyndVisualState = geodeAskBeyndVisualState;
   } catch (_eEx) {}
