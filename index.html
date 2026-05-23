@@ -20420,6 +20420,16 @@ function rHome() {
   }
 
   var prevLastSeen = S.lastSeenAt;
+  try {
+    window._geodeHomeOrchestrationResolve = null;
+  } catch (_eOrchCacheClr) {}
+  try {
+    window._geodeHomeOrchestrationResolve = geodeHomeOrchestrationResolve(S);
+  } catch (_eOrchCache) {
+    try {
+      window._geodeHomeOrchestrationResolve = null;
+    } catch (_eOrchCache2) {}
+  }
 
   var h = '<div class="hero" style="padding:24px;margin-bottom:14px">';
   h += '<div style="font-size:11px;font-weight:600;color:var(--tx-4);margin-bottom:4px">' + nm + '</div>';
@@ -20562,7 +20572,6 @@ function rHome() {
     } catch (_eSdr) {}
     var _homeSubCardShowResolved = null;
     try {
-      window._geodeHomeOrchestrationResolve = geodeHomeOrchestrationResolve(S);
       var _homeOrchResolve = window._geodeHomeOrchestrationResolve;
       if (
         _homeOrchResolve &&
@@ -20572,11 +20581,7 @@ function rHome() {
       ) {
         _homeSubCardShowResolved = _homeOrchResolve.surfaces.subscriptionCard.show;
       }
-    } catch (_eOrchRh) {
-      try {
-        window._geodeHomeOrchestrationResolve = null;
-      } catch (_eOrchRh2) {}
-    }
+    } catch (_eOrchRh) {}
     if (_homeSubCardShowResolved === true) {
       _homeSubRenewCardVisible = true;
     } else if (_homeSubCardShowResolved === false) {
