@@ -11103,6 +11103,7 @@ function geodePaoMaybeLogShadowDisagreements(state, pao) {
     window.geodePaoPRESSURE_THRESHOLDS = PAO_PRESSURE_THRESHOLDS;
     window.geodeOrchestrationSnapshot = geodeOrchestrationSnapshot;
     window.geodeGetAskBeyndUiCopy = geodeGetAskBeyndUiCopy;
+    window.geodeAskBeyndVisualState = geodeAskBeyndVisualState;
   } catch (_eEx) {}
 })();
 
@@ -19009,6 +19010,49 @@ function geodeOpenAskBeyndApiKeySetup() {
   if (!geodeReplaceMoPanelHtml(html)) geodeOpenApiKeyModal();
 }
 
+/** Read-only Home Ask Beynd visual emphasis from orchestration load (Stage 58B). Does not mutate state. */
+function geodeAskBeyndVisualState(state) {
+  state = state || S;
+  var quiet = false;
+  try {
+    var snap = geodeOrchestrationSnapshot(state);
+    if (snap && (snap.userLoad === 'critical' || snap.userLoad === 'high')) {
+      quiet = true;
+    }
+  } catch (_eVisAb) {}
+  return {
+    quiet: quiet,
+    emphasis: quiet ? 'quiet' : 'normal'
+  };
+}
+
+/** Home Ask Beynd entry — visual quiet mode under high/critical load (Stage 58B). */
+function geodeHomeAskBeyndButtonHtml(state) {
+  state = state || S;
+  var vs = geodeAskBeyndVisualState(state);
+  var bg = vs.quiet ? 'rgba(155,127,232,0.06)' : 'rgba(155,127,232,0.12)';
+  var bd = vs.quiet ? 'rgba(155,127,232,0.2)' : 'rgba(155,127,232,0.35)';
+  var col = vs.quiet ? 'rgba(196,171,255,0.82)' : '#c4abff';
+  var fw = vs.quiet ? '600' : '700';
+  var pad = vs.quiet ? '12px 14px' : '13px 14px';
+  return (
+    '<div style="margin-top:14px;margin-bottom:10px">' +
+    '<button type="button" onclick="geodeOpenAskBeynd()" style="width:100%;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:' +
+    bg +
+    ';border:1px solid ' +
+    bd +
+    ';border-radius:12px;padding:' +
+    pad +
+    ';color:' +
+    col +
+    ';font-size:13px;font-weight:' +
+    fw +
+    ';cursor:pointer;font-family:-apple-system,sans-serif">' +
+    geodeIcon('sparkles', 'ic ic-qa') +
+    'Ask Beynd</button></div>'
+  );
+}
+
 /** Read-only Ask Beynd modal copy from orchestration snapshot (Stage 57D). Does not mutate state. */
 function geodeGetAskBeyndUiCopyNeutralFallback() {
   return {
@@ -19598,11 +19642,7 @@ function rHome() {
   h += _homeSubRenewCardHtml;
   h += geodeHomeCoachingStripHtml();
   // Reality check balance removed — use bank sync in v2
-  h +=
-    '<div style="margin-top:14px;margin-bottom:10px">' +
-    '<button type="button" onclick="geodeOpenAskBeynd()" style="width:100%;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:rgba(155,127,232,0.12);border:1px solid rgba(155,127,232,0.35);border-radius:12px;padding:13px 14px;color:#c4abff;font-size:13px;font-weight:700;cursor:pointer;font-family:-apple-system,sans-serif">' +
-    geodeIcon('sparkles', 'ic ic-qa') +
-    'Ask Beynd</button></div>';
+  h += geodeHomeAskBeyndButtonHtml(S);
   var _homeShowGoalPreview = S.goals.length > 0;
   h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px">';
   h +=
