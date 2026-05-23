@@ -3249,9 +3249,7 @@ function geodeRenderSinceLastVisit(prevVisitTs) {
       ? 'It\u2019s been a few days — your last setup is still what we\u2019re showing'
       : 'It\u2019s been a few days — your plan still reflects your last setup';
   } else {
-    msg = geodeIsNoIncomeMode()
-      ? 'No changes since your last visit — your numbers still match your last setup'
-      : 'No changes since your last visit — your plan still holds';
+    msg = 'No major changes since your last visit.';
   }
   return (
     '<div style="font-size:10px;color:rgba(112,106,144,0.92);line-height:1.45;margin-top:10px">' +
@@ -16712,7 +16710,7 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
               // Cross-family: acknowledge divergence only when it clarifies the next decision.
               if      (_actFamily === 'invest' && _mainKind === 'buffer') _bhvLine = 'Recent invest log. Your plan still leads with buffer.';
               else if (_actFamily === 'invest' && _mainKind === 'debt')   _bhvLine = 'Recent invest log. Your plan still leads with debt.';
-              else if (_actFamily === 'goal'   && _mainKind === 'debt')   _bhvLine = 'Recent goal log. Your plan still leads with debt.';
+              else if (_actFamily === 'goal'   && _mainKind === 'debt')   _bhvLine = 'Recent goal log.';
               else if (_actFamily === 'debt'   && _mainKind === 'invest') _bhvLine = 'Recent debt log. Your plan now leads with investing.';
               else _bhvLine = '';
               if (_bhvLine) _bhvIsConflict = true;
@@ -16860,18 +16858,8 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
             '</div>';
         }
       }
-      if (_showPlanTargetFraming) {
-        h +=
-          '<div style="font-size:9px;color:rgba(189,183,220,0.52);line-height:1.35;margin-top:2px">From your monthly plan</div>';
-      }
     } else {
-      if (_showPlanTargetFraming) {
-        h += '<div style="font-size:18px;font-weight:800;color:#9b7fe8">' + fm(amt) + '</div>';
-        h +=
-          '<div style="font-size:9px;color:rgba(189,183,220,0.52);line-height:1.35;margin-top:2px">From your monthly plan</div>';
-      } else {
-        h += '<div style="font-size:18px;font-weight:800;color:#9b7fe8">' + fm(amt) + '</div>';
-      }
+      h += '<div style="font-size:18px;font-weight:800;color:#9b7fe8">' + fm(amt) + '</div>';
     }
   }
   h +=
