@@ -1940,6 +1940,37 @@ function ml(s) {
 }
 function m2d(m) { var d = new Date(); d.setMonth(d.getMonth()+m); return d.toISOString().slice(0,7)+'-01'; }
 
+/** Goal target date for `<input type="date">` (supports legacy YYYY-MM-01 storage). */
+function geodeGoalTargetDateForInput(iso) {
+  if (!iso) return '';
+  var s = String(iso).trim();
+  if (s.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  if (s.length >= 7 && /^\d{4}-\d{2}/.test(s)) return s.slice(0, 7) + '-01';
+  return '';
+}
+
+/** Normalize goal modal / save target date to YYYY-MM-DD (null when empty). */
+function geodeNormalizeGoalTargetDateInput(val) {
+  if (val == null) return null;
+  var s = String(val).trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s.slice(0, 10))) return s.slice(0, 10);
+  if (/^\d{4}-\d{2}$/.test(s.slice(0, 7))) return s.slice(0, 7) + '-01';
+  return null;
+}
+
+/** Stage 62G-fix3: predictive goal target as full local date (same day-of-month when possible). */
+function geodeGoalSuggestedTargetDateFromMonths(months) {
+  months = Math.max(0, Math.ceil(toNum(months)));
+  var base = new Date();
+  base.setHours(12, 0, 0, 0);
+  var day = base.getDate();
+  var d = new Date(base.getFullYear(), base.getMonth() + months, 1, 12, 0, 0, 0);
+  var lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
+  return geodeDateToLocalISO(d);
+}
+
 // ── PURE FINANCE HELPERS ────────────────────────────
 function toNum(v, fallback) {
   var n = Number(v);
@@ -3432,7 +3463,7 @@ function getGoalProjection(goal) {
   if (!goal || !goal.targetDate) return null;
   var amount = toNum(goal.amount);
   var saved = geodeGoalEffectiveSaved(goal);
-  var monthly = toNum(goal.monthly);
+  var monthly = geodeGoalEffectiveMonthlyPace(S, goal);
   var remaining = Math.max(0, amount - saved);
   if (remaining <= 0 || monthly <= 0) return null;
   var monthsToTarget = ml(goal.targetDate);
@@ -3466,8 +3497,8 @@ function goalStatusWhyLine(goal) {
     return 'At your current pace, this goal could finish in about ' + X + ' months, with ' + Y + ' months left until target.';
   }
   var intel = calcGoalIntelligence(goal);
-  if (intel && intel.status === 'overdue' && toNum(goal.monthly) > 0 && intel.remaining > 0) {
-    var paceO = Math.ceil(intel.remaining / toNum(goal.monthly));
+  if (intel && intel.status === 'overdue' && intel.currentMonthly > 0 && intel.remaining > 0) {
+    var paceO = Math.ceil(intel.remaining / intel.currentMonthly);
     if (paceO >= 1) {
       return 'At your current pace, the remainder could clear in about ' + paceO + ' month' + (paceO === 1 ? '' : 's') + ' — the target date has passed.';
     }
@@ -3598,12 +3629,50 @@ function geodeUnlinkedInvestmentBalance(state) {
   return s;
 }
 
+/**
+ * Stage 62B-2: planned monthly saving pace for goal intelligence (read-only).
+ * Stored goal.monthly wins; else derive from recurring goal-linked scheduled payment.
+ */
+function geodeGoalEffectiveMonthlyPace(state, goal) {
+  if (!goal) return 0;
+  state = state || S;
+  var stored = toNum(goal.monthly);
+  if (stored > 0) return stored;
+  var gid = String(goal.id || '');
+  if (!gid) return 0;
+  var pay = state.payments || [];
+  var best = 0;
+  var bestPri = -1;
+  var i, p, amt, pk, pri, st;
+  for (i = 0; i < pay.length; i++) {
+    p = pay[i];
+    if (!p || String(p.goalId || '') !== gid) continue;
+    if (p.rec !== 'yes') continue;
+    pk = String(p.payKind || '').toLowerCase();
+    if (pk !== 'goal' && !p.goalId) continue;
+    amt = toNum(p.amount);
+    if (amt <= 0) continue;
+    st = String(p.status || '');
+    if (st === 'paid') {
+      if (p.lastPaidYM === currentYM()) pri = 1;
+      else continue;
+    } else {
+      pri = 2;
+    }
+    if (pri > bestPri || (pri === bestPri && amt > best)) {
+      best = amt;
+      bestPri = pri;
+    }
+  }
+  return best;
+}
+
 function calcGoalIntelligence(goal) {
   if (!goal) return null;
   var amount = toNum(goal.amount);
   var saved = geodeGoalEffectiveSaved(goal);
   var remaining = Math.max(0, amount - saved);
-  var currentMonthly = toNum(goal.monthly);
+  var currentMonthly = geodeGoalEffectiveMonthlyPace(S, goal);
   var monthsRemaining = goal.targetDate ? ml(goal.targetDate) : null;
 
   // Required monthly contribution is only meaningful when monthsRemaining > 0.
@@ -3650,6 +3719,37 @@ function calcGoalIntelligence(goal) {
   };
 }
 
+/** Stage 62G: pure suggested target month from draft pace (read-only; no DOM writes). */
+function geodeComputeSuggestedGoalTargetDate(draft, opts) {
+  opts = opts || {};
+  if (!draft) return null;
+  var target = toNum(draft.amount);
+  var saved = toNum(draft.saved);
+  if (target <= 0) return null;
+  var remaining = Math.max(0, target - saved);
+  if (remaining <= 0) return null;
+  if (!opts.ignoreFieldDate) {
+    var gdVal = '';
+    try {
+      gdVal = String(((document.getElementById('gd') || {}).value) || '').trim();
+    } catch (_eGd) {}
+    if (gdVal && gdVal.length >= 7) return null;
+    if (draft.targetDate) return null;
+  }
+  var monthly = geodeGoalEffectiveMonthlyPace(S, draft);
+  if (monthly <= 0) return null;
+  var months = Math.ceil(remaining / monthly);
+  if (months <= 0) return null;
+  var iso = geodeGoalSuggestedTargetDateFromMonths(months);
+  if (!iso) return null;
+  var ym = iso.slice(0, 7);
+  var monthLabel = iso;
+  try {
+    monthLabel = fd(iso);
+  } catch (_eFmt) {}
+  return { months: months, monthly: monthly, remaining: remaining, ym: ym, iso: iso, monthLabel: monthLabel };
+}
+
 /** Draft goal from Edit Goal modal fields (for live pace preview). */
 function geodeGoalDraftFromModal() {
   var target = parseFloat((document.getElementById('ga') || {}).value) || 0;
@@ -3660,8 +3760,8 @@ function geodeGoalDraftFromModal() {
     goalRef && geodeGoalHasPositiveLinkedInvestment(goalRef)
       ? geodeGoalEffectiveSaved(goalRef)
       : parseFloat((document.getElementById('gs') || {}).value) || 0;
-  var ym = ((document.getElementById('gd') || {}).value || '').trim();
-  var targetDate = ym && ym.length >= 7 ? ym + '-01' : null;
+  var dvRaw = ((document.getElementById('gd') || {}).value || '').trim();
+  var targetDate = geodeNormalizeGoalTargetDateInput(dvRaw);
   var monthly = parseFloat((document.getElementById('gm') || {}).value) || 0;
   return {
     id: editGoalId,
@@ -18914,6 +19014,46 @@ function geodeEligibilityForRealityPlanAlignment(state) {
   }
 }
 
+/**
+ * Stage 63A-1: read-only cap on Month Shift flex reductions (overlay preview only).
+ * Uses existing feeling, posture, and month context — no new storage.
+ */
+function geodeRealityShiftIntensityCap(state) {
+  state = state || S;
+  var feeling = '';
+  try {
+    feeling = geodeGetRealityFeeling() || '';
+  } catch (_eCapF) {}
+  var posture = null;
+  try {
+    posture = geodeGetContextPosture(state);
+  } catch (_eCapP) {}
+  var mc = null;
+  try {
+    mc = geodeGetMonthContext(state);
+  } catch (_eCapMc) {}
+  var p = posture && posture.posture ? posture.posture : '';
+  var tone = posture && posture.tone ? posture.tone : '';
+  var monthWorry = !!(mc && mc.worried);
+  var monthProtect = !!(mc && mc.protect);
+
+  if (feeling === 'still' || p === 'steady_progress' || p === 'growth_room') {
+    return 1;
+  }
+  if (
+    feeling === 'moved' ||
+    feeling === 'slow' ||
+    p === 'protect_flexibility' ||
+    monthWorry
+  ) {
+    return 0.55;
+  }
+  if (feeling === 'unsure' || p === 'review_first' || tone === 'cautious' || monthProtect) {
+    return 0.65;
+  }
+  return 1;
+}
+
 /** Stage 55C-1: v1 protected debt step labels (extra overpay not reduced in first build). */
 function geodeRealityPlanAlignmentProtectedDebtStep(step) {
   var lb = String(step && step.label || '');
@@ -19006,6 +19146,15 @@ function geodeBuildRealityPlanAlignmentPreview(state) {
       return b - a;
     });
 
+    var intensityCap = 1;
+    try {
+      intensityCap = geodeRealityShiftIntensityCap(state);
+    } catch (_eCapIc) {
+      intensityCap = 1;
+    }
+    if (!isFinite(intensityCap) || intensityCap <= 0) intensityCap = 1;
+    if (intensityCap > 1) intensityCap = 1;
+
     var closedAmount = 0;
     var fi;
     for (fi = 0; fi < flexIndices.length; fi++) {
@@ -19014,7 +19163,12 @@ function geodeBuildRealityPlanAlignmentPreview(state) {
       var row = rows[ix];
       var reducible = row.remainingAmount;
       if (reducible <= 0) continue;
-      var take = Math.min(reducible, need - closedAmount);
+      var maxReducible = reducible;
+      if (intensityCap < 1) {
+        maxReducible = Math.floor(reducible * intensityCap);
+        if (maxReducible <= 0) continue;
+      }
+      var take = Math.min(maxReducible, need - closedAmount);
       if (take <= 0) continue;
       if (take >= reducible) {
         row.action = 'pause';
@@ -21538,9 +21692,10 @@ function rGoals(_target) {
       var _linkedName = _linkedInv ? escHtmlLite(_linkedInv.name||'Investment') : 'Linked investment';
       ih += '<div style="font-size:9px;color:rgba(155,127,232,0.85);margin-bottom:9px;line-height:1.35">↗ Progress from linked investments (' + _linkedName + '): ' + fm(_linkedInvBal) + '</div>';
     }
-    if (Number(g.monthly) > 0) {
+    var _paceMo = geodeGoalEffectiveMonthlyPace(S, g);
+    if (_paceMo > 0) {
       var _cardIntel = calcGoalIntelligence(g);
-      var _plannedLine = 'Your planned saving: ' + fm(g.monthly) + '/month';
+      var _plannedLine = 'Your planned saving: ' + fm(_paceMo) + '/month';
       if (_cardIntel && _cardIntel.monthsAtPlannedPace > 0) {
         _plannedLine += ' \u00b7 At this pace: ~' + _cardIntel.monthsAtPlannedPace + ' months to close the gap';
       }
@@ -21570,6 +21725,12 @@ function rGoals(_target) {
 }
 function openGoalModal(id) {
   var g = id ? S.goals.filter(function(x){ return x.id===id; })[0] : null;
+  try {
+    var userSetDate = !!(g && g.targetDateUserSet === true);
+    window._geodeGoalDateManualEdit = userSetDate;
+    window._geodeGoalDateAutoFilled = !!(g && g.targetDate && !userSetDate);
+    window._geodeGoalDateManualClear = false;
+  } catch (_eGs) {}
   var h = mh(g?'Edit Goal':'New Savings Goal');
   h += '<input type="hidden" id="geode_goal_edit_id" value="' + (g ? String(g.id).replace(/"/g, '&quot;') : '') + '" />';
   h +=
@@ -21588,7 +21749,7 @@ function openGoalModal(id) {
     (g ? g.saved : '0') +
     '"' +
     (g && geodeGoalHasPositiveLinkedInvestment(g) ? ' disabled style="opacity:0.55"' : '') +
-    ' oninput="try{geodeGoalModalImpactRefresh()}catch(e){}" /></div></div>';
+    ' oninput="try{liveGoalSug();geodeGoalModalImpactRefresh()}catch(e){}" /></div></div>';
   if (g && geodeGoalHasPositiveLinkedInvestment(g)) {
     h +=
       '<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:-6px 0 10px">While a linked investment has a balance &gt; 0, progress uses those balances only. Unlink in Investments to edit Saved So Far.</div>';
@@ -21603,9 +21764,9 @@ function openGoalModal(id) {
     (g ? g.monthly || '' : '') +
     '" oninput="try{liveGoalSug();geodeGoalModalImpactRefresh()}catch(e){}" /></div>';
   h +=
-    '<div class="field" style="opacity:0.96"><label>Target date (optional)</label><input type="month" id="gd" class="fi" value="' +
-    (g && g.targetDate ? g.targetDate.slice(0, 7) : '') +
-    '" oninput="try{geodeGoalModalImpactRefresh()}catch(e){}" />';
+    '<div class="field" style="opacity:0.96"><label>Target date (optional)</label><input type="date" id="gd" class="fi" value="' +
+    (g && g.targetDate ? geodeGoalTargetDateForInput(g.targetDate).replace(/"/g, '&quot;') : '') +
+    '" oninput="try{geodeGoalDateManualInput();geodeGoalModalImpactRefresh()}catch(e){}" />';
   h += '<div id="gsug" style="font-size:11px;padding:7px 10px;border-radius:9px;margin-top:4px;display:none"></div></div>';
   h += '<div id="geode-goal-impact-host"></div>';
   h += '<button class="btn btn-p" style="margin-top:4px" onclick="saveGoal(\''+(id||'')+'\')">Save Goal</button>';
@@ -21619,7 +21780,67 @@ function openGoalModal(id) {
     } catch (e2) {}
   }, 0);
 }
+function geodeGoalDateManualInput() {
+  try {
+    window._geodeGoalDateManualEdit = true;
+    window._geodeGoalDateAutoFilled = false;
+    var gdEl = document.getElementById('gd');
+    if (gdEl && !String(gdEl.value || '').trim()) {
+      window._geodeGoalDateManualClear = true;
+    }
+  } catch (_eMd) {}
+  try {
+    liveGoalSug();
+  } catch (_eLs) {}
+}
+
+function geodeGoalDraftForSuggestedDate() {
+  var draft = geodeGoalDraftFromModal();
+  var paceDraft = {
+    id: draft.id,
+    amount: draft.amount,
+    saved: draft.saved,
+    monthly: geodeGoalEffectiveMonthlyPace(S, draft),
+    targetDate: null
+  };
+  return paceDraft;
+}
+
 function liveGoalSug() {
+  var gd = document.getElementById('gd');
+  var manualEdit = false;
+  var manualClear = false;
+  var autoFilled = false;
+  try {
+    manualEdit = !!window._geodeGoalDateManualEdit;
+    manualClear = !!window._geodeGoalDateManualClear;
+    autoFilled = !!window._geodeGoalDateAutoFilled;
+  } catch (_eSt) {}
+  if (!manualEdit && !manualClear && gd) {
+    var sugDate = geodeComputeSuggestedGoalTargetDate(geodeGoalDraftForSuggestedDate(), {
+      ignoreFieldDate: true
+    });
+    if (sugDate && sugDate.iso) {
+      var prevDate = String(gd.value || '').trim();
+      if (prevDate !== sugDate.iso) {
+        gd.value = sugDate.iso;
+        try {
+          geodeGoalModalImpactRefresh();
+        } catch (_eIm) {}
+      }
+      try {
+        window._geodeGoalDateAutoFilled = true;
+      } catch (_eAf) {}
+    } else if (autoFilled) {
+      gd.value = '';
+      try {
+        window._geodeGoalDateAutoFilled = false;
+      } catch (_eRf) {}
+      try {
+        geodeGoalModalImpactRefresh();
+      } catch (_eIm2) {}
+    }
+  }
   var sug = document.getElementById('gsug');
   if (!sug) return;
   var draft = geodeGoalDraftFromModal();
@@ -21649,8 +21870,13 @@ function saveGoal(id) {
   var sumSavedBefore = S.goals.reduce(function(s, g) { return s + toNum(g.saved); }, 0);
   setLastSnapshotBeforeChange();
   var dv=(document.getElementById('gd')||{}).value;
+  var targetDateNorm = geodeNormalizeGoalTargetDateInput(dv);
   var prev = id ? S.goals.filter(function(x){ return x.id===id; })[0] : null;
-  var obj={name:nm,amount:Number(am),saved:Number((document.getElementById('gs')||{}).value)||0,monthly:Number((document.getElementById('gm')||{}).value)||0,targetDate:dv?dv+'-01':null,cat:(document.getElementById('gc')||{}).value||'other',isPrimary: prev ? !!prev.isPrimary : false};
+  var dateUserSet = false;
+  try {
+    dateUserSet = !!window._geodeGoalDateManualEdit;
+  } catch (_eDu) {}
+  var obj={name:nm,amount:Number(am),saved:Number((document.getElementById('gs')||{}).value)||0,monthly:Number((document.getElementById('gm')||{}).value)||0,targetDate:targetDateNorm,cat:(document.getElementById('gc')||{}).value||'other',isPrimary: prev ? !!prev.isPrimary : false,targetDateUserSet:!!targetDateNorm && dateUserSet};
   obj.baseSaved = obj.saved;
   var msg = '';
   if (id) { for(var i=0;i<S.goals.length;i++){if(S.goals[i].id===id){Object.assign(S.goals[i],obj);break;}} msg = 'Goal updated.'; }
@@ -22457,7 +22683,7 @@ function geodeQuickSetupBuildTempState(qs) {
       amount: gt != null && gt > 0 ? gt : 0,
       saved: 0,
       baseSaved: 0,
-      monthly: 0,
+      monthly: gm != null && gm > 0 ? gm : 0,
       targetDate: null,
       cat: 'other',
       isPrimary: true,
@@ -22627,7 +22853,7 @@ function geodeQuickSetupFinish() {
     if (!Array.isArray(S.goals)) S.goals = [];
     // If this is the first goal, mark as primary for nicer Home.
     var isFirst = !S.goals.length;
-    S.goals.push({ id: goalId, name: gn, amount: gt != null && gt > 0 ? gt : 0, saved: 0, baseSaved: 0, monthly: 0, targetDate: null, cat: 'other', isPrimary: isFirst, col: rc() });
+    S.goals.push({ id: goalId, name: gn, amount: gt != null && gt > 0 ? gt : 0, saved: 0, baseSaved: 0, monthly: gm != null && gm > 0 ? gm : 0, targetDate: null, cat: 'other', isPrimary: isFirst, col: rc() });
   }
 
   // Contributions (scheduled)
@@ -23648,6 +23874,16 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     if (directToast) {
       userMsg = directToast;
       try { window._geodeDirectContribCtx = null; } catch (e2) {}
+    }
+  }
+  if (gid && rec === 'yes' && amtNum > 0) {
+    var gsi;
+    for (gsi = 0; gsi < (S.goals || []).length; gsi++) {
+      var gRow = S.goals[gsi];
+      if (gRow && String(gRow.id || '') === String(gid) && toNum(gRow.monthly) <= 0) {
+        gRow.monthly = amtNum;
+        break;
+      }
     }
   }
   try {
