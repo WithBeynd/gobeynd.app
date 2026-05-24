@@ -2534,6 +2534,89 @@ function calcMonthlyLeftoverConfirmedOnly(state) {
   return income - sumPaymentsMonthlyOutflowConfirmedOnly(state.payments || []) - sumExpensesMonthly(state.expenses || []);
 }
 
+/**
+ * Stage 62A: read-only affordability cap for plan suggestions (does not change planRoom accounting).
+ * suggestableRoom caps getMonthPlan step budget only — no UI surface.
+ */
+function geodeDebtMinimumInCashflow(state, debt) {
+  if (!debt) return false;
+  var minp = toNum(debt.minp);
+  if (minp <= 0) return true;
+  var did = String(debt.id || '');
+  var dname = String(debt.name || '').toLowerCase().trim();
+  var pay = (state && state.payments) || [];
+  var pi;
+  for (pi = 0; pi < pay.length; pi++) {
+    var p = pay[pi];
+    if (!p || !paymentCountsForMonthlyOutflow(p)) continue;
+    if (did && String(p.debtId || '') === did) return true;
+    if (dname && String(p.name || '').toLowerCase().indexOf(dname) >= 0 && toNum(p.amount) >= minp * 0.85) {
+      return true;
+    }
+  }
+  var expenses = (state && state.expenses) || [];
+  var nowYM = currentYM();
+  var ei;
+  for (ei = 0; ei < expenses.length; ei++) {
+    var e = expenses[ei];
+    if (!e) continue;
+    if (e.rec !== 'yes' && e.rec !== 'annual') {
+      var eYM = e.date ? String(e.date).slice(0, 7) : '';
+      if (eYM && eYM !== nowYM) continue;
+    }
+    var monthly = e.rec === 'annual' ? toNum(e.amount) / 12 : toNum(e.amount);
+    if (monthly <= 0) continue;
+    var nm = String(e.name || '').toLowerCase();
+    if (/debt\s+minimum|^min\s*payment|minimum\s*payment\b/i.test(nm) && monthly >= minp * 0.85) return true;
+    if (dname && nm.indexOf(dname) >= 0 && monthly >= minp * 0.85) return true;
+  }
+  return false;
+}
+
+function computeAffordabilityContext(state) {
+  state = state || S;
+  var income = toNum(state.income);
+  var planRoom = calcMonthlyLeftover(state);
+  var confirmedRoom = calcMonthlyLeftoverConfirmedOnly(state);
+  var reasonCodes = [];
+  var debts = state.debts || [];
+  var unresolvedRequired = 0;
+  var di;
+  for (di = 0; di < debts.length; di++) {
+    var d = debts[di];
+    if (!d) continue;
+    var minp = toNum(d.minp);
+    if (minp <= 0) continue;
+    if (!geodeDebtMinimumInCashflow(state, d)) unresolvedRequired += minp;
+  }
+  var breathingRoomFloor = Math.max(50, income * 0.08);
+  var suggestableRoom = 0;
+  if (planRoom <= 0) {
+    suggestableRoom = 0;
+    reasonCodes.push('plan_room_negative');
+  } else {
+    suggestableRoom = Math.max(0, planRoom - unresolvedRequired - breathingRoomFloor);
+    if (unresolvedRequired > 0) reasonCodes.push('min_not_in_cashflow');
+    if (breathingRoomFloor > 0 && suggestableRoom < planRoom - unresolvedRequired) {
+      reasonCodes.push('breathing_room_reserved');
+    }
+  }
+  if (!geodeHasPositiveIncome()) reasonCodes.push('no_income');
+  var confidence = 'high';
+  if (planRoom <= 0 || !geodeHasPositiveIncome()) confidence = 'low';
+  else if (unresolvedRequired > 0 || suggestableRoom < planRoom * 0.25) confidence = 'moderate';
+  return {
+    planRoom: planRoom,
+    confirmedRoom: confirmedRoom,
+    income: income,
+    breathingRoomFloor: breathingRoomFloor,
+    unresolvedRequired: unresolvedRequired,
+    suggestableRoom: suggestableRoom,
+    confidence: confidence,
+    reasonCodes: reasonCodes
+  };
+}
+
 /** Ephemeral clone for modal inline impact only — does not persist and does not mutate S. */
 function geodeCloneStateForUiCalc(state) {
   state = state || S;
@@ -12538,7 +12621,7 @@ function geodeComputeDelayBreakdown(state) {
 function getMonthPlan() {
   var steps = [];
   var left = calcLeftover();
-  var budget = left;
+  var budget = computeAffordabilityContext(S).suggestableRoom;
   var ctx = geodeCtx();
   var stratCfg = getStrategyConfig(S.planStrategy);
 
