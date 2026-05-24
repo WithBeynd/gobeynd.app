@@ -3507,43 +3507,74 @@ function calcGoalIntelligence(goal) {
     status = gap > thr ? 'off track' : 'at risk';
   }
 
+  var monthsAtPlannedPace = null;
+  if (remaining > 0 && currentMonthly > 0) {
+    monthsAtPlannedPace = Math.ceil(remaining / currentMonthly);
+  }
+
   return {
     goal: goal,
     remaining: remaining,
     monthsRemaining: monthsRemaining,
     requiredMonthly: requiredMonthly,
     currentMonthly: currentMonthly,
+    monthsAtPlannedPace: monthsAtPlannedPace,
     gap: gap,
     status: status
   };
 }
 
-/** Stage J: visible pace line from existing calcGoalIntelligence (no new math). */
+/** Draft goal from Edit Goal modal fields (for live pace preview). */
+function geodeGoalDraftFromModal() {
+  var target = parseFloat((document.getElementById('ga') || {}).value) || 0;
+  var gidEl = document.getElementById('geode_goal_edit_id');
+  var editGoalId = gidEl && gidEl.value ? String(gidEl.value).trim() : '';
+  var goalRef = editGoalId ? S.goals.filter(function(x) { return String(x.id) === editGoalId; })[0] : null;
+  var saved =
+    goalRef && geodeGoalHasPositiveLinkedInvestment(goalRef)
+      ? geodeGoalEffectiveSaved(goalRef)
+      : parseFloat((document.getElementById('gs') || {}).value) || 0;
+  var ym = ((document.getElementById('gd') || {}).value || '').trim();
+  var targetDate = ym && ym.length >= 7 ? ym + '-01' : null;
+  var monthly = parseFloat((document.getElementById('gm') || {}).value) || 0;
+  return {
+    id: editGoalId,
+    amount: target,
+    saved: saved,
+    monthly: monthly,
+    targetDate: targetDate
+  };
+}
+
+/** Plain label for pace-to-date from calcGoalIntelligence (shared card + modal). */
+function geodeGoalPaceNeededText(intel) {
+  if (
+    !intel ||
+    intel.requiredMonthly == null ||
+    !isFinite(intel.requiredMonthly) ||
+    intel.requiredMonthly <= 0 ||
+    intel.remaining <= 0
+  ) {
+    return '';
+  }
+  return 'Pace needed: ~' + fm(intel.requiredMonthly) + '/month';
+}
+
+/** Stage J: visible pace line from calcGoalIntelligence (no duplicate math). */
 function geodeGoalPaceBannerHtml(g) {
   if (!g || !toNum(g.amount)) return '';
+  var paceStyle =
+    'font-size:10px;color:rgba(196,171,255,0.95);margin-top:6px;font-weight:600;line-height:1.35';
   if (!g.targetDate) {
-    return (
-      '<div style="font-size:10px;color:rgba(196,171,255,0.95);margin-top:6px;font-weight:600;line-height:1.35">Set a timeline to see monthly target</div>'
-    );
+    return '<div style="' + paceStyle + '">Add a target date for pace needed</div>';
   }
   var intel = calcGoalIntelligence(g);
-  if (intel && intel.requiredMonthly != null && isFinite(intel.requiredMonthly) && intel.requiredMonthly > 0 && intel.remaining > 0) {
-    if (geodeIsNoIncomeMode()) {
-      return (
-        '<div style="font-size:10px;color:rgba(196,171,255,0.95);margin-top:6px;font-weight:600;line-height:1.35">Set a pace now (~' +
-        fm(intel.requiredMonthly) +
-        '/month) \u2014 fund it when income starts again. This goal is ready when you can.</div>'
-      );
-    }
-    return (
-      '<div style="font-size:10px;color:rgba(196,171,255,0.95);margin-top:6px;font-weight:600;line-height:1.35">~' +
-      fm(intel.requiredMonthly) +
-      '/month pace guide to reach your target if you choose to stay on this pace.</div>'
-    );
+  var line = geodeGoalPaceNeededText(intel);
+  if (line) {
+    if (geodeIsNoIncomeMode()) line += ' \u2014 fund when income returns';
+    return '<div style="' + paceStyle + '">' + escHtmlLite(line) + '</div>';
   }
-  return (
-    '<div style="font-size:10px;color:rgba(196,171,255,0.95);margin-top:6px;font-weight:600;line-height:1.35">Set a timeline to see monthly target</div>'
-  );
+  return '<div style="' + paceStyle + '">Add a target date for pace needed</div>';
 }
 
 function selectMostOffTrackGoal(goals) {
@@ -21381,7 +21412,14 @@ function rGoals(_target) {
       var _linkedName = _linkedInv ? escHtmlLite(_linkedInv.name||'Investment') : 'Linked investment';
       ih += '<div style="font-size:9px;color:rgba(155,127,232,0.85);margin-bottom:9px;line-height:1.35">↗ Progress from linked investments (' + _linkedName + '): ' + fm(_linkedInvBal) + '</div>';
     }
-    if (Number(g.monthly)>0) ih+='<div style="font-size:10px;color:var(--tx-3);margin-bottom:9px">Saving '+fm(g.monthly)+'/month · '+fm(rem)+' to go</div>';
+    if (Number(g.monthly) > 0) {
+      var _cardIntel = calcGoalIntelligence(g);
+      var _plannedLine = 'Your planned saving: ' + fm(g.monthly) + '/month';
+      if (_cardIntel && _cardIntel.monthsAtPlannedPace > 0) {
+        _plannedLine += ' \u00b7 At this pace: ~' + _cardIntel.monthsAtPlannedPace + ' months to close the gap';
+      }
+      ih += '<div style="font-size:10px;color:var(--tx-3);margin-bottom:9px">' + escHtmlLite(_plannedLine) + '</div>';
+    }
     var lastGoalAmt = geodeLastLinkedContributionAmount('goal', g.id);
     var lastGoalLine = lastGoalAmt ? '<div style="font-size:9px;color:var(--tx-3);margin:-2px 0 8px;line-height:1.2">Last contribution: ' + fm(lastGoalAmt) + '</div>' : '';
     if (p >= 100) {
@@ -21456,16 +21494,20 @@ function openGoalModal(id) {
   }, 0);
 }
 function liveGoalSug() {
-  var a=parseFloat((document.getElementById('ga')||{}).value)||0;
-  var m=parseFloat((document.getElementById('gm')||{}).value)||0;
-  var sug=document.getElementById('gsug'); if(!sug) return;
-  if (a>0 && m>0) {
-    var months=Math.ceil(a/m);
-    var wt,wc; if(months<=3){wt='Very ambitious!';wc='#f5c234';}else if(months<=12){wt='Achievable within a year!';wc='#34d5a0';}else if(months<=36){wt='Solid medium-term plan.';wc='#34d5a0';}else{wt='Long-term — automation helps.';wc='#c4abff';} var warns={t:wt,c:wc};
-    sug.style.display='block'; sug.style.color=warns.c; sug.style.background='rgba(155,127,232,0.08)';
-    sug.innerHTML='At '+fm(m)+'/month → <strong>'+months+' months</strong>. '+warns.t;
-    var gd=document.getElementById('gd'); if(gd) gd.value=m2d(months).slice(0,7);
-  } else { sug.style.display='none'; }
+  var sug = document.getElementById('gsug');
+  if (!sug) return;
+  var draft = geodeGoalDraftFromModal();
+  var intel = calcGoalIntelligence(draft);
+  if (intel && intel.currentMonthly > 0 && intel.remaining > 0 && intel.monthsAtPlannedPace > 0) {
+    sug.style.display = 'block';
+    sug.style.color = 'rgba(196,171,255,0.92)';
+    sug.style.background = 'rgba(155,127,232,0.08)';
+    sug.innerHTML = escHtmlLite(
+      'At ' + fm(intel.currentMonthly) + '/month: about ' + intel.monthsAtPlannedPace + ' months to close the gap.'
+    );
+  } else {
+    sug.style.display = 'none';
+  }
 }
 function saveGoal(id) {
   var nm=(document.getElementById('gn')||{}).value||''; nm=nm.trim();
@@ -23739,64 +23781,26 @@ function geodeGoalModalImpactRefresh() {
   var host = document.getElementById('geode-goal-impact-host');
   if (!host) return;
 
-  var baseLeft = calcMonthlyLeftover(S);
-  var target = parseFloat((document.getElementById('ga') || {}).value) || 0;
-  var gidEl = document.getElementById('geode_goal_edit_id');
-  var editGoalId = gidEl && gidEl.value ? String(gidEl.value).trim() : '';
-  var goalRef = editGoalId ? S.goals.filter(function(x) { return String(x.id) === editGoalId; })[0] : null;
-  var saved =
-    goalRef && geodeGoalHasPositiveLinkedInvestment(goalRef)
-      ? geodeGoalEffectiveSaved(goalRef)
-      : parseFloat((document.getElementById('gs') || {}).value) || 0;
-  var ym = ((document.getElementById('gd') || {}).value || '').trim();
-
-  var monthsLeft = null;
-  if (ym && ym.length >= 7) {
-    try {
-      var parts = ym.split('-');
-      var y = parseInt(parts[0], 10);
-      var m = parseInt(parts[1], 10) - 1;
-      var end = new Date(y, m + 1, 0);
-      var now = new Date();
-      monthsLeft = Math.max(0, Math.ceil((end - now) / (86400000 * 30.4375)));
-    } catch (e2) {
-      monthsLeft = null;
-    }
-  }
-
-  var rem = Math.max(0, target - saved);
-  var pace = monthsLeft && monthsLeft > 0 ? rem / monthsLeft : null;
-
+  var draft = geodeGoalDraftFromModal();
+  var intel = calcGoalIntelligence(draft);
+  var target = toNum(draft.amount);
+  var paceText = geodeGoalPaceNeededText(intel);
   var paceLine = '';
-  if (pace !== null && isFinite(pace) && pace > 0) {
-    paceLine = geodeIsNoIncomeMode()
-      ? '<div style="margin-top:8px;font-size:11px;color:rgba(237,234,255,0.85);line-height:1.35">Set a pace now (~' +
-        fm(pace) +
-        '/month) \u2014 fund it when income starts again.</div>'
-      : '<div style="margin-top:8px;font-size:11px;color:rgba(237,234,255,0.85);line-height:1.35">~' +
-        fm(pace) +
-        '/month pace guide to reach your target if you choose to stay on this pace.</div>';
-  } else if (target > 0) {
+  if (paceText) {
+    if (geodeIsNoIncomeMode()) paceText += ' \u2014 fund when income returns';
     paceLine =
-      '<div style="margin-top:8px;font-size:11px;color:rgba(237,234,255,0.85);line-height:1.35">Set a timeline to see your monthly target.</div>';
+      '<div style="margin-top:8px;font-size:11px;color:rgba(237,234,255,0.85);line-height:1.35">' +
+      escHtmlLite(paceText) +
+      '</div>';
+  } else if (target > 0 && !draft.targetDate) {
+    paceLine =
+      '<div style="margin-top:8px;font-size:11px;color:rgba(237,234,255,0.85);line-height:1.35">Add a target date for pace needed</div>';
   }
 
-  var ctxM = geodeGetContextFlags();
-  var k7ex =
-    !geodeIsNoIncomeMode() && (ctxM.hasDependants || ctxM.irregularIncome)
-      ? 'This goal can be adjusted depending on your income stability and responsibilities.<br/><br/>'
-      : '';
   host.innerHTML =
-    geodeRenderModalImpactBlock('', 'This does not affect monthly cash flow until scheduled as a contribution.', '') +
+    geodeRenderModalImpactBlock('', 'Does not affect monthly cash flow until you contribute.', '') +
     paceLine +
-    geodeExplain(
-      k7ex +
-        (geodeIsNoIncomeMode()
-          ? 'This is based on your target and timeline. When income returns, you can fund this pace from monthly cash flow.<br/><br/>' +
-              '&ldquo;Left this month&rdquo; changes when contributions and spending change \u2014 schedule a contribution when you want this to count as cash out.'
-          : 'This is based on your target and timeline. If you save more than this, you\u2019ll reach your goal earlier.<br/><br/>' +
-              '&ldquo;Left this month&rdquo; changes when contributions and spending change \u2014 schedule a contribution when you want this to count as cash out.')
-    );
+    geodeExplain('Pace needed uses your target, saved amount, and target date.');
 }
 
 function geodeInvModalImpactRefresh() {
