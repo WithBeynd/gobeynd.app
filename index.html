@@ -3643,6 +3643,27 @@ function geodeHasMeaningfulMonthlyExpenses(state) {
   return geodeMonthlyExpenseTotal(state) > 0;
 }
 
+/** Display-only: persistent Home Over Budget card (returning users; not post quick-setup). */
+function geodeHomePersistentOverBudgetCardVisible(state) {
+  state = state || S;
+  try {
+    if (calcMonthlyLeftover(state) >= 0) return false;
+    if (!state.hasOnboarded) return false;
+    if (!geodeHasMeaningfulMonthlyExpenses(state)) return false;
+    try {
+      if (
+        typeof sessionStorage !== 'undefined' &&
+        sessionStorage.getItem('geode_qs_just_finished') === '1'
+      ) {
+        return false;
+      }
+    } catch (_eQsOb) {}
+    return true;
+  } catch (_eObVis) {
+    return false;
+  }
+}
+
 /**
  * Display-only: payment name looks like a safety/emergency buffer contribution (not plan math).
  */
@@ -9183,6 +9204,11 @@ function geodeHomePeekWouldShowInsightStrip(opts) {
     _postureInsightPeek = geodeGetContextPosture(S);
   } catch (_ePiPk) {}
   pool = geodeFilterHighlightPoolByContextPosture(pool, _postureInsightPeek);
+  if (geodeHomePersistentOverBudgetCardVisible(S)) {
+    pool = pool.filter(function (hn) {
+      return hn && hn.topic !== 'tight_month';
+    });
+  }
   if (_skipOverdueInsight) {
     pool = pool.filter(function (hn) {
       return hn && hn.topic !== 'tight_month';
@@ -11094,6 +11120,11 @@ function renderInsights() {
     _postureInsight = geodeGetContextPosture(S);
   } catch (_ePi) {}
   pool = geodeFilterHighlightPoolByContextPosture(pool, _postureInsight);
+  if (geodeHomePersistentOverBudgetCardVisible(S)) {
+    pool = pool.filter(function (hn) {
+      return hn && hn.topic !== 'tight_month';
+    });
+  }
   if (_skipOverdueInsight) {
     pool = pool.filter(function (hn) {
       return hn && hn.topic !== 'tight_month';
@@ -16075,6 +16106,7 @@ function geodeGetMainAction(state) {
     }
   }
   if (!steps.length || !hasMeaningfulStep) {
+    if (geodeHomePersistentOverBudgetCardVisible(state)) return null;
     return {
       title: 'Review your plan',
       amount: null,
@@ -20602,20 +20634,16 @@ function rHome() {
     }
   } catch (_eIrr) {}
   // Overdue items
-  // Persistent over-budget card — shown whenever left < 0 and user has done setup
-  // (not post-setup, that's handled above — this is for returning over-budget users)
+  // Persistent over-budget card — returning users (see geodeHomePersistentOverBudgetCardVisible)
   try {
-    var _homeLeft = calcMonthlyLeftover(S);
-    var _justFinished = false;
-    try { _justFinished = sessionStorage.getItem('geode_qs_just_finished') === '1'; } catch(_e0) {}
-    if (_homeLeft < 0 && !_justFinished && S.hasOnboarded && geodeHasMeaningfulMonthlyExpenses(S)) {
-      var _homeOver = Math.abs(_homeLeft);
+    if (geodeHomePersistentOverBudgetCardVisible(S)) {
+      var _homeOver = Math.abs(calcMonthlyLeftover(S));
       h += '<div style="margin-bottom:12px;padding:14px 16px;border-radius:14px;' +
-        'background:rgba(240,112,112,0.05);border:1px solid rgba(240,112,112,0.25);' +
-        'border-left:3px solid #f07070">';
+        'background:rgba(240,112,112,0.035);border:1px solid rgba(240,112,112,0.18);' +
+        'border-left:2px solid rgba(240,112,112,0.55)">';
       h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">';
-      h += '<div style="font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--danger)">Over budget</div>';
-      h += '<div style="font-size:16px;font-weight:800;color:#f07070">−' + escHtmlLite(fm(_homeOver)) + '</div>';
+      h += '<div style="font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:rgba(240,112,112,0.92)">Over budget</div>';
+      h += '<div style="font-size:16px;font-weight:800;color:rgba(240,112,112,0.95)">−' + escHtmlLite(fm(_homeOver)) + '</div>';
       h += '</div>';
       h += '<div style="font-size:11px;color:rgba(237,234,255,0.8);line-height:1.5;margin-bottom:10px">' +
         escHtmlLite('Your spending exceeds income by ' + fm(_homeOver) + ' this month. Review where this month is under pressure.') +
