@@ -6408,9 +6408,49 @@ function saveInc() {
 var tab = 'home', msub = 'overview', dchart = 'nw', xinv = 'isa';
 /** Runtime-only Plan step drill-through index (never persisted). */
 window._geodePlanDetailIx = null;
+/** Runtime-only: show Plan back affordance when entered from Home (not bottom nav). */
+window._geodePlanBackToHome = false;
+function geodeGoPlanFromHome() {
+  try {
+    window._geodePlanBackToHome = true;
+  } catch (_eGpfh) {}
+  window._geodePlanSubView = 'monthly';
+  goTab('plan');
+}
+function geodeOpenPlanMonthlyFromHome() {
+  geodeGoPlanFromHome();
+}
+function geodePlanBackToHome() {
+  try {
+    window._geodePlanBackToHome = false;
+  } catch (_ePbth) {}
+  goTab('home');
+}
+function geodePlanContextualBackToHomeHtml() {
+  var show = false;
+  try {
+    show = !!window._geodePlanBackToHome;
+  } catch (_ePbthHtml) {
+    show = false;
+  }
+  if (!show) return '';
+  return (
+    '<button type="button" onclick="geodePlanBackToHome()" aria-label="Back to Home" ' +
+    'style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;' +
+    'margin:0 0 8px -6px;padding:0;border:none;border-radius:10px;background:rgba(255,255,255,0.03);' +
+    'cursor:pointer;-webkit-tap-highlight-color:transparent;outline:none">' +
+    '<span style="font-size:17px;color:rgba(189,183,220,0.55);line-height:1" aria-hidden="true">\u2039</span>' +
+    '</button>'
+  );
+}
 function goTab(t) {
   if (typeof _geodeBootstrap !== 'undefined' && !_geodeBootstrap) {
     markActive();
+  }
+  if (t !== 'plan') {
+    try {
+      window._geodePlanBackToHome = false;
+    } catch (_eClrPbth) {}
   }
   tab = t;
   if (t === 'money' && msub === 'reality') msub = 'overview';
@@ -15979,10 +16019,6 @@ function geodeMainActionFromPriorityStep(state, p1, prog) {
  */
 function geodeGetMainAction(state) {
   state = state || S;
-  function geodeOpenPlanMonthlyFromHome() {
-    window._geodePlanSubView = 'monthly';
-    goTab('plan');
-  }
   if (geodeIsEmptyState()) {
     return {
       title: 'Start your setup',
@@ -20638,18 +20674,23 @@ function rHome() {
   try {
     if (geodeHomePersistentOverBudgetCardVisible(S)) {
       var _homeOver = Math.abs(calcMonthlyLeftover(S));
-      h += '<div style="margin-bottom:12px;padding:14px 16px;border-radius:14px;' +
+      h +=
+        '<div class="geode-soft-enter" role="button" tabindex="0" aria-label="Review this month in Plan" ' +
+        'onclick="geodeGoPlanFromHome()" ' +
+        'onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeGoPlanFromHome();}}catch(__hkOb){}" ' +
+        'style="margin-bottom:12px;padding:14px 16px;border-radius:14px;cursor:pointer;' +
         'background:rgba(240,112,112,0.035);border:1px solid rgba(240,112,112,0.18);' +
-        'border-left:2px solid rgba(240,112,112,0.55)">';
+        'border-left:2px solid rgba(240,112,112,0.55);-webkit-tap-highlight-color:transparent;outline:none">';
       h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">';
       h += '<div style="font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:rgba(240,112,112,0.92)">Over budget</div>';
+      h += '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">';
       h += '<div style="font-size:16px;font-weight:800;color:rgba(240,112,112,0.95)">−' + escHtmlLite(fm(_homeOver)) + '</div>';
-      h += '</div>';
-      h += '<div style="font-size:11px;color:rgba(237,234,255,0.8);line-height:1.5;margin-bottom:10px">' +
+      h +=
+        '<span style="font-size:16px;color:rgba(189,183,220,0.45);line-height:1;flex-shrink:0" aria-hidden="true">\u203a</span>';
+      h += '</div></div>';
+      h += '<div style="font-size:11px;color:rgba(237,234,255,0.8);line-height:1.5">' +
         escHtmlLite('Your spending exceeds income by ' + fm(_homeOver) + ' this month. Review where this month is under pressure.') +
         '</div>';
-      h += '<button type="button" class="btn btn-p" style="width:100%;font-size:12px;padding:10px" onclick="goTab(\'plan\')">' +
-        'Review this month \u2192</button>';
       h += '</div>';
     }
   } catch (_eOb) {}
@@ -20896,6 +20937,7 @@ function rPlan() {
   var _seg = ''; // sub-view toggle removed — My Plan is the only view
   if (_planSubView === 'monthly') {
     h = '<div style="' + pad + '">';
+    h += geodePlanContextualBackToHomeHtml();
     h += _seg;
 
     if (geodeIsEmptyState()) {
