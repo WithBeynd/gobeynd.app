@@ -8555,7 +8555,7 @@ function geodeRecordBehaviourEvent(kind, meta) {
   } catch (_eBehRec) {}
 }
 
-/** Stage 64A-1: read-only month-scoped continuity flags for future coaching (unused in UI this stage). */
+/** Stage 64A-1 / 65-3: read-only month-scoped flags from S.behaviourEvents (Ask context only). */
 function geodeBehaviourContinuityProfile(state) {
   state = state || S;
   geodeNormalizeBehaviourEvents(state);
@@ -8581,16 +8581,25 @@ function geodeBehaviourContinuityProfile(state) {
   };
 }
 
-/** Stage 64B-1: coach-facing month continuity hint for Ask Beynd only (null when no strong pattern). */
-function geodeBehaviourContinuityCoachHint(state) {
+/**
+ * Stage 64B-1 / 65-3: at most one coach-facing continuity line for Ask Beynd (null when none or redundant).
+ * postureObj optional — when cautious, slow-month hint is omitted to avoid duplicating posture guidance.
+ */
+function geodeBehaviourContinuityCoachHint(state, postureObj) {
   var p = geodeBehaviourContinuityProfile(state || S);
+  var behPosture = postureObj && postureObj.posture;
+  var behTone = postureObj && postureObj.tone;
+  var cautious =
+    behPosture === 'review_first' ||
+    behPosture === 'protect_flexibility' ||
+    behTone === 'cautious';
   if (p.oftenRevertsShift) {
     return (
       'They have returned to their usual plan view more than once this month. ' +
       'Keep shift suggestions optional and easy to reverse.'
     );
   }
-  if (p.oftenSlowFeeling) {
+  if (p.oftenSlowFeeling && !cautious) {
     return (
       'They have often indicated a slower or unsure pace this month. ' +
       'Favour stability and small steps over new commitments.'
@@ -18690,6 +18699,13 @@ function geodeRealityPageHtml() {
 
   h += cmp;
 
+  var _shiftOfferHtml = '';
+  try {
+    _shiftOfferHtml = geodeRealityPlanAlignmentOfferHtml() || '';
+  } catch (_eRpaOffPg) {
+    _shiftOfferHtml = '';
+  }
+
   var _hmRe = null;
   try {
     _hmRe = geodeRealityHumanMoment(S, rs, left, availNum, diffNum);
@@ -18697,25 +18713,42 @@ function geodeRealityPageHtml() {
     _hmRe = null;
   }
   if (_hmRe && _hmRe.title && _hmRe.body) {
-    var _hmBd = 'rgba(155,127,232,0.14)';
-    if (_hmRe.tone === 'unknown') _hmBd = 'rgba(189,183,220,0.18)';
-    else if (_hmRe.tone === 'caution') _hmBd = 'rgba(245,194,52,0.2)';
-    h +=
-      '<div style="padding:13px 15px;border-radius:12px;margin-bottom:16px;background:rgba(255,255,255,0.02);border:1px solid ' +
-      _hmBd +
-      '">';
-    h +=
-      '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.02em;margin-bottom:6px;line-height:1.3">' +
-      escHtmlLite(String(_hmRe.title)) +
-      '</div>';
-    h +=
-      '<div style="font-size:12px;color:rgba(237,234,255,0.82);line-height:1.5">' +
-      escHtmlLite(String(_hmRe.body)) +
-      '</div>';
-    h += '</div>';
+    var _suppressRealityHm = false;
+    if (_shiftOfferHtml) {
+      var _hmPo = null;
+      try {
+        _hmPo = geodeGetContextPosture(S);
+      } catch (_eHmPo) {}
+      var _hmPosture = _hmPo && _hmPo.posture;
+      if (
+        _hmRe.tone === 'caution' ||
+        _hmPosture === 'protect_flexibility' ||
+        _hmPosture === 'review_first'
+      ) {
+        _suppressRealityHm = true;
+      }
+    }
+    if (!_suppressRealityHm) {
+      var _hmBd = 'rgba(155,127,232,0.14)';
+      if (_hmRe.tone === 'unknown') _hmBd = 'rgba(189,183,220,0.18)';
+      else if (_hmRe.tone === 'caution') _hmBd = 'rgba(245,194,52,0.2)';
+      h +=
+        '<div style="padding:13px 15px;border-radius:12px;margin-bottom:16px;background:rgba(255,255,255,0.02);border:1px solid ' +
+        _hmBd +
+        '">';
+      h +=
+        '<div style="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.02em;margin-bottom:6px;line-height:1.3">' +
+        escHtmlLite(String(_hmRe.title)) +
+        '</div>';
+      h +=
+        '<div style="font-size:12px;color:rgba(237,234,255,0.82);line-height:1.5">' +
+        escHtmlLite(String(_hmRe.body)) +
+        '</div>';
+      h += '</div>';
+    }
   }
 
-  h += geodeRealityPlanAlignmentOfferHtml();
+  h += _shiftOfferHtml;
 
   h +=
     '<div style="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:8px;line-height:1.3;letter-spacing:0.01em">' +
@@ -20089,19 +20122,9 @@ function geodeFormatAskBeyndContextPostureBlock() {
       lines.push('Why: ' + whyParts.join(', '));
     }
     lines.push(geodeContextPostureCoachGuidance(po));
-    var behHint = geodeBehaviourContinuityCoachHint(S);
+    var behHint = geodeBehaviourContinuityCoachHint(S, po);
     if (behHint) {
-      var behPosture = po.posture;
-      var behTone = po.tone;
-      var isSlowMonthHint = behHint.indexOf('slower or unsure pace') >= 0;
-      var skipSlowDup =
-        isSlowMonthHint &&
-        (behPosture === 'review_first' ||
-          behPosture === 'protect_flexibility' ||
-          behTone === 'cautious');
-      if (!skipSlowDup) {
-        lines.push(behHint);
-      }
+      lines.push(behHint);
     }
     return lines.join('\n');
   } catch (_eApb) {
@@ -20213,12 +20236,14 @@ function geodeFormatAskBeyndPaoContextBlock(pao, rs) {
 }
 
 function geodeFormatAskBeyndMonthContextBlock(state) {
+  state = state || S;
   var mc = geodeGetMonthContext(state);
   if (!mc.hasAny) return '';
   var lines = ['Coaching tone only — does not change plan numbers or reserves.'];
   if (mc.protect) lines.push('Keeps in mind: ' + mc.protect);
   if (mc.worried) lines.push('Worried about: ' + mc.worried);
   if (mc.success) lines.push('Success this month: ' + mc.success);
+  /* Stage 65-3: month-scoped behaviour continuity lives in posture block only (no second line here). */
   return lines.join('\n');
 }
 
