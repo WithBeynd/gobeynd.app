@@ -2538,39 +2538,80 @@ function calcMonthlyLeftoverConfirmedOnly(state) {
  * Stage 62A: read-only affordability cap for plan suggestions (does not change planRoom accounting).
  * suggestableRoom caps getMonthPlan step budget only — no UI surface.
  */
-function geodeDebtMinimumInCashflow(state, debt) {
-  if (!debt) return false;
-  var minp = toNum(debt.minp);
-  if (minp <= 0) return true;
+function geodeDebtReadMinimumPayment(debt) {
+  if (!debt) return 0;
+  var fields = [debt.minp, debt.min, debt.minimum, debt.minimumPayment];
+  var fi;
+  for (fi = 0; fi < fields.length; fi++) {
+    var raw = fields[fi];
+    if (raw === '' || raw == null) continue;
+    var n = toNum(raw);
+    if (n > 0) return n;
+  }
+  return 0;
+}
+
+/** Monthly amount from one payment row toward this debt's minimum (linked rows count partial amounts). */
+function geodePaymentAmountTowardDebtMinimum(state, debt, p, minp) {
+  if (!p || !debt || minp <= 0) return 0;
+  if (!paymentCountsForMonthlyOutflow(p)) return 0;
+  var amt = toNum(p.amount);
+  if (amt <= 0) return 0;
+  var threshold = minp * 0.85;
   var did = String(debt.id || '');
   var dname = String(debt.name || '').toLowerCase().trim();
+  if (did && String(p.debtId || '') === did) return amt;
+  var pk = String(p.payKind || '').toLowerCase();
+  if (pk === 'debt' && did && String(p.debtId || '') === did) return amt;
+  var pnm = String(p.name || '').toLowerCase();
+  if (dname && pnm.indexOf(dname) >= 0 && amt >= threshold) return amt;
+  return 0;
+}
+
+/** Monthly amount from one expense row that represents this debt's minimum (0 if not a match). */
+function geodeExpenseAmountTowardDebtMinimum(state, debt, e, minp) {
+  if (!e || !debt || minp <= 0) return 0;
+  var nowYM = currentYM();
+  if (e.rec !== 'yes' && e.rec !== 'annual') {
+    var eYM = e.date ? String(e.date).slice(0, 7) : '';
+    if (eYM && eYM !== nowYM) return 0;
+  }
+  var monthly = e.rec === 'annual' ? toNum(e.amount) / 12 : toNum(e.amount);
+  if (monthly <= 0) return 0;
+  var threshold = minp * 0.85;
+  var dname = String(debt.name || '').toLowerCase().trim();
+  var nm = String(e.name || '').toLowerCase();
+  if (dname && nm.indexOf(dname) >= 0 && monthly >= threshold) return monthly;
+  if (/debt\s+minimum|^min\s*payment|minimum\s*payment\b/i.test(nm) && monthly >= threshold) {
+    var debts = (state && state.debts) || [];
+    if (debts.length === 1 || (dname && nm.indexOf(dname) >= 0)) return monthly;
+  }
+  return 0;
+}
+
+/** Sum of payment/expense rows already representing this debt's minimum in monthly cashflow. */
+function geodeDebtMinimumRepresentedAmount(state, debt) {
+  var minp = geodeDebtReadMinimumPayment(debt);
+  if (minp <= 0) return 0;
   var pay = (state && state.payments) || [];
+  var paySum = 0;
   var pi;
   for (pi = 0; pi < pay.length; pi++) {
-    var p = pay[pi];
-    if (!p || !paymentCountsForMonthlyOutflow(p)) continue;
-    if (did && String(p.debtId || '') === did) return true;
-    if (dname && String(p.name || '').toLowerCase().indexOf(dname) >= 0 && toNum(p.amount) >= minp * 0.85) {
-      return true;
-    }
+    paySum += geodePaymentAmountTowardDebtMinimum(state, debt, pay[pi], minp);
   }
   var expenses = (state && state.expenses) || [];
-  var nowYM = currentYM();
+  var expSum = 0;
   var ei;
   for (ei = 0; ei < expenses.length; ei++) {
-    var e = expenses[ei];
-    if (!e) continue;
-    if (e.rec !== 'yes' && e.rec !== 'annual') {
-      var eYM = e.date ? String(e.date).slice(0, 7) : '';
-      if (eYM && eYM !== nowYM) continue;
-    }
-    var monthly = e.rec === 'annual' ? toNum(e.amount) / 12 : toNum(e.amount);
-    if (monthly <= 0) continue;
-    var nm = String(e.name || '').toLowerCase();
-    if (/debt\s+minimum|^min\s*payment|minimum\s*payment\b/i.test(nm) && monthly >= minp * 0.85) return true;
-    if (dname && nm.indexOf(dname) >= 0 && monthly >= minp * 0.85) return true;
+    expSum += geodeExpenseAmountTowardDebtMinimum(state, debt, expenses[ei], minp);
   }
-  return false;
+  return Math.min(minp, paySum + expSum);
+}
+
+function geodeDebtMinimumInCashflow(state, debt) {
+  var minp = geodeDebtReadMinimumPayment(debt);
+  if (minp <= 0) return true;
+  return geodeDebtMinimumRepresentedAmount(state, debt) >= minp * 0.85;
 }
 
 function computeAffordabilityContext(state) {
@@ -2585,9 +2626,11 @@ function computeAffordabilityContext(state) {
   for (di = 0; di < debts.length; di++) {
     var d = debts[di];
     if (!d) continue;
-    var minp = toNum(d.minp);
+    var minp = geodeDebtReadMinimumPayment(d);
     if (minp <= 0) continue;
-    if (!geodeDebtMinimumInCashflow(state, d)) unresolvedRequired += minp;
+    var represented = geodeDebtMinimumRepresentedAmount(state, d);
+    var unresolved = Math.max(0, minp - represented);
+    if (unresolved > 0) unresolvedRequired += unresolved;
   }
   var breathingRoomFloor = Math.max(50, income * 0.08);
   var suggestableRoom = 0;
