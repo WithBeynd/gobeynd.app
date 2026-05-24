@@ -826,6 +826,8 @@ var S = {
   _suggestionBatchResolved: false,
   /** Recent follow-through outcomes for adaptive planning (E.3); { type, outcome, ts } max ~24. */
   followthroughOutcomeHistory: [],
+  /** Stage 64A-1: month-scoped coaching events { kind, ym, ts, meta }; max 16 (current month preferred). */
+  behaviourEvents: [],
   /** E.3 last rendered adaptive tier per family (stepwise stability); debt|goal|invest|buffer → full|lighter|encouragement_only. */
   adaptiveDisplayModeByFamily: {},
   /** E.4 snapshot when suggested-action batch was written: leftover, plan signature, refresh timing. */
@@ -1034,6 +1036,7 @@ function load() {
     );
   });
   while (S.followthroughOutcomeHistory.length > 24) S.followthroughOutcomeHistory.shift();
+  geodeNormalizeBehaviourEvents(S);
   if (!S.adaptiveDisplayModeByFamily || typeof S.adaptiveDisplayModeByFamily !== 'object') S.adaptiveDisplayModeByFamily = {};
   if (!S.completedGoalAcknowledged || typeof S.completedGoalAcknowledged !== 'object' || Array.isArray(S.completedGoalAcknowledged)) S.completedGoalAcknowledged = {};
   // explainMode removed (explanations are always shown contextually)
@@ -8463,6 +8466,121 @@ function appendFollowthroughOutcomeHistory(entry) {
   while (S.followthroughOutcomeHistory.length > 24) S.followthroughOutcomeHistory.shift();
 }
 
+/** Stage 64A-1: current month key (alias for plan/Reality month scope). */
+function geodeCurrentYm() {
+  return currentYM();
+}
+
+var GEODE_BEHAVIOUR_EVENT_KINDS = {
+  reality_shift_approved: true,
+  reality_shift_reverted: true,
+  feeling_slow: true,
+  feeling_unsure: true,
+  feeling_still: true,
+  feeling_moved: true
+};
+
+function geodeSanitizeBehaviourEventMeta(kind, meta) {
+  meta = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+  var out = {};
+  if (kind === 'reality_shift_approved') {
+    if (meta.closedAmountRounded != null && isFinite(Number(meta.closedAmountRounded))) {
+      out.closedAmountRounded = Math.round(Number(meta.closedAmountRounded));
+    }
+    if (meta.shortfallRounded != null && isFinite(Number(meta.shortfallRounded))) {
+      out.shortfallRounded = Math.round(Number(meta.shortfallRounded));
+    }
+    if (meta.rowsCount != null && isFinite(Number(meta.rowsCount))) {
+      out.rowsCount = Math.max(0, Math.min(99, Math.round(Number(meta.rowsCount))));
+    }
+  } else if (kind === 'reality_shift_reverted') {
+    if (meta.hadOverlay === true) out.hadOverlay = true;
+  }
+  return out;
+}
+
+/** Trim behaviourEvents to max 16; drop other months before current month when over cap. */
+function geodeTrimBehaviourEvents(events, ym) {
+  ym = ym || geodeCurrentYm();
+  if (!Array.isArray(events)) return [];
+  var max = 16;
+  while (events.length > max) {
+    var dropAt = -1;
+    var i;
+    for (i = 0; i < events.length; i++) {
+      if (events[i] && events[i].ym !== ym) {
+        dropAt = i;
+        break;
+      }
+    }
+    if (dropAt < 0) dropAt = 0;
+    events.splice(dropAt, 1);
+  }
+  return events;
+}
+
+/** Stage 64A-1: validate and cap behaviourEvents (no plan math). */
+function geodeNormalizeBehaviourEvents(state) {
+  state = state || S;
+  if (!Array.isArray(state.behaviourEvents)) state.behaviourEvents = [];
+  var ym = geodeCurrentYm();
+  var allowed = GEODE_BEHAVIOUR_EVENT_KINDS;
+  state.behaviourEvents = state.behaviourEvents.filter(function (e) {
+    return (
+      e &&
+      typeof e.kind === 'string' &&
+      allowed[e.kind] &&
+      typeof e.ym === 'string' &&
+      e.ym.length >= 7 &&
+      typeof e.ts === 'string' &&
+      e.ts.length >= 10
+    );
+  });
+  state.behaviourEvents = geodeTrimBehaviourEvents(state.behaviourEvents, ym);
+}
+
+/** Stage 64A-1: append one coaching continuity event (persisted; does not change plan math). */
+function geodeRecordBehaviourEvent(kind, meta) {
+  if (!GEODE_BEHAVIOUR_EVENT_KINDS[kind]) return;
+  if (!Array.isArray(S.behaviourEvents)) S.behaviourEvents = [];
+  S.behaviourEvents.push({
+    kind: kind,
+    ym: geodeCurrentYm(),
+    ts: new Date().toISOString(),
+    meta: geodeSanitizeBehaviourEventMeta(kind, meta)
+  });
+  geodeNormalizeBehaviourEvents(S);
+  try {
+    persistGeodeToLocalStorage();
+  } catch (_eBehRec) {}
+}
+
+/** Stage 64A-1: read-only month-scoped continuity flags for future coaching (unused in UI this stage). */
+function geodeBehaviourContinuityProfile(state) {
+  state = state || S;
+  geodeNormalizeBehaviourEvents(state);
+  var ym = geodeCurrentYm();
+  var ev = Array.isArray(state.behaviourEvents) ? state.behaviourEvents : [];
+  var shiftApprovals = 0;
+  var shiftReverts = 0;
+  var slowOrUnsure = 0;
+  var i;
+  for (i = 0; i < ev.length; i++) {
+    var e = ev[i];
+    if (!e || e.ym !== ym) continue;
+    if (e.kind === 'reality_shift_approved') shiftApprovals++;
+    else if (e.kind === 'reality_shift_reverted') shiftReverts++;
+    else if (e.kind === 'feeling_slow' || e.kind === 'feeling_unsure') slowOrUnsure++;
+  }
+  return {
+    shiftApprovalsThisMonth: shiftApprovals,
+    shiftRevertsThisMonth: shiftReverts,
+    slowOrUnsureThisMonth: slowOrUnsure,
+    oftenRevertsShift: shiftReverts >= 2,
+    oftenSlowFeeling: slowOrUnsure >= 2
+  };
+}
+
 /** Last ~90d of followthroughOutcomeHistory → simple rates per family (no plan changes). */
 function getFollowthroughProfile(state) {
   state = state || S;
@@ -14138,6 +14256,12 @@ function geodePlanPageOverviewHtml(plan) {
     '<div style="font-size:10px;color:var(--tx-3);margin-top:4px;line-height:1.35">' +
     escHtmlLite('From your entered income, payments, and expenses.') +
     '</div>';
+  h +=
+    '<div style="font-size:9px;color:rgba(189,183,220,0.58);margin-top:5px;line-height:1.4">' +
+    escHtmlLite(
+      'Suggested steps may stay below your full plan room so essentials and existing commitments still have space.'
+    ) +
+    '</div>';
   h += '</div>';
   return h;
 }
@@ -18044,6 +18168,8 @@ function geodeSetRealityFeelingFromChip(kind) {
   try {
     if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('geode_reality_feeling', val);
   } catch (_eSrf) {}
+  var feelEventKind = { still: 'feeling_still', moved: 'feeling_moved', slow: 'feeling_slow', unsure: 'feeling_unsure' };
+  if (feelEventKind[val]) geodeRecordBehaviourEvent(feelEventKind[val], {});
   return true;
 }
 
@@ -18686,7 +18812,7 @@ function geodeRealityMonthContextCollapsedRowHtml(mc) {
     '</div>';
   h +=
     '<div style="font-size:10px;color:rgba(189,183,220,0.52);line-height:1.4;margin-bottom:4px">' +
-    escHtmlLite('Optional. Helps Beynd coach this month. Your numbers stay the same.') +
+    escHtmlLite('Optional. Helps Beynd coach this month. Income, payments, and expenses stay the same.') +
     '</div>';
   h +=
     '<div style="font-size:12px;color:rgba(237,234,255,0.78);line-height:1.45">' +
@@ -18714,7 +18840,7 @@ function geodeRealityMonthContextExpandedFormHtml(mc) {
     '</div>';
   h +=
     '<div style="font-size:10px;color:rgba(189,183,220,0.52);line-height:1.4;margin-bottom:8px">' +
-    escHtmlLite('Optional. Helps Beynd coach this month. Your numbers stay the same.') +
+    escHtmlLite('Optional. Helps Beynd coach this month. Income, payments, and expenses stay the same.') +
     '</div>';
   h +=
     '<label style="font-size:11px;font-weight:500;color:var(--tx-3);display:block;margin-bottom:6px">' +
@@ -19322,6 +19448,11 @@ function geodeGetActiveRealityPlanAlignment(state) {
 function geodeClearRealityPlanAlignment(opts) {
   opts = opts || {};
   try {
+    var hadApprovedOverlay =
+      !!(S.realityPlanAlignment && S.realityPlanAlignment.status === 'approved');
+    if (opts.revert && hadApprovedOverlay) {
+      geodeRecordBehaviourEvent('reality_shift_reverted', { hadOverlay: true });
+    }
     if (S.realityPlanAlignment) delete S.realityPlanAlignment;
     persistGeodeToLocalStorage();
     if (opts.revert) {
@@ -19379,6 +19510,11 @@ function geodeApproveRealityPlanAlignmentFromPreview() {
     planSignature: String(preview.planSignature || ''),
     stepAdjustments: stepAdjustments
   };
+  geodeRecordBehaviourEvent('reality_shift_approved', {
+    closedAmountRounded: Math.round(toNum(preview.closedAmount)),
+    shortfallRounded: Math.round(toNum(preview.shortfall)),
+    rowsCount: stepAdjustments.length
+  });
   persistGeodeToLocalStorage();
   closeModal();
   render();
@@ -19679,10 +19815,16 @@ function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
       ) +
       '</div>';
   }
-  h += '<div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">';
+  h +=
+    '<div style="font-size:10px;color:rgba(189,183,220,0.72);line-height:1.45;margin-top:12px">' +
+    escHtmlLite(
+      'This adjusts your Plan view for this month only. Your usual plan stays available.'
+    ) +
+    '</div>';
+  h += '<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">';
   h +=
     '<button type="button" class="btn btn-p" style="width:100%" onclick="geodeApproveRealityPlanAlignmentFromPreview()">' +
-    escHtmlLite('Use this month\u2019s shift') +
+    escHtmlLite('Apply this shift this month') +
     '</button>';
   h +=
     '<button type="button" class="btn btn-s" style="width:100%" onclick="closeModal()">' +
@@ -25600,7 +25742,8 @@ function geodeBeyndBackupForbiddenDataKeys() {
     'lastSuggestedActions',
     'lastSuggestedActionsMeta',
     'followthroughOutcomeHistory',
-    'nudgeHistory'
+    'nudgeHistory',
+    'behaviourEvents'
   ];
 }
 
@@ -25743,7 +25886,8 @@ function exportJSONBackup() {
       'lastSuggestedActions',
       'lastSuggestedActionsMeta',
       'followthroughOutcomeHistory',
-      'nudgeHistory'
+      'nudgeHistory',
+      'behaviourEvents'
     ];
     for (var ei = 0; ei < excluded.length; ei++) {
       var ek = excluded[ei];
