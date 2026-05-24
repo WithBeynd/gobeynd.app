@@ -8555,7 +8555,7 @@ function geodeRecordBehaviourEvent(kind, meta) {
   } catch (_eBehRec) {}
 }
 
-/** Stage 64A-1 / 65-3: read-only month-scoped flags from S.behaviourEvents (Ask context only). */
+/** Stage 64A-1 / 65-4: read-only month-scoped flags from S.behaviourEvents (Ask context only). */
 function geodeBehaviourContinuityProfile(state) {
   state = state || S;
   geodeNormalizeBehaviourEvents(state);
@@ -8564,6 +8564,7 @@ function geodeBehaviourContinuityProfile(state) {
   var shiftApprovals = 0;
   var shiftReverts = 0;
   var slowOrUnsure = 0;
+  var movedFeeling = 0;
   var i;
   for (i = 0; i < ev.length; i++) {
     var e = ev[i];
@@ -8571,24 +8572,33 @@ function geodeBehaviourContinuityProfile(state) {
     if (e.kind === 'reality_shift_approved') shiftApprovals++;
     else if (e.kind === 'reality_shift_reverted') shiftReverts++;
     else if (e.kind === 'feeling_slow' || e.kind === 'feeling_unsure') slowOrUnsure++;
+    else if (e.kind === 'feeling_moved') movedFeeling++;
   }
   return {
     shiftApprovalsThisMonth: shiftApprovals,
     shiftRevertsThisMonth: shiftReverts,
     slowOrUnsureThisMonth: slowOrUnsure,
+    movedFeelingThisMonth: movedFeeling,
     oftenRevertsShift: shiftReverts >= 2,
-    oftenSlowFeeling: slowOrUnsure >= 2
+    oftenSlowFeeling: slowOrUnsure >= 2,
+    oftenApprovesShift: shiftApprovals >= 2,
+    oftenMovedFeeling: movedFeeling >= 2
   };
 }
 
 /**
- * Stage 64B-1 / 65-3: at most one coach-facing continuity line for Ask Beynd (null when none or redundant).
- * postureObj optional — when cautious, slow-month hint is omitted to avoid duplicating posture guidance.
+ * Stage 64B-1 / 65-4: at most one coach-facing continuity line for Ask Beynd (null when none or redundant).
+ * postureObj optional — cautious posture skips slow/moved month hints that duplicate posture guidance.
+ * Priority: reverts, then slow/unsure, then repeated shift approvals, then repeated moved feeling.
  */
 function geodeBehaviourContinuityCoachHint(state, postureObj) {
   var p = geodeBehaviourContinuityProfile(state || S);
   var behPosture = postureObj && postureObj.posture;
   var behTone = postureObj && postureObj.tone;
+  var sessionFeeling =
+    postureObj && postureObj.inputs && postureObj.inputs.realityFeeling
+      ? postureObj.inputs.realityFeeling
+      : '';
   var cautious =
     behPosture === 'review_first' ||
     behPosture === 'protect_flexibility' ||
@@ -8605,7 +8615,31 @@ function geodeBehaviourContinuityCoachHint(state, postureObj) {
       'Favour stability and small steps over new commitments.'
     );
   }
+  if (p.oftenApprovesShift) {
+    return (
+      'They have applied this month\u2019s shift view more than once. ' +
+      'Keep any further shifts optional and easy to reverse.'
+    );
+  }
+  if (p.oftenMovedFeeling && !cautious && sessionFeeling !== 'moved') {
+    return (
+      'They have often indicated that things moved this month. ' +
+      'Acknowledge the change before suggesting new commitments.'
+    );
+  }
   return null;
+}
+
+/**
+ * Stage 65-5: user-facing Month Shift preview helper when repeat reverts this month (null otherwise).
+ * Replaces the generic “usual plan” line in the modal — does not add a second hint.
+ */
+function geodeBehaviourContinuityMonthShiftHint(state) {
+  var p = geodeBehaviourContinuityProfile(state || S);
+  if (!p.oftenRevertsShift) return null;
+  return (
+    'This adjusts your Plan view for this month only. You have returned to your usual plan view more than once this month — this shift stays optional and you can switch back anytime.'
+  );
 }
 
 /** Last ~90d of followthroughOutcomeHistory → simple rates per family (no plan changes). */
@@ -19866,11 +19900,12 @@ function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
       ) +
       '</div>';
   }
+  var _rpaModalHelper =
+    geodeBehaviourContinuityMonthShiftHint(S) ||
+    'This adjusts your Plan view for this month only. Your usual plan stays available.';
   h +=
     '<div style="font-size:10px;color:rgba(189,183,220,0.72);line-height:1.45;margin-top:12px">' +
-    escHtmlLite(
-      'This adjusts your Plan view for this month only. Your usual plan stays available.'
-    ) +
+    escHtmlLite(_rpaModalHelper) +
     '</div>';
   h += '<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">';
   h +=
