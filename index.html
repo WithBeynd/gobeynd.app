@@ -8581,6 +8581,24 @@ function geodeBehaviourContinuityProfile(state) {
   };
 }
 
+/** Stage 64B-1: coach-facing month continuity hint for Ask Beynd only (null when no strong pattern). */
+function geodeBehaviourContinuityCoachHint(state) {
+  var p = geodeBehaviourContinuityProfile(state || S);
+  if (p.oftenRevertsShift) {
+    return (
+      'They have returned to their usual plan view more than once this month. ' +
+      'Keep shift suggestions optional and easy to reverse.'
+    );
+  }
+  if (p.oftenSlowFeeling) {
+    return (
+      'They have often indicated a slower or unsure pace this month. ' +
+      'Favour stability and small steps over new commitments.'
+    );
+  }
+  return null;
+}
+
 /** Last ~90d of followthroughOutcomeHistory → simple rates per family (no plan changes). */
 function getFollowthroughProfile(state) {
   state = state || S;
@@ -20071,6 +20089,20 @@ function geodeFormatAskBeyndContextPostureBlock() {
       lines.push('Why: ' + whyParts.join(', '));
     }
     lines.push(geodeContextPostureCoachGuidance(po));
+    var behHint = geodeBehaviourContinuityCoachHint(S);
+    if (behHint) {
+      var behPosture = po.posture;
+      var behTone = po.tone;
+      var isSlowMonthHint = behHint.indexOf('slower or unsure pace') >= 0;
+      var skipSlowDup =
+        isSlowMonthHint &&
+        (behPosture === 'review_first' ||
+          behPosture === 'protect_flexibility' ||
+          behTone === 'cautious');
+      if (!skipSlowDup) {
+        lines.push(behHint);
+      }
+    }
     return lines.join('\n');
   } catch (_eApb) {
     return (
