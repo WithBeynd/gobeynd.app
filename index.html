@@ -11,6 +11,26 @@
 <link rel="icon" href="icons/icon-192.png"/>
 <link rel="apple-touch-icon" href="icons/icon-192.png"/>
 <title>Beynd — Go further</title>
+<script>
+(function () {
+  try {
+    var qs = new URLSearchParams(window.location.search || '');
+    var raw = localStorage.getItem('geode_v6');
+    var saved = raw ? JSON.parse(raw) : null;
+    var hasAppearance = !!(saved && Object.prototype.hasOwnProperty.call(saved, 'appearance'));
+    var mode =
+      qs.get('appearancePreview') === 'offwhite' ||
+      (saved && (saved.appearance === 'offwhite' || (!hasAppearance && saved.theme === 'light')))
+        ? 'offwhite'
+        : 'dark';
+    if (mode === 'offwhite') {
+      document.documentElement.dataset.beyndAppearance = 'offwhite';
+      var mt = document.querySelector('meta[name="theme-color"]');
+      if (mt) mt.setAttribute('content', '#f5f4f1');
+    }
+  } catch (e) {}
+})();
+</script>
 <style>
 :root{
   --bg-base:#07071a;--bg-surface:#0f0f1e;--bg-raised:#181830;--bg-card:#141428;
@@ -25,20 +45,18 @@
   --ease-out:cubic-bezier(0.22, 1, 0.36, 1);
   --ease-standard:cubic-bezier(0.4, 0, 0.2, 1);
 }
-/* Inactive off-white appearance token draft.
-   Do not activate in production yet.
-   This is for future Appearance redesign testing only. */
+/* Active off-white appearance tokens. */
 html[data-beynd-appearance="offwhite"]{
   --bg-base:#f5f4f1;--bg-surface:#faf9f6;--bg-card:#ffffff;--bg-raised:#edeae6;
   --bd:rgba(15,23,42,0.09);--bd-em:rgba(15,23,42,0.15);
   --tx-1:#15151a;--tx-2:rgba(21,21,26,0.82);--tx-3:#5e6470;--tx-4:rgba(21,21,26,0.42);
-  --gem:#7254b8;--gem-l:#8b6fd0;
+  --gem:#7254b8;--gem-l:#8b6fd0;--rose:#c4476e;
   --ok:#047857;--warn:#b45309;--danger:#b91c1c;--info:#2563eb;
   --on-accent:#ffffff;--scrim:rgba(15,23,42,0.48);
+  color-scheme:light;
   --radius:16px;
 }
-/* Off-white preview contrast guards.
-   Preview-only. Do not activate as user-facing Appearance yet. */
+/* Off-white contrast guards. */
 html[data-beynd-appearance="offwhite"] .fi{background:var(--bg-card);border-color:var(--bd);color:var(--tx-1)}
 html[data-beynd-appearance="offwhite"] .fi::placeholder{color:var(--tx-3);opacity:1}
 html[data-beynd-appearance="offwhite"] .fi:focus{border-color:var(--gem)}
@@ -71,8 +89,7 @@ html[data-beynd-appearance="offwhite"] [style*="background:#181830"],
 html[data-beynd-appearance="offwhite"] [style*="background:#101020"]{background:var(--bg-raised) !important}
 html[data-beynd-appearance="offwhite"] [style*="background:#141428"],
 html[data-beynd-appearance="offwhite"] [style*="background:#151528"]{background:var(--bg-card) !important}
-/* Off-white preview surface-specific contrast fixes.
-   Preview-only. Keeps intentionally dark surfaces readable. */
+/* Off-white surface-specific contrast fixes. */
 html[data-beynd-appearance="offwhite"] .btn-sm{background:rgba(114,84,184,0.10);border-color:rgba(114,84,184,0.16);color:var(--gem)}
 html[data-beynd-appearance="offwhite"] .tile-lb{color:var(--tx-3)}
 html[data-beynd-appearance="offwhite"] .link-like,
@@ -93,8 +110,7 @@ html[data-beynd-appearance="offwhite"] .hero [style*="color:rgba(237,234,255"],
 html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:rgba(237,234,255"]{color:#edeaff !important}
 html[data-beynd-appearance="offwhite"] .hero [style*="color:#c4abff"],
 html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#c4abff"]{color:#c4abff !important}
-/* Off-white preview final contrast polish.
-   Preview-only. Keeps dark preview surfaces legible. */
+/* Off-white final contrast polish. */
 html[data-beynd-appearance="offwhite"] #ob-it-stable,
 html[data-beynd-appearance="offwhite"] #ob-it-irregular,
 html[data-beynd-appearance="offwhite"] #ob-it-none{background:rgba(255,255,255,0.03) !important;border-color:rgba(255,255,255,0.10) !important}
@@ -124,8 +140,7 @@ html[data-beynd-appearance="offwhite"] .hero [style*="color:#9b93b8"],
 html[data-beynd-appearance="offwhite"] .hero [style*="color:#706a90"],
 html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#9b93b8"],
 html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#706a90"]{color:rgba(189,183,220,0.82) !important}
-/* Off-white preview semantic + off-hero polish.
-   Preview-only. Keeps Add/Del buttons AA and dark inline-gradient cards legible. */
+/* Off-white semantic + off-hero polish. */
 html[data-beynd-appearance="offwhite"] .btn-add{
   background:rgba(4,120,87,0.10);
   border-color:rgba(4,120,87,0.28);
@@ -147,8 +162,7 @@ html[data-beynd-appearance="offwhite"] [style*="linear-gradient(135deg,#0e0a20"]
 html[data-beynd-appearance="offwhite"] [style*="linear-gradient(155deg,#081820"] [style*="color:rgba(189,183,220"]{
   color:rgba(189,183,220,0.82) !important;
 }
-/* Off-white preview warning + status + progress polish.
-   Preview-only. Restores AA for warn copy, status chips and detail bars. */
+/* Off-white warning + status + progress polish. */
 html[data-beynd-appearance="offwhite"] [style*="color:#f5c234"],
 html[data-beynd-appearance="offwhite"] [style*="color:rgba(245,194,52"]{
   color:var(--warn) !important;
@@ -177,6 +191,54 @@ html[data-beynd-appearance="offwhite"] .pl-status.inp{
 html[data-beynd-appearance="offwhite"] .geode-plan-detail-pbar,
 html[data-beynd-appearance="offwhite"] .geode-debt-impact-bar{
   background:var(--bd);
+}
+html[data-beynd-appearance="offwhite"] #splash,
+html[data-beynd-appearance="offwhite"] #pg-login{
+  background:radial-gradient(ellipse at 50% 38%,#faf9f6,#f5f4f1 52%,#ebe8e2);
+}
+html[data-beynd-appearance="offwhite"] #pg-ob,
+html[data-beynd-appearance="offwhite"] #pg-fr{
+  background:linear-gradient(180deg,#faf9f6,#f5f4f1 42%,#ebe8e2);
+}
+html[data-beynd-appearance="offwhite"] #hdr{
+  background:var(--bg-base);
+  border-bottom-color:var(--bd);
+}
+html[data-beynd-appearance="offwhite"] #tabs{
+  background:rgba(250,249,246,0.94);
+  border-top-color:var(--bd);
+}
+html[data-beynd-appearance="offwhite"] .mo-bg{
+  background:rgba(15,23,42,0.42);
+}
+html[data-beynd-appearance="offwhite"] .hero,
+html[data-beynd-appearance="offwhite"] .dash-net-hero{
+  background:linear-gradient(155deg,#ffffff,#f5f4f8 50%,#faf9f6);
+  border-color:rgba(114,84,184,0.18);
+  box-shadow:0 1px 0 rgba(15,23,42,0.04);
+}
+html[data-beynd-appearance="offwhite"] .hero::before{
+  background:radial-gradient(circle,rgba(114,84,184,0.06),transparent 70%);
+}
+html[data-beynd-appearance="offwhite"] .hero [style*="color:rgba(255,255,255"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:rgba(255,255,255"],
+html[data-beynd-appearance="offwhite"] .hero [style*="color:#edeaff"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#edeaff"],
+html[data-beynd-appearance="offwhite"] .hero [style*="color:rgba(237,234,255"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:rgba(237,234,255"]{
+  color:var(--tx-1) !important;
+}
+html[data-beynd-appearance="offwhite"] .hero [style*="color:#c4abff"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#c4abff"]{
+  color:var(--gem) !important;
+}
+html[data-beynd-appearance="offwhite"] .hero [style*="color:rgba(189,183,220"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:rgba(189,183,220"],
+html[data-beynd-appearance="offwhite"] .hero [style*="color:#9b93b8"],
+html[data-beynd-appearance="offwhite"] .hero [style*="color:#706a90"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#9b93b8"],
+html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:#706a90"]{
+  color:var(--tx-3) !important;
 }
 body.light{
   color-scheme:light;
@@ -545,6 +607,8 @@ canvas{display:block}
 .geode-month-context--open .geode-expand-inner{animation-duration:var(--motion-calm)}
 .geode-hm-transient{opacity:1;transform:translateY(0);transition:opacity 420ms ease,transform 420ms ease}
 .geode-hm-transient.is-hiding{opacity:0;transform:translateY(-4px);pointer-events:none}
+.geode-home-anticipatory{margin-bottom:12px;padding:12px 14px;border-radius:14px;background:var(--bg-surface);border:1px solid rgba(155,127,232,0.16);border-left:2px solid rgba(155,127,232,0.5);box-shadow:none;transition:opacity var(--motion-standard) var(--ease-out),transform var(--motion-standard) var(--ease-out)}
+.geode-home-anticipatory.is-hiding{opacity:0;transform:translateY(-4px);pointer-events:none}
 
 @keyframes fi{from{opacity:0}to{opacity:1}}
 @keyframes su{from{transform:translateY(60px);opacity:0}to{transform:translateY(0);opacity:1}}
@@ -784,14 +848,9 @@ canvas{display:block}
 </div>
 
 <script>
-// ── DEV-ONLY OFF-WHITE PREVIEW GUARD ─────────────
-// Stage 54B: non-persistent, session-scoped preview of the inactive
-// html[data-beynd-appearance="offwhite"] token block. Does not touch
-// S.theme, applyTheme, body.light, save/load, or service worker.
-// Refreshing without the query param leaves the attribute unset.
-// Stage 63D: also raise a session-scoped flag so load() can re-assert the preview
-// after applyAppearance(S.appearance) would otherwise revert to the saved value.
-// The flag is in-memory only; refresh without the query param drops it.
+// ── OFF-WHITE QUERY OVERRIDE ─────────────────────
+// Optional session-scoped override for visual checks. Normal users persist
+// appearance through S.appearance and the Settings toggle.
 var __beyndAppearancePreview = null;
 try {
   var __beyndPreviewParams = new URLSearchParams(window.location.search || '');
@@ -865,6 +924,10 @@ var S = {
   humanMomentConsistencyShownDay: '',
   /** Stage ZZ: one-time Ask Beynd introduction has been shown. */
   askBeyndFirstRunShown: false,
+  /** Stage AAA: local day Home was first opened for daily anticipatory guidance. */
+  homeFirstOpenDay: '',
+  /** Stage AAA: local day the transient Home anticipatory strip was shown. */
+  homeAnticipatoryShownDay: '',
   /** Stage N: optional reminder preferences (saved locally; scheduling/delivery not wired in this build). */
   reminderPrefs: null,
   /** Home UX: user dismissed Quick Setup without finishing; softer empty Home until they engage again. */
@@ -974,46 +1037,49 @@ function coercePersistedBoolean(v) {
   return false;
 }
 
-/** White/light appearance temporarily disabled (Stage 19G): never attach body.light; CSS kept for backlog. */
+/** Legacy theme bridge: light maps to the active off-white appearance. */
 function applyTheme(t){
-  document.body.classList.remove('light');
+  try {
+    if (__beyndAppearancePreview === 'offwhite') t = 'offwhite';
+  } catch (_eThemePreview) {}
+  applyAppearance(t === 'light' || t === 'offwhite' ? 'offwhite' : 'dark');
 }
 function toggleTheme(){
-  S.theme = 'dark';
-  applyTheme('dark');
-  try {
-    save();
-  } catch (e) {}
+  setAppearance(S.appearance === 'offwhite' ? 'dark' : 'offwhite');
 }
-/** Stage 63B: applies the off-white preview attribute to <html> for the given appearance value.
- *  Does not mutate S, does not call save(), does not touch body.light, applyTheme, or toggleTheme.
- *  Only allowed value that activates the preview is 'offwhite'; anything else removes the attribute. */
+/** Applies the active appearance token set without touching page/tab state. */
 function applyAppearance(value){
   try {
+    var offwhite = value === 'offwhite';
     if (value === 'offwhite') {
       document.documentElement.dataset.beyndAppearance = 'offwhite';
     } else {
       delete document.documentElement.dataset.beyndAppearance;
     }
+    if (document.body) document.body.classList.remove('light');
+    var mt = document.querySelector('meta[name="theme-color"]');
+    if (mt) mt.setAttribute('content', offwhite ? '#f5f4f1' : '#9b7fe8');
   } catch (e) {}
 }
-/** Stage 65B: user-facing appearance setter.
- *  Validates input, persists S.appearance via save(), and re-renders so the Settings chip
- *  and chart palette refresh. Never touches S.theme, applyTheme, toggleTheme, body.light,
- *  localStorage directly, the service worker, or any business logic. */
+/** Stage BBB: user-facing appearance setter. Persists a reversible dark/off-white choice. */
 function setAppearance(v) {
   if (v !== 'dark' && v !== 'offwhite') return;
   S.appearance = v;
+  S.theme = v === 'offwhite' ? 'light' : 'dark';
   applyAppearance(v);
   try { save(); } catch (e) {}
-  try { render(); } catch (e) {}
+  try {
+    if (typeof tab !== 'undefined' && tab === 'me') rMe();
+  } catch (e2) {}
 }
 function load() {
+  var _loadedAppearanceWasMissing = false;
   try {
     var d = localStorage.getItem(KEY);
     _geodeFirstBoot = !d;
     if (d) {
       var p = JSON.parse(d);
+      _loadedAppearanceWasMissing = !Object.prototype.hasOwnProperty.call(p, 'appearance');
       for (var k in p) S[k] = p[k];
       if (!S.finRegion || !/^(UK|US|EU|Other)$/.test(String(S.finRegion))) S.finRegion = 'UK';
       if (S.planStrategy !== 'debt' && S.planStrategy !== 'balanced' && S.planStrategy !== 'growth') S.planStrategy = 'balanced';
@@ -1074,6 +1140,8 @@ function load() {
   if (typeof S.lastSeenAt !== 'number' || !isFinite(S.lastSeenAt) || S.lastSeenAt < 0) S.lastSeenAt = 0;
   if (typeof S.humanMomentConsistencyShownDay !== 'string') S.humanMomentConsistencyShownDay = '';
   if (typeof S.askBeyndFirstRunShown !== 'boolean') S.askBeyndFirstRunShown = coercePersistedBoolean(S.askBeyndFirstRunShown);
+  if (typeof S.homeFirstOpenDay !== 'string') S.homeFirstOpenDay = '';
+  if (typeof S.homeAnticipatoryShownDay !== 'string') S.homeAnticipatoryShownDay = '';
   geodeNormalizeReminderPrefs();
   var _adf = ['debt', 'goal', 'invest', 'buffer'],
     _adi;
@@ -1115,15 +1183,11 @@ function load() {
       String(S.beyondApiKey).trim().indexOf('sk-ant-') === 0 ? 'anthropic' : 'openai';
   }
   captureMonthlySnapshot();
-  if (S.theme === 'light') {
-    S.theme = 'dark';
-    try {
-      save();
-    } catch (eTh) {}
-  }
+  if (_loadedAppearanceWasMissing && S.theme === 'light') S.appearance = 'offwhite';
   if (S.appearance !== 'dark' && S.appearance !== 'offwhite') {
     S.appearance = 'dark';
   }
+  S.theme = S.appearance === 'offwhite' ? 'light' : 'dark';
   applyAppearance(S.appearance);
   if (__beyndAppearancePreview === 'offwhite') applyAppearance('offwhite');
 }
@@ -21276,6 +21340,109 @@ function geodeGetDailyIndex(key, len) {
   }
 }
 
+function geodeHomeAnticipatoryUpcomingContributionDays(state) {
+  state = state || S;
+  try {
+    var list = Array.isArray(state.payments) ? state.payments : [];
+    var best = null;
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (!p || !p.date) continue;
+      var st = String(p.status || '').toLowerCase();
+      if (st === 'paid' || st === 'done' || st === 'completed') continue;
+      if (!geodePaymentIsContributionLike(p)) continue;
+      var diff = geodeSubscriptionReminderLocalDiffDays(String(p.date).slice(0, 10));
+      if (diff === null || diff < 0 || diff > 3) continue;
+      if (best === null || diff < best) best = diff;
+    }
+    return best;
+  } catch (_eAaaContrib) {
+    return null;
+  }
+}
+
+function geodeHomeAnticipatoryLine(state) {
+  state = state || S;
+  try {
+    if (geodeHasOverdue(state)) {
+      return 'A payment may need attention today. A quick review can help keep the rest of your plan steady.';
+    }
+  } catch (_eAaaOverdue) {}
+  try {
+    if (geodeHasPastDueUnconfirmedContributions(state)) {
+      return 'A planned contribution may need a quick check. If it has moved, update it when you are ready.';
+    }
+  } catch (_eAaaPastContrib) {}
+  try {
+    if (calcMonthlyLeftover(state) < 0) {
+      return 'Your plan is under pressure this month. A quick review can help you choose the next steady move.';
+    }
+  } catch (_eAaaLeft) {}
+  try {
+    var dueIn = geodeHomeAnticipatoryUpcomingContributionDays(state);
+    if (dueIn !== null) {
+      if (dueIn === 0) {
+        return 'You have a planned contribution today. A quick check can help keep the month grounded.';
+      }
+      return 'A planned contribution is coming up soon. Your plan may be worth a quick look.';
+    }
+  } catch (_eAaaUpcoming) {}
+  try {
+    var latest = geodeGetLatestActivity(state);
+    if (geodeLatestActivityIsRecent(latest, 72)) {
+      return 'Your plan has fresh activity. A quick look can keep your next move grounded.';
+    }
+  } catch (_eAaaActivity) {}
+  return 'Based on your plan today, a quick review can help you stay aligned without overthinking it.';
+}
+
+function geodeHomeAnticipatoryHtml(body) {
+  if (!body) return '';
+  return (
+    '<div id="geode-home-anticipatory" class="geode-soft-enter geode-home-anticipatory" data-geode-home-anticipatory="1" role="status" aria-live="polite">' +
+    '<div style="font-size:9px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--gem-l);margin-bottom:5px">Worth a quick look</div>' +
+    '<div style="font-size:12px;color:rgba(237,234,255,0.84);line-height:1.5">' +
+    escHtmlLite(body) +
+    '</div></div>'
+  );
+}
+
+function geodeHomeAnticipatoryMaybeHtml(state) {
+  state = state || S;
+  try {
+    if (geodeIsEmptyState()) return '';
+    var today = geodeTodayLocalISO();
+    if (!today) return '';
+    if (String(state.homeFirstOpenDay || '') === today) return '';
+    state.homeFirstOpenDay = today;
+    if (String(state.homeAnticipatoryShownDay || '') === today) return '';
+    var body = geodeHomeAnticipatoryLine(state);
+    if (!body) return '';
+    state.homeAnticipatoryShownDay = today;
+    return geodeHomeAnticipatoryHtml(body);
+  } catch (_eAaaMaybe) {
+    return '';
+  }
+}
+
+function geodeArmHomeAnticipatoryTransient() {
+  try {
+    var el = document.getElementById('geode-home-anticipatory');
+    if (!el || el.getAttribute('data-geode-home-anticipatory-armed') === '1') return;
+    el.setAttribute('data-geode-home-anticipatory-armed', '1');
+    window.setTimeout(function () {
+      try {
+        el.classList.add('is-hiding');
+        window.setTimeout(function () {
+          try {
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+          } catch (_eAaaRemove) {}
+        }, 260);
+      } catch (_eAaaHide) {}
+    }, 4200);
+  } catch (_eAaaArm) {}
+}
+
 /** Stage 5: first completed, unacknowledged goal; null if none. */
 function geodeFindUnacknowledgedCompletedGoal() {
   var goals = S.goals || [];
@@ -21419,6 +21586,7 @@ function rHome() {
     '</div>' +
     '</details>';
   h += '</div>';
+  h += geodeHomeAnticipatoryMaybeHtml(S);
   try {
     if (geodeHomeShouldShowSinceLastVisit(prevLastSeen, { recoveryActive: !!recovery })) {
       h += geodeRenderSinceLastVisit(prevLastSeen);
@@ -21710,6 +21878,7 @@ function rHome() {
   persistGeodeToLocalStorage();
   c.innerHTML = h;
   geodeArmHumanMomentTransient();
+  geodeArmHomeAnticipatoryTransient();
   if (Array.isArray(S._pendingLastShownHighlightTopics)) {
     S.lastShownNudgeTopics = S._pendingLastShownHighlightTopics.slice();
   }
@@ -25758,8 +25927,8 @@ function geodeBuildSettingsAccessDrillHtml() {
   var _appLabel = _appCurrent === 'offwhite' ? 'Off-white' : 'Dark';
   var _appNext = _appCurrent === 'offwhite' ? 'dark' : 'offwhite';
   var _appHelper = _appCurrent === 'offwhite'
-    ? 'Off-white preview is on. Tap Switch to return to Dark.'
-    : 'Currently Dark. Tap Switch to try the new off-white look.';
+    ? 'Off-white is on. Tap Switch to return to Dark.'
+    : 'Currently Dark. Tap Switch for the softer off-white look.';
   h += geodeMeRow(
     'Appearance',
     _appHelper,
@@ -26120,12 +26289,15 @@ function geodeBeyndBackupRestorableKeyWhitelist() {
     'lastSeenAt',
     'humanMomentConsistencyShownDay',
     'askBeyndFirstRunShown',
+    'homeFirstOpenDay',
+    'homeAnticipatoryShownDay',
     'reminderPrefs',
     'quickSetupDismissed',
     'realityCheck',
     'monthContext',
     'completedGoalAcknowledged',
     'theme',
+    'appearance',
     '_schemaVersion',
     'ignoredMerchants',
     'reductionPlan',
