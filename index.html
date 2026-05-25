@@ -1608,6 +1608,44 @@ function persistGeodeToLocalStorage() {
 }
 
 var geodeCoachingCopy = null;
+var GEODE_COACHING_COPY_TOP_LEVEL = ['askBeynd', 'sinceLastVisit', 'humanMoment', 'nudges', 'suggestedActions'];
+var GEODE_COACHING_COPY_EXPECTED_PATHS = [
+  'askBeynd.systemPromptBase',
+  'askBeynd.homeButtonLabel',
+  'askBeynd.modal.title',
+  'askBeynd.modal.caption',
+  'askBeynd.modal.inputPlaceholder',
+  'askBeynd.modal.sendButton',
+  'askBeynd.modal.privacyFoot',
+  'askBeynd.modal.loadingText',
+  'askBeynd.modal.fallbackReply',
+  'askBeynd.modal.unavailableError',
+  'humanMoment.home.label',
+  'nudges.adaptive_planning.title',
+  'nudges.adaptive_planning.topic',
+  'nudges.adaptive_planning.investHarder.message',
+  'nudges.adaptive_planning.investHarder.type',
+  'nudges.adaptive_planning.goalPartial.message',
+  'nudges.adaptive_planning.goalPartial.type',
+  'nudges.adaptive_planning.debtMomentum.message',
+  'nudges.adaptive_planning.debtMomentum.type',
+  'suggestedActions.homeCardCopy.debt_payment',
+  'suggestedActions.homeCardCopy.debt_payment.title',
+  'suggestedActions.homeCardCopy.debt_payment.sub',
+  'suggestedActions.homeCardCopy.buffer_contribution',
+  'suggestedActions.homeCardCopy.buffer_contribution.title',
+  'suggestedActions.homeCardCopy.buffer_contribution.sub',
+  'suggestedActions.homeCardCopy.goal_contribution',
+  'suggestedActions.homeCardCopy.goal_contribution.title',
+  'suggestedActions.homeCardCopy.goal_contribution.sub',
+  'suggestedActions.homeCardCopy.investment_contribution',
+  'suggestedActions.homeCardCopy.investment_contribution.title',
+  'suggestedActions.homeCardCopy.investment_contribution.sub',
+  'suggestedActions.adaptiveSubtitles.debt_payment',
+  'suggestedActions.adaptiveSubtitles.goal_contribution',
+  'suggestedActions.adaptiveSubtitles.investment_contribution',
+  'suggestedActions.adaptiveSubtitles.default'
+];
 
 function geodeCopyValue(root, path) {
   if (!root || !path) return undefined;
@@ -1638,6 +1676,28 @@ function geodeCopy(path, fallback) {
   return geodeCopyClone(v);
 }
 
+function geodeCoachingCopyReadiness(root) {
+  var copy = root || geodeCoachingCopy;
+  var missingTopLevel = [];
+  var missingPaths = [];
+  for (var i = 0; i < GEODE_COACHING_COPY_TOP_LEVEL.length; i++) {
+    var key = GEODE_COACHING_COPY_TOP_LEVEL[i];
+    if (!copy || !Object.prototype.hasOwnProperty.call(copy, key)) missingTopLevel.push(key);
+  }
+  for (var j = 0; j < GEODE_COACHING_COPY_EXPECTED_PATHS.length; j++) {
+    var path = GEODE_COACHING_COPY_EXPECTED_PATHS[j];
+    if (geodeCopyValue(copy, path) === undefined) missingPaths.push(path);
+  }
+  return {
+    loaded: !!copy,
+    missingTopLevel: missingTopLevel,
+    missingPaths: missingPaths,
+    has: function (path) {
+      return geodeCopyValue(copy, path) !== undefined;
+    }
+  };
+}
+
 function geodeLoadCoachingCopy() {
   try {
     if (typeof fetch !== 'function') return;
@@ -1649,6 +1709,7 @@ function geodeLoadCoachingCopy() {
       .then(function (json) {
         if (json && typeof json === 'object' && !Array.isArray(json)) {
           geodeCoachingCopy = json;
+          try { window._geodeCoachingCopyReadiness = geodeCoachingCopyReadiness(json); } catch (_eCopyReady) {}
           try { window._geodeCoachingCopyLoaded = true; } catch (_eCopyFlag) {}
         }
       })
@@ -10320,14 +10381,13 @@ function applyAdaptiveLayerToSuggestedActions(actions) {
     }
     o.amount = roundAdaptiveEncouragementAmount(o.originalAmount);
     if (a.type === 'debt_payment') {
-      o.subtitle =
-        'Start with a smaller extra payment this month — your plan still targets the full amount when you are ready.';
+      o.subtitle = geodeCopy('suggestedActions.adaptiveSubtitles.debt_payment', 'Start with a smaller extra payment this month — your plan still targets the full amount when you are ready.');
     } else if (a.type === 'goal_contribution') {
-      o.subtitle = 'A smaller contribution still keeps progress moving — the full suggestion is on Plan when you want it.';
+      o.subtitle = geodeCopy('suggestedActions.adaptiveSubtitles.goal_contribution', 'A smaller contribution still keeps progress moving — the full suggestion is on Plan when you want it.');
     } else if (a.type === 'investment_contribution') {
-      o.subtitle = 'Start smaller on the recurring amount — match the full plan when ready.';
+      o.subtitle = geodeCopy('suggestedActions.adaptiveSubtitles.investment_contribution', 'Start smaller on the recurring amount — match the full plan when ready.');
     } else {
-      o.subtitle = 'Even a modest buffer step helps — build toward the full plan suggestion over time.';
+      o.subtitle = geodeCopy('suggestedActions.adaptiveSubtitles.default', 'Even a modest buffer step helps — build toward the full plan suggestion over time.');
     }
     return o;
   });
@@ -10351,10 +10411,10 @@ function buildAdaptivePlanningNudge() {
   var invR = getFollowthroughRecentForFamily(S, 'invest', ADAPTIVE_ROLL_WINDOW);
   if (invR.length >= ADAPTIVE_MIN_EVIDENCE && adaptiveRollingMeanScore(invR) < 0.4) {
     return {
-      title: 'Your planning style',
-      message: 'Investing suggestions have been harder to act on — starting smaller may help.',
-      type: 'opportunity',
-      topic: 'adaptive_planning'
+      title: geodeCopy('nudges.adaptive_planning.title', 'Your planning style'),
+      message: geodeCopy('nudges.adaptive_planning.investHarder.message', 'Investing suggestions have been harder to act on — starting smaller may help.'),
+      type: geodeCopy('nudges.adaptive_planning.investHarder.type', 'opportunity'),
+      topic: geodeCopy('nudges.adaptive_planning.topic', 'adaptive_planning')
     };
   }
   var goalR = getFollowthroughRecentForFamily(S, 'goal', ADAPTIVE_ROLL_WINDOW);
@@ -10367,21 +10427,20 @@ function buildAdaptivePlanningNudge() {
     var gShare = partials / goalR.length;
     if (gShare >= 0.4 && adaptiveRollingMeanScore(goalR) < 0.5) {
       return {
-        title: 'Your planning style',
-        message:
-          'You tend to make partial progress on goals — that still counts, but a little more would get you back on pace.',
-        type: 'opportunity',
-        topic: 'adaptive_planning'
+        title: geodeCopy('nudges.adaptive_planning.title', 'Your planning style'),
+        message: geodeCopy('nudges.adaptive_planning.goalPartial.message', 'You tend to make partial progress on goals — that still counts, but a little more would get you back on pace.'),
+        type: geodeCopy('nudges.adaptive_planning.goalPartial.type', 'opportunity'),
+        topic: geodeCopy('nudges.adaptive_planning.topic', 'adaptive_planning')
       };
     }
   }
   var debtR = getFollowthroughRecentForFamily(S, 'debt', ADAPTIVE_ROLL_WINDOW);
   if (debtR.length >= ADAPTIVE_MIN_EVIDENCE && adaptiveRollingMeanScore(debtR) >= 0.75) {
     return {
-      title: 'Your planning style',
-      message: 'You usually follow through on debt actions — this is a good place to keep momentum.',
-      type: 'positive',
-      topic: 'adaptive_planning'
+      title: geodeCopy('nudges.adaptive_planning.title', 'Your planning style'),
+      message: geodeCopy('nudges.adaptive_planning.debtMomentum.message', 'You usually follow through on debt actions — this is a good place to keep momentum.'),
+      type: geodeCopy('nudges.adaptive_planning.debtMomentum.type', 'positive'),
+      topic: geodeCopy('nudges.adaptive_planning.topic', 'adaptive_planning')
     };
   }
   return null;
@@ -13018,7 +13077,7 @@ function geodeHomeHumanMomentStripHtml(hm) {
     '">';
   h +=
     '<div class="insight-head">';
-  h += geodeIcon('sparkles', 'ic ic-hdr-sm') + '<span>Human moment</span><span class="mini-divider"></span></div>';
+  h += geodeIcon('sparkles', 'ic ic-hdr-sm') + '<span>' + escHtmlLite(geodeCopy('humanMoment.home.label', 'Human moment')) + '</span><span class="mini-divider"></span></div>';
   h +=
     '<div class="insight-card' +
     toneCls +
@@ -17492,14 +17551,24 @@ function geodeHomeActionCardCopy(a) {
     return { title: String(a.title || '').trim(), sub: String(a.subtitle || '').trim() };
   }
   if (a.type === 'debt_payment') {
-    return { title: 'Reduce high-interest debt', sub: 'This reduces your highest interest cost first.' };
+    return geodeCopy('suggestedActions.homeCardCopy.debt_payment', {
+      title: 'Reduce high-interest debt',
+      sub: 'This reduces your highest interest cost first.'
+    });
   }
   if (a.type === 'buffer_contribution') {
-    return { title: 'Build your safety buffer', sub: 'Creates a buffer for unexpected expenses.' };
+    return geodeCopy('suggestedActions.homeCardCopy.buffer_contribution', {
+      title: 'Build your safety buffer',
+      sub: 'Creates a buffer for unexpected expenses.'
+    });
   }
   if (a.type === 'goal_contribution') {
     var gn = a.targetName ? String(a.targetName).trim() : '';
-    return { title: gn ? 'Contribute to ' + gn : 'Contribute to your goal', sub: '' };
+    var goalFallback = geodeCopy('suggestedActions.homeCardCopy.goal_contribution', {
+      title: 'Contribute to your goal',
+      sub: ''
+    });
+    return { title: gn ? 'Contribute to ' + gn : goalFallback.title, sub: goalFallback.sub || '' };
   }
   if (a.type === 'investment_contribution') {
     if (a._investBehaviour === 'WITH_PRESSURE' || a._investBehaviour === 'IN_PROGRESS') {
@@ -17508,7 +17577,10 @@ function geodeHomeActionCardCopy(a) {
       if (isu && it && isu.toLowerCase().indexOf(it.toLowerCase()) >= 0) isu = '';
       return { title: it, sub: isu };
     }
-    return { title: 'Start investing', sub: 'Even small amounts compound over time.' };
+    return geodeCopy('suggestedActions.homeCardCopy.investment_contribution', {
+      title: 'Start investing',
+      sub: 'Even small amounts compound over time.'
+    });
   }
   return { title: String(a.title || '').trim(), sub: '' };
 }
@@ -22389,7 +22461,7 @@ function geodeBeyndAiComplete(opts) {
         });
       })
       .then(function(data) {
-        return { text: (data && data.text) || 'Sorry, I could not answer that.' };
+        return { text: (data && data.text) || geodeCopy('askBeynd.modal.fallbackReply', 'Sorry, I could not answer that.') };
       });
   }
   opts.system = opts.system || geodeAskBeyndLegacySystemPrompt(opts.context);
@@ -22402,7 +22474,8 @@ function geodeBeyndAiComplete(opts) {
 }
 
 function geodeAskBeyndLegacySystemPrompt(context) {
-  return (
+  var basePrompt = geodeCopy(
+    'askBeynd.systemPromptBase',
     'You are Beynd, a calm personal financial coach.\n\n' +
     'You receive a short summary the user keeps on this device. Bank connection is not live yet. This is coaching, not regulated financial advice.\n\n' +
     'The summary has monthly figures from what they entered, including priority steps for this month. It may also include a balance they added for a sense-check.\n\n' +
@@ -22410,9 +22483,9 @@ function geodeAskBeyndLegacySystemPrompt(context) {
     'If they ask whether they can afford something and no balance is listed this month, or the summary says Worth another look or Go gently here, lead with what their monthly picture shows. Mention once that refreshing their balance would sharpen the answer. Then continue with useful guidance. Do not tell them they can afford it as fact.\n\n' +
     'If a balance is on file and the summary says Looks steady, you may compare both views in plain language. Stay practical and warm. Do not sound like a bank or a guarantee.\n\n' +
     'Do not repeat caveats unnecessarily. Explain them once clearly, then continue naturally.\n\n' +
-    'Be specific with their numbers. Use two or three sentences unless more detail clearly helps. Be honest without shaming. Stay calm and direct.\n\n' +
-    String(context || '')
+    'Be specific with their numbers. Use two or three sentences unless more detail clearly helps. Be honest without shaming. Stay calm and direct.\n\n'
   );
+  return String(basePrompt || '') + String(context || '');
 }
 
 /** Ask Beynd setup: swap to API key modal without closeModal (avoids delayed removeModalDom killing the new sheet). */
@@ -22448,7 +22521,8 @@ function geodeHomeAskBeyndButtonHtml(state) {
     cls +
     '" onclick="geodeOpenAskBeynd()">' +
     geodeIcon('sparkles', 'ic ic-qa') +
-    'Ask Beynd</button></div>'
+    escHtmlLite(geodeCopy('askBeynd.homeButtonLabel', 'Ask Beynd')) +
+    '</button></div>'
   );
 }
 
@@ -22655,8 +22729,8 @@ function geodeOpenAskBeynd() {
   _beynd_chat_history = [];
   var uiCopy = geodeGetAskBeyndUiCopy(S);
   var showFirstRunIntro = geodeShouldShowAskBeyndFirstRun();
-  var h = mh('Ask Beynd');
-  h += '<div class="beynd-ask-caption">Ask from your plan and the picture you have built in Beynd. Bank connection is not live yet.</div>';
+  var h = mh(geodeCopy('askBeynd.modal.title', 'Ask Beynd'));
+  h += '<div class="beynd-ask-caption">' + escHtmlLite(geodeCopy('askBeynd.modal.caption', 'Ask from your plan and the picture you have built in Beynd. Bank connection is not live yet.')) + '</div>';
   h += '<div class="beynd-ask-sheet">';
   h += '<div id="beynd-chat-messages" class="beynd-ask-messages">';
   if (showFirstRunIntro) h += geodeAskBeyndFirstRunIntroHtml();
@@ -22673,10 +22747,10 @@ function geodeOpenAskBeynd() {
   });
   h += '</div>';
   h += '<div class="beynd-ask-compose">';
-  h += '<textarea id="beynd-input" class="fi" rows="3" placeholder="Ask about your plan, money, or next move" onkeydown="try{if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();geodeAskBeynd();}}catch(e){}"></textarea>';
-  h += '<button type="button" class="btn btn-p" onclick="geodeAskBeynd()">Ask</button>';
+  h += '<textarea id="beynd-input" class="fi" rows="3" placeholder="' + escHtmlLite(geodeCopy('askBeynd.modal.inputPlaceholder', 'Ask about your plan, money, or next move')) + '" onkeydown="try{if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();geodeAskBeynd();}}catch(e){}"></textarea>';
+  h += '<button type="button" class="btn btn-p" onclick="geodeAskBeynd()">' + escHtmlLite(geodeCopy('askBeynd.modal.sendButton', 'Ask')) + '</button>';
   h += '</div>';
-  h += '<div class="beynd-ask-foot">When you ask, Beynd sends a short financial summary to answer your question. Your plan stays on this device, and this chat is not stored by Beynd.</div>';
+  h += '<div class="beynd-ask-foot">' + escHtmlLite(geodeCopy('askBeynd.modal.privacyFoot', 'When you ask, Beynd sends a short financial summary to answer your question. Your plan stays on this device, and this chat is not stored by Beynd.')) + '</div>';
   h += '</div>';
   openModal(h);
   if (showFirstRunIntro) {
@@ -22713,7 +22787,7 @@ function geodeAskBeynd(question) {
   var loadBubble = document.createElement('div');
   loadBubble.id = 'beynd-loading';
   loadBubble.className = 'beynd-ask-bubble beynd-ask-bubble--assistant beynd-ask-bubble--loading';
-  loadBubble.textContent = 'Thinking\u2026';
+  loadBubble.textContent = geodeCopy('askBeynd.modal.loadingText', 'Thinking\u2026');
   geodeApplyChatBubbleEnter(loadBubble);
   if (msgs) { msgs.appendChild(loadBubble); msgs.scrollTop = msgs.scrollHeight; }
 
@@ -22730,7 +22804,7 @@ function geodeAskBeynd(question) {
     context: context,
     clientVersion: GEODE_ASK_BEYND_CLIENT_VERSION
   }).then(function(result) {
-    var reply = (result && result.text) || 'Sorry, I could not answer that.';
+    var reply = (result && result.text) || geodeCopy('askBeynd.modal.fallbackReply', 'Sorry, I could not answer that.');
     _beynd_chat_history.push({role:'assistant', content: reply});
     var lb = document.getElementById('beynd-loading');
     if (lb) lb.remove();
@@ -22750,7 +22824,7 @@ function geodeAskBeynd(question) {
     if (aMs2) {
       var errBubble = document.createElement('div');
       errBubble.className = 'beynd-ask-bubble beynd-ask-bubble--error';
-      errBubble.textContent = 'Ask Beynd is unavailable right now. Your plan still works.';
+      errBubble.textContent = geodeCopy('askBeynd.modal.unavailableError', 'Ask Beynd is unavailable right now. Your plan still works.');
       geodeApplyChatBubbleEnter(errBubble);
       aMs2.appendChild(errBubble);
     }

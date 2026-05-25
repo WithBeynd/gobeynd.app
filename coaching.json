@@ -1,7 +1,19 @@
 {
   "askBeynd": {
+    "systemPromptBase": "You are Beynd, a calm personal financial coach.\n\nYou receive a short summary the user keeps on this device. Bank connection is not live yet. This is coaching, not regulated financial advice.\n\nThe summary has monthly figures from what they entered, including priority steps for this month. It may also include a balance they added for a sense-check.\n\nUse only numbers from the summary. Do not invent figures.\n\nIf they ask whether they can afford something and no balance is listed this month, or the summary says Worth another look or Go gently here, lead with what their monthly picture shows. Mention once that refreshing their balance would sharpen the answer. Then continue with useful guidance. Do not tell them they can afford it as fact.\n\nIf a balance is on file and the summary says Looks steady, you may compare both views in plain language. Stay practical and warm. Do not sound like a bank or a guarantee.\n\nDo not repeat caveats unnecessarily. Explain them once clearly, then continue naturally.\n\nBe specific with their numbers. Use two or three sentences unless more detail clearly helps. Be honest without shaming. Stay calm and direct.\n\n",
+    "homeButtonLabel": "Ask Beynd",
     "subIntro": "Choose a prompt or type your own question.",
     "firstRunIntro": "Ask Beynd about your plan, goals, or financial decisions. Type a question, choose an option, or follow a coaching hint when you want a steadier next step.",
+    "modal": {
+      "title": "Ask Beynd",
+      "caption": "Ask from your plan and the picture you have built in Beynd. Bank connection is not live yet.",
+      "inputPlaceholder": "Ask about your plan, money, or next move",
+      "sendButton": "Ask",
+      "privacyFoot": "When you ask, Beynd sends a short financial summary to answer your question. Your plan stays on this device, and this chat is not stored by Beynd.",
+      "loadingText": "Thinking\u2026",
+      "fallbackReply": "Sorry, I could not answer that.",
+      "unavailableError": "Ask Beynd is unavailable right now. Your plan still works."
+    },
     "modifierStarters": {
       "default": "What should I keep in mind this month?",
       "worriedOnly": "What\u2019s worth not rushing right now?"
@@ -75,6 +87,7 @@
   },
   "humanMoment": {
     "home": {
+      "label": "Human moment",
       "title": "Worth pausing for a moment",
       "consistency": {
         "title": "Good rhythm",
@@ -179,6 +192,48 @@
       "message": "You have been consistent with your goals before \u2014 picking it back up keeps you on track.",
       "type": "opportunity",
       "topic": "goal_habit_gap"
+    },
+    "adaptive_planning": {
+      "title": "Your planning style",
+      "topic": "adaptive_planning",
+      "investHarder": {
+        "message": "Investing suggestions have been harder to act on \u2014 starting smaller may help.",
+        "type": "opportunity"
+      },
+      "goalPartial": {
+        "message": "You tend to make partial progress on goals \u2014 that still counts, but a little more would get you back on pace.",
+        "type": "opportunity"
+      },
+      "debtMomentum": {
+        "message": "You usually follow through on debt actions \u2014 this is a good place to keep momentum.",
+        "type": "positive"
+      }
+    }
+  },
+  "suggestedActions": {
+    "homeCardCopy": {
+      "debt_payment": {
+        "title": "Reduce high-interest debt",
+        "sub": "This reduces your highest interest cost first."
+      },
+      "buffer_contribution": {
+        "title": "Build your safety buffer",
+        "sub": "Creates a buffer for unexpected expenses."
+      },
+      "goal_contribution": {
+        "title": "Contribute to your goal",
+        "sub": ""
+      },
+      "investment_contribution": {
+        "title": "Start investing",
+        "sub": "Even small amounts compound over time."
+      }
+    },
+    "adaptiveSubtitles": {
+      "debt_payment": "Start with a smaller extra payment this month \u2014 your plan still targets the full amount when you are ready.",
+      "goal_contribution": "A smaller contribution still keeps progress moving \u2014 the full suggestion is on Plan when you want it.",
+      "investment_contribution": "Start smaller on the recurring amount \u2014 match the full plan when ready.",
+      "default": "Even a modest buffer step helps \u2014 build toward the full plan suggestion over time."
     }
   }
 }
