@@ -429,11 +429,15 @@ canvas{display:block}
 .ct .ic{color:currentColor}
 
 /* ONBOARDING */
-#pg-ob{position:fixed;inset:0;z-index:80;overflow-y:auto;background:radial-gradient(ellipse at 30% 15%,#1c0a3a,#0a0a1a 55%,#05050f)}
-.ob-wrap{padding:56px 24px 48px;min-height:720px;display:grid;align-content:start}
-.ob-step{grid-area:1/1;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(10px);transition:opacity 180ms ease,transform 160ms ease,visibility 0s linear 180ms}
-.ob-step.show{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0);transition:opacity 180ms ease,transform 160ms ease,visibility 0s}
-#ob3{min-height:620px}
+#pg-ob{position:fixed;inset:0;z-index:80;overflow:hidden;background:radial-gradient(ellipse at 30% 15%,#1c0a3a,#0a0a1a 55%,#05050f)}
+.ob-wrap{box-sizing:border-box;padding:56px 24px max(48px,calc(24px + env(safe-area-inset-bottom,0px)));height:100vh;height:100dvh;min-height:0;max-height:100vh;max-height:100dvh;display:grid;align-content:start;position:relative;overflow:hidden;transition:height 200ms ease}
+.ob-step{grid-area:1/1;position:relative;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(10px);transition:opacity 180ms ease,transform 180ms ease,visibility 180ms ease;min-height:640px;max-height:calc(100vh - 104px);max-height:calc(100dvh - 104px);display:flex;flex-direction:column;box-sizing:border-box;overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.ob-step.show{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}
+#ob3{min-height:640px}
+#ob3.show{transition:height 200ms ease}
+#ob3 .ob-inc-label{transition:color 120ms ease}
+.ob-step-footer{position:sticky;bottom:0;z-index:1;margin-top:auto;padding:16px 0 max(4px,env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;justify-content:space-between;flex-shrink:0}
+@media (max-height:744px){.ob-step,#ob3{min-height:calc(100vh - 104px);min-height:calc(100dvh - 104px)}}
 .ob-ey{display:inline-flex;background:rgba(155,127,232,0.1);border:1px solid rgba(155,127,232,0.2);border-radius:20px;padding:5px 13px;font-size:10px;font-weight:600;color:#c4abff;letter-spacing:1px;text-transform:uppercase;margin-bottom:16px}
 .ob-h{font-size:34px;font-weight:700;line-height:1.1;margin-bottom:9px}
 .ob-h em{color:#c4abff;font-style:italic}
@@ -442,7 +446,7 @@ canvas{display:block}
 .od{height:4px;border-radius:2px;background:#202038;flex:1;transition:all 0.3s}
 .od.on{background:#9b7fe8;flex:2}
 .ob-income-options{display:grid;gap:6px;min-height:220px}
-.ob-income-option{background:rgba(255,255,255,0.03);border:1px solid var(--bd);border-radius:12px;padding:11px 12px;cursor:pointer;transition:background-color 160ms ease,border-color 160ms ease,transform 120ms ease;will-change:background-color,border-color}
+.ob-income-option{background:rgba(255,255,255,0.03);border:1px solid var(--bd);border-radius:12px;padding:11px 12px;cursor:pointer;transition:background-color 160ms ease,border-color 160ms ease,color 120ms ease,transform 120ms ease}
 .ob-income-option.on{background:rgba(155,127,232,0.15);border-color:var(--gem)}
 .ob-income-option:active{transform:scale(0.995)}
 .ob-income-option > div:first-child{font-size:12px;font-weight:700;color:var(--tx-1);transition:color 160ms ease}
@@ -715,9 +719,11 @@ canvas{display:block}
           </div>
         </div>
       </div>
-      <div class="field"><label id="ob-inc-label">Monthly income</label><input type="number" id="ob-inc" class="fi" placeholder="e.g. 3500"/></div>
-      <button class="btn btn-p" onclick="ob3Finish()">Start My Journey</button>
-      <button class="btn btn-s" onclick="ob3Finish()">Skip</button>
+      <div class="field"><label id="ob-inc-label" class="ob-inc-label">Monthly income</label><input type="number" id="ob-inc" class="fi" placeholder="e.g. 3500"/></div>
+      <div class="ob-step-footer">
+        <button class="btn btn-p" onclick="ob3Finish()">Start My Journey</button>
+        <button class="btn btn-s" onclick="ob3Finish()">Skip</button>
+      </div>
     </div>
   </div>
 </div>
@@ -4659,7 +4665,19 @@ function obSelectIncomeType(type) {
     el.className = 'ob-income-option' + (on ? ' on' : '');
   }
   var lbl = document.getElementById('ob-inc-label');
-  if (lbl) lbl.textContent = _obIncomeType === 'none' ? 'Monthly income \u2014 leave blank if none' : 'Monthly income';
+  if (lbl) {
+    var nextLabel =
+      _obIncomeType === 'none' ? 'Monthly income \u2014 leave blank if none' : 'Monthly income';
+    var applyLabel = function () {
+      lbl.textContent = nextLabel;
+    };
+    try {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(applyLabel);
+      else setTimeout(applyLabel, 120);
+    } catch (_eObLbl) {
+      applyLabel();
+    }
+  }
 }
 function ob3Finish() {
   var cv = document.getElementById('ob-cur').value;
@@ -23199,7 +23217,17 @@ function geodeQuickSetupRender() {
   body+='<button type="button" class="btn btn-p" onclick="'+nxt+'" style="flex:2">'+(step<total?'Continue':'Build my plan')+'</button>';
   body+='</div>';
   body+='<div style="text-align:center;margin-top:10px"><button type="button" style="background:none;border:none;color:var(--tx-4);font-size:11px;cursor:pointer" onclick="geodeQuickSetupExit()">Skip — I will enter data manually</button></div>';
-  openModal('<div class="mo-hdr"><span class="mo-title">Quick setup — step '+step+' of '+total+'</span><button type="button" class="mo-close" onclick="geodeQuickSetupExit()">&#x2715;</button></div><div style="padding:0 0 4px">'+body+'</div>');
+  var panelHtml =
+    '<div class="mo-hdr"><span class="mo-title">Quick setup — step ' +
+    step +
+    ' of ' +
+    total +
+    '</span><button type="button" class="mo-close" onclick="geodeQuickSetupExit()">&#x2715;</button></div><div style="padding:0 0 4px;min-height:430px">' +
+    body +
+    '</div>';
+  if (!geodeReplaceMoPanelHtml(panelHtml)) {
+    openModal(panelHtml);
+  }
 }
 function geodeQuickSetupUpdateChoiceClasses() {
   var qd = window._geodeQS && window._geodeQS.quickSetupData ? window._geodeQS.quickSetupData : null;
