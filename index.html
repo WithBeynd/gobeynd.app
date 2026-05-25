@@ -104,12 +104,14 @@ html[data-beynd-appearance="offwhite"] #ob-it-none > div:first-child{color:rgba(
 html[data-beynd-appearance="offwhite"] #ob-it-stable > div + div,
 html[data-beynd-appearance="offwhite"] #ob-it-irregular > div + div,
 html[data-beynd-appearance="offwhite"] #ob-it-none > div + div{color:rgba(189,183,220,0.82) !important}
+html[data-beynd-appearance="offwhite"] .ob-income-option.on,
 html[data-beynd-appearance="offwhite"] #ob-it-stable[style*="rgba(155,127,232,0.15)"],
 html[data-beynd-appearance="offwhite"] #ob-it-irregular[style*="rgba(155,127,232,0.15)"],
 html[data-beynd-appearance="offwhite"] #ob-it-none[style*="rgba(155,127,232,0.15)"],
 html[data-beynd-appearance="offwhite"] #ob-it-stable[style*="rgba(155, 127, 232, 0.15)"],
 html[data-beynd-appearance="offwhite"] #ob-it-irregular[style*="rgba(155, 127, 232, 0.15)"],
 html[data-beynd-appearance="offwhite"] #ob-it-none[style*="rgba(155, 127, 232, 0.15)"]{background:rgba(155,127,232,0.15) !important;border-color:#9b7fe8 !important}
+html[data-beynd-appearance="offwhite"] .ob-income-option.on > div:first-child,
 html[data-beynd-appearance="offwhite"] #ob-it-stable[style*="rgba(155,127,232,0.15)"] > div:first-child,
 html[data-beynd-appearance="offwhite"] #ob-it-irregular[style*="rgba(155,127,232,0.15)"] > div:first-child,
 html[data-beynd-appearance="offwhite"] #ob-it-none[style*="rgba(155,127,232,0.15)"] > div:first-child,
@@ -428,9 +430,10 @@ canvas{display:block}
 
 /* ONBOARDING */
 #pg-ob{position:fixed;inset:0;z-index:80;overflow-y:auto;background:radial-gradient(ellipse at 30% 15%,#1c0a3a,#0a0a1a 55%,#05050f)}
-.ob-wrap{padding:56px 24px 48px;min-height:100%}
-.ob-step{display:none}
-.ob-step.show{display:block}
+.ob-wrap{padding:56px 24px 48px;min-height:720px;display:grid;align-content:start}
+.ob-step{grid-area:1/1;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(10px);transition:opacity 180ms ease,transform 160ms ease,visibility 0s linear 180ms}
+.ob-step.show{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0);transition:opacity 180ms ease,transform 160ms ease,visibility 0s}
+#ob3{min-height:620px}
 .ob-ey{display:inline-flex;background:rgba(155,127,232,0.1);border:1px solid rgba(155,127,232,0.2);border-radius:20px;padding:5px 13px;font-size:10px;font-weight:600;color:#c4abff;letter-spacing:1px;text-transform:uppercase;margin-bottom:16px}
 .ob-h{font-size:34px;font-weight:700;line-height:1.1;margin-bottom:9px}
 .ob-h em{color:#c4abff;font-style:italic}
@@ -438,6 +441,18 @@ canvas{display:block}
 .ob-dots{display:flex;gap:5px;margin-bottom:24px}
 .od{height:4px;border-radius:2px;background:#202038;flex:1;transition:all 0.3s}
 .od.on{background:#9b7fe8;flex:2}
+.ob-income-options{display:grid;gap:6px;min-height:220px}
+.ob-income-option{background:rgba(255,255,255,0.03);border:1px solid var(--bd);border-radius:12px;padding:11px 12px;cursor:pointer;transition:background-color 160ms ease,border-color 160ms ease,transform 120ms ease;will-change:background-color,border-color}
+.ob-income-option.on{background:rgba(155,127,232,0.15);border-color:var(--gem)}
+.ob-income-option:active{transform:scale(0.995)}
+.ob-income-option > div:first-child{font-size:12px;font-weight:700;color:var(--tx-1);transition:color 160ms ease}
+.ob-income-option.on > div:first-child{color:var(--gem-l)}
+.ob-income-option > div + div{font-size:10px;color:var(--tx-2);margin-top:3px;line-height:1.4}
+.qs-choice{flex:1;cursor:pointer;text-align:center;padding:10px 6px;font-size:12px;font-weight:700;color:var(--tx-3);transition:border-color 160ms ease,color 160ms ease,background-color 160ms ease,transform 120ms ease}
+.qs-choice.on{border-color:var(--gem);color:var(--gem);background:rgba(155,127,232,0.06)}
+.qs-choice:active{transform:scale(0.995)}
+.qs-choice span{font-size:9px;font-weight:400;opacity:.7}
+.qs-choice.qs-deps{font-size:13px}
 
 /* FIRST-RUN INTRO (3 screens, shown once on first install) */
 #pg-fr{position:fixed;inset:0;z-index:85;overflow-y:auto;background:radial-gradient(ellipse at 30% 15%,#1c0a3a,#0a0a1a 55%,#05050f);display:none;opacity:0;transition:opacity 160ms ease}
@@ -685,18 +700,18 @@ canvas{display:block}
       </div>
       <div style="margin:14px 0 4px">
         <div style="font-size:11px;font-weight:600;color:var(--tx-3);letter-spacing:0.8px;text-transform:uppercase;margin-bottom:8px">Income type</div>
-        <div style="display:grid;gap:6px">
-          <div id="ob-it-stable" onclick="obSelectIncomeType('stable')" style="background:rgba(155,127,232,0.15);border:1px solid var(--gem);border-radius:12px;padding:11px 12px;cursor:pointer">
-            <div style="font-size:12px;font-weight:700;color:var(--gem-l)">Stable income</div>
-            <div style="font-size:10px;color:var(--tx-2);margin-top:3px;line-height:1.4">Best if your income is fairly predictable month to month.</div>
+        <div class="ob-income-options">
+          <div id="ob-it-stable" class="ob-income-option on" onclick="obSelectIncomeType('stable')">
+            <div>Stable income</div>
+            <div>Best if your income is fairly predictable month to month.</div>
           </div>
-          <div id="ob-it-irregular" onclick="obSelectIncomeType('irregular')" style="background:rgba(255,255,255,0.03);border:1px solid var(--bd);border-radius:12px;padding:11px 12px;cursor:pointer">
-            <div style="font-size:12px;font-weight:700;color:var(--tx-1)">Irregular / variable income</div>
-            <div style="font-size:10px;color:var(--tx-2);margin-top:3px;line-height:1.4">Best if income changes by month. Beynd will put more weight on your buffer.</div>
+          <div id="ob-it-irregular" class="ob-income-option" onclick="obSelectIncomeType('irregular')">
+            <div>Irregular / variable income</div>
+            <div>Best if income changes by month. Beynd will put more weight on your buffer.</div>
           </div>
-          <div id="ob-it-none" onclick="obSelectIncomeType('none')" style="background:rgba(255,255,255,0.03);border:1px solid var(--bd);border-radius:12px;padding:11px 12px;cursor:pointer">
-            <div style="font-size:12px;font-weight:700;color:var(--tx-1)">No current income</div>
-            <div style="font-size:10px;color:var(--tx-2);margin-top:3px;line-height:1.4">Best if you are between income sources. Beynd will focus on stability first.</div>
+          <div id="ob-it-none" class="ob-income-option" onclick="obSelectIncomeType('none')">
+            <div>No current income</div>
+            <div>Best if you are between income sources. Beynd will focus on stability first.</div>
           </div>
         </div>
       </div>
@@ -4641,10 +4656,7 @@ function obSelectIncomeType(type) {
     var el = document.getElementById('ob-it-' + ids[i]);
     if (!el) continue;
     var on = (ids[i] === _obIncomeType);
-    el.style.background = on ? 'rgba(155,127,232,0.15)' : 'rgba(255,255,255,0.03)';
-    el.style.borderColor = on ? 'var(--gem)' : 'var(--bd)';
-    var ttl = el.firstElementChild;
-    if (ttl) ttl.style.color = on ? 'var(--gem-l)' : 'var(--tx-1)';
+    el.className = 'ob-income-option' + (on ? ' on' : '');
   }
   var lbl = document.getElementById('ob-inc-label');
   if (lbl) lbl.textContent = _obIncomeType === 'none' ? 'Monthly income \u2014 leave blank if none' : 'Monthly income';
@@ -22813,6 +22825,8 @@ function geodeOpenQuickSetupWizard() {
     lockIncome: hasIncome,
     quickSetupData: {
       income: hasIncome ? String(S.income) : '',
+      incomeType: S.incomeType === 'irregular' ? 'irregular' : 'stable',
+      hasDependants: !!S.hasDependants,
       expenses: { housing: '', food: '', transport: '', bills: '', other: '' },
       debt: { total: '', min: '' },
       goal: { name: '', target: '', monthly: '' }
@@ -22960,6 +22974,8 @@ function geodeQuickSetupSyncFromUi() {
   var qs = window._geodeQS || null;
   if (!qs) return;
   if (!qs.quickSetupData) qs.quickSetupData = { income: '', expenses: {}, debt: {}, goal: {} };
+  if (qs.quickSetupData.incomeType !== 'irregular') qs.quickSetupData.incomeType = 'stable';
+  if (typeof qs.quickSetupData.hasDependants !== 'boolean') qs.quickSetupData.hasDependants = false;
   if (!qs.quickSetupData.expenses) qs.quickSetupData.expenses = {};
   if (!qs.quickSetupData.debt) qs.quickSetupData.debt = {};
   if (!qs.quickSetupData.goal) qs.quickSetupData.goal = {};
@@ -23149,12 +23165,12 @@ function geodeQuickSetupRender() {
     body+='<div style="font-size:10px;color:var(--tx-3);margin-top:-4px;margin-bottom:14px">After tax. Use your average if income varies.</div>';
     var stableOn=(qd.incomeType!=='irregular');
     body+='<div class="field"><label>How regular is your income?</label><div style="display:flex;gap:8px;margin-top:6px">';
-    body+='<button type="button" onclick="geodeQsIT(&apos;stable&apos;)" class="fi" style="flex:1;cursor:pointer;text-align:center;padding:10px 6px;font-size:12px;font-weight:700;'+(stableOn?'border-color:var(--gem);color:var(--gem)':'color:var(--tx-3)')+'">Regular<br><span style="font-size:9px;font-weight:400;opacity:.7">Salary / fixed</span></button>';
-    body+='<button type="button" onclick="geodeQsIT(&apos;irregular&apos;)" class="fi" style="flex:1;cursor:pointer;text-align:center;padding:10px 6px;font-size:12px;font-weight:700;'+(!stableOn?'border-color:var(--gem);color:var(--gem)':'color:var(--tx-3)')+'">Variable<br><span style="font-size:9px;font-weight:400;opacity:.7">Freelance / self-employed</span></button>';
+    body+='<button id="qs-it-stable" type="button" onclick="geodeQsIT(&apos;stable&apos;)" class="fi qs-choice'+(stableOn?' on':'')+'">Regular<br><span>Salary / fixed</span></button>';
+    body+='<button id="qs-it-irregular" type="button" onclick="geodeQsIT(&apos;irregular&apos;)" class="fi qs-choice'+(!stableOn?' on':'')+'">Variable<br><span>Freelance / self-employed</span></button>';
     body+='</div></div>';
     body+='<div class="field"><label>Does this income support others too?</label><div style="display:flex;gap:8px;margin-top:6px">';
-    body+='<button type="button" onclick="geodeQsDeps(false)" class="fi" style="flex:1;cursor:pointer;text-align:center;padding:10px 6px;font-size:13px;font-weight:700;'+(!qd.hasDependants?'border-color:var(--gem);color:var(--gem)':'color:var(--tx-3)')+'">Just me</button>';
-    body+='<button type="button" onclick="geodeQsDeps(true)" class="fi" style="flex:1;cursor:pointer;text-align:center;padding:10px 6px;font-size:13px;font-weight:700;'+(qd.hasDependants?'border-color:var(--gem);color:var(--gem)':'color:var(--tx-3)')+'">Yes, others too</button>';
+    body+='<button id="qs-deps-no" type="button" onclick="geodeQsDeps(false)" class="fi qs-choice qs-deps'+(!qd.hasDependants?' on':'')+'">Just me</button>';
+    body+='<button id="qs-deps-yes" type="button" onclick="geodeQsDeps(true)" class="fi qs-choice qs-deps'+(qd.hasDependants?' on':'')+'">Yes, others too</button>';
     body+='</div></div>';
   } else {
     body+='<div style="font-size:15px;font-weight:700;color:var(--tx-1);margin-bottom:4px">Monthly essentials</div>';
@@ -23185,8 +23201,31 @@ function geodeQuickSetupRender() {
   body+='<div style="text-align:center;margin-top:10px"><button type="button" style="background:none;border:none;color:var(--tx-4);font-size:11px;cursor:pointer" onclick="geodeQuickSetupExit()">Skip — I will enter data manually</button></div>';
   openModal('<div class="mo-hdr"><span class="mo-title">Quick setup — step '+step+' of '+total+'</span><button type="button" class="mo-close" onclick="geodeQuickSetupExit()">&#x2715;</button></div><div style="padding:0 0 4px">'+body+'</div>');
 }
-function geodeQsIT(t){if(window._geodeQS&&window._geodeQS.quickSetupData)window._geodeQS.quickSetupData.incomeType=t;geodeQuickSetupSyncFromUi();geodeQuickSetupRender();}
-function geodeQsDeps(val){if(window._geodeQS&&window._geodeQS.quickSetupData)window._geodeQS.quickSetupData.hasDependants=!!val;geodeQuickSetupSyncFromUi();geodeQuickSetupRender();}
+function geodeQuickSetupUpdateChoiceClasses() {
+  var qd = window._geodeQS && window._geodeQS.quickSetupData ? window._geodeQS.quickSetupData : null;
+  if (!qd) return;
+  var stable = qd.incomeType !== 'irregular';
+  var deps = !!qd.hasDependants;
+  function setOn(id, on) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'fi qs-choice' + (id.indexOf('qs-deps-') === 0 ? ' qs-deps' : '') + (on ? ' on' : '');
+  }
+  setOn('qs-it-stable', stable);
+  setOn('qs-it-irregular', !stable);
+  setOn('qs-deps-no', !deps);
+  setOn('qs-deps-yes', deps);
+}
+function geodeQsIT(t){
+  if(window._geodeQS&&window._geodeQS.quickSetupData)window._geodeQS.quickSetupData.incomeType=t==='irregular'?'irregular':'stable';
+  geodeQuickSetupSyncFromUi();
+  geodeQuickSetupUpdateChoiceClasses();
+}
+function geodeQsDeps(val){
+  if(window._geodeQS&&window._geodeQS.quickSetupData)window._geodeQS.quickSetupData.hasDependants=!!val;
+  geodeQuickSetupSyncFromUi();
+  geodeQuickSetupUpdateChoiceClasses();
+}
 function geodeQsBack(){if(!window._geodeQS)return;window._geodeQS.currentStep=Math.max(1,(window._geodeQS.currentStep||1)-1);geodeQuickSetupSyncFromUi();geodeQuickSetupRender();}
 function geodeQsNext(){
   geodeQuickSetupSyncFromUi();
@@ -23245,6 +23284,7 @@ function geodeQsDone(){
   } catch (_eQsPromptSs) {}
   window._geodeQS=null;
   try{closeModal();}catch(e){}
+  try{syncPills();}catch(eSyncQs){}
   try{goTab('home');render();}catch(e){}
   toast('Your first plan is saved.', 'ok');
 }
