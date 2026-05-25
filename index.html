@@ -22000,7 +22000,7 @@ function openGoalModal(id) {
     '<div class="field" style="opacity:0.96"><label>Target date (optional)</label><input type="date" id="gd" class="fi" value="' +
     (g && g.targetDate ? geodeGoalTargetDateForInput(g.targetDate).replace(/"/g, '&quot;') : '') +
     '" oninput="try{geodeGoalDateManualInput();geodeGoalModalImpactRefresh()}catch(e){}" />';
-  h += '<div id="gsug" style="font-size:11px;padding:7px 10px;border-radius:9px;margin-top:4px;display:none"></div></div>';
+  h += '</div>';
   h += '<div id="geode-goal-impact-host"></div>';
   h += '<button class="btn btn-p" style="margin-top:4px" onclick="saveGoal(\''+(id||'')+'\')">Save Goal</button>';
   openModal(h);
@@ -22073,20 +22073,6 @@ function liveGoalSug() {
         geodeGoalModalImpactRefresh();
       } catch (_eIm2) {}
     }
-  }
-  var sug = document.getElementById('gsug');
-  if (!sug) return;
-  var draft = geodeGoalDraftFromModal();
-  var intel = calcGoalIntelligence(draft);
-  if (intel && intel.currentMonthly > 0 && intel.remaining > 0 && intel.monthsAtPlannedPace > 0) {
-    sug.style.display = 'block';
-    sug.style.color = 'rgba(196,171,255,0.92)';
-    sug.style.background = 'rgba(155,127,232,0.08)';
-    sug.innerHTML = escHtmlLite(
-      'At ' + fm(intel.currentMonthly) + '/month: about ' + intel.monthsAtPlannedPace + ' months to close the gap.'
-    );
-  } else {
-    sug.style.display = 'none';
   }
 }
 function saveGoal(id) {
