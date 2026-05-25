@@ -4,12 +4,13 @@
 // CACHE_VERSION: increment on every release, then commit + push.
 // CACHE_NAME is derived so old caches are deleted on activate and clients never mix versions.
 
-const CACHE_VERSION = 'v1.0.65'; // Stage 65-5 release
+const CACHE_VERSION = 'v1.0.66'; // Stage 64A coaching copy cache
 const CACHE_NAME = `beynd-cache-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
   '/',
   '/index.html',
+  '/coaching.json',
   '/service-worker.js',
   '/manifest.json',
   '/icons/icon-192.png',

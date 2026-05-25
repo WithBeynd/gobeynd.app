@@ -1,0 +1,184 @@
+{
+  "askBeynd": {
+    "subIntro": "Choose a prompt or type your own question.",
+    "firstRunIntro": "Ask Beynd about your plan, goals, or financial decisions. Type a question, choose an option, or follow a coaching hint when you want a steadier next step.",
+    "modifierStarters": {
+      "default": "What should I keep in mind this month?",
+      "worriedOnly": "What\u2019s worth not rushing right now?"
+    },
+    "modes": {
+      "neutral": {
+        "intro": "I\u2019m ready when you are. Ask about your plan, money, or next move.",
+        "starters": [
+          "How should I prioritise this month?",
+          "Am I on track?",
+          "What\u2019s costing me the most in interest?",
+          "What does my plan suggest this month?"
+        ]
+      },
+      "second_opinion": {
+        "intro": "If you want to think it through before acting, ask here.",
+        "starters": [
+          "What needs me first this month?",
+          "What can safely wait?",
+          "Talk me through my plan\u2019s first step."
+        ]
+      },
+      "pressure_test": {
+        "intro": "Want to sense-check this move before you schedule it?",
+        "starters": [
+          "What would make this payment feel safer?",
+          "What trade-offs should I consider?",
+          "What does my plan assume I still have room for?"
+        ]
+      },
+      "reality_mismatch": {
+        "intro": "Your plan and balance check tell slightly different stories. I can help you think through that.",
+        "starters": [
+          "Help me understand this gap.",
+          "What might have changed since my balance check?",
+          "Should I adjust anything, or just watch for now?"
+        ]
+      },
+      "still_deciding": {
+        "intro": "No rush. I can help you sort the next useful step.",
+        "starters": [
+          "What would help me decide?",
+          "What\u2019s the smallest useful next step?",
+          "What should I check before I act?"
+        ]
+      },
+      "explain_plan": {
+        "intro": "I can walk through what your plan is suggesting and why.",
+        "starters": [
+          "Walk me through this month\u2019s plan.",
+          "What does my plan suggest first?",
+          "Why is this the next step?"
+        ]
+      },
+      "after_action": {
+        "intro": "You\u2019ve made progress. Ask if you want help choosing what\u2019s next.",
+        "starters": [
+          "What should I watch for next?",
+          "What\u2019s a sensible next move from here?",
+          "How should I keep this momentum?"
+        ]
+      }
+    }
+  },
+  "sinceLastVisit": {
+    "updated": "You made updates recently. Your plan has adjusted.",
+    "noIncomeUpdated": "You made updates recently. Your snapshot reflects those changes.",
+    "stale": "It\u2019s been a few days. Your plan still reflects your last setup.",
+    "noIncomeStale": "It\u2019s been a few days. Your last setup is still what we\u2019re showing.",
+    "noChange": "No major changes since your last visit."
+  },
+  "humanMoment": {
+    "home": {
+      "title": "Worth pausing for a moment",
+      "consistency": {
+        "title": "Good rhythm",
+        "goalFollowThrough": "You have kept showing up for your goal. That steady rhythm matters.",
+        "contributionFollowThrough": "You have followed through more than once recently. That kind of consistency matters.",
+        "consistentWeeklyUse": "You have been keeping up with your plan this week. Keep going."
+      },
+      "dependants": {
+        "body": "Since this income supports others too, keeping some room may be the safer move."
+      },
+      "protectFlexibility": {
+        "default": "Keep some room before adding new commitments.",
+        "monthContext": "This month already has something on your mind. Keep flexibility before adding more."
+      },
+      "reviewFirst": {
+        "default": "Today may need a slower pace. Review what has changed before adding anything new.",
+        "realityGap": "Today may need a slower pace. Review what has changed before adding anything new."
+      }
+    }
+  },
+  "nudges": {
+    "cash_pressure_home": {
+      "title": "Cash flow",
+      "type": "warning",
+      "topic": "cash_pressure_home",
+      "variants": [
+        "You\u2019re over budget this month \u2014 rebalance spending or due dates.",
+        "Cash flow is negative right now \u2014 trim or reschedule before adding new commitments.",
+        "This month is tight \u2014 stabilise cash before chasing growth moves."
+      ],
+      "explain": "Scheduled payments and expenses count against income, so a negative left-this-month means the plan reads strained for this month."
+    },
+    "spending_update": {
+      "title": "Spending",
+      "type": "neutral",
+      "topic": "spending_update",
+      "variants": [
+        "Left this month shifted after that spending change.",
+        "Spending moved \u2014 quick check on left this month.",
+        "Spending totals changed \u2014 plan room moved with them."
+      ],
+      "strongMessage": "Spending shifted \u2014 left this month reads tighter on your plan.",
+      "mildMessage": "Spending nudged up \u2014 left this month moved.",
+      "easedMessage": "Spending eased a little \u2014 a bit more left this month.",
+      "explain": "Expenses count toward monthly outflows, so they change left this month on your plan until the month resets."
+    },
+    "debt_action_home": {
+      "title": "Debt",
+      "paymentTitle": "Debt payment",
+      "type": "positive",
+      "topic": "debt_action_home",
+      "variants": [
+        "Debt moved \u2014 the loudest APR still deserves the first reply.",
+        "Paydown progress \u2014 the fastest win is usually the highest-interest balance.",
+        "Balance shifted \u2014 shrinking the costliest line item frees the rest of your plan."
+      ],
+      "explain": "Because interest accrues on balances, reducing the highest-APR debt cuts monthly drag the fastest."
+    },
+    "goal_action_home": {
+      "title": "Goals",
+      "type": "positive",
+      "topic": "goal_action_home",
+      "variants": [
+        "Goal savings moved \u2014 consistency beats occasional big jumps.",
+        "Progress landed \u2014 small monthly adds keep dates realistic.",
+        "You topped up a goal \u2014 steady pace is what makes targets stick."
+      ],
+      "explain": "Because goals are funded over time, regular contributions matter more than one-off spikes."
+    },
+    "invest_action_home": {
+      "title": "Investing",
+      "type": "opportunity",
+      "topic": "invest_action_home",
+      "variants": [
+        "Investments moved \u2014 keep steering with your plan, not the headlines.",
+        "Portfolio shifted \u2014 consistent contributions matter more than timing.",
+        "You invested recently \u2014 repetition is how compounding notices you."
+      ],
+      "explain": "Because compounding needs time and repetition, regular investing supports long-term growth plans."
+    },
+    "income_action_home": {
+      "title": "Income",
+      "message": "Income changed \u2014 revisit what\u2019s realistic for debt, goals, and investing.",
+      "type": "neutral",
+      "topic": "income_action_home",
+      "explain": "Because income sets the ceiling for monthly flow, updates should refresh how aggressive your plan can be."
+    },
+    "debt_habit_gap": {
+      "title": "Debt pattern",
+      "message": "You typically reduce your debt steadily \u2014 continuing that pattern will keep interest down.",
+      "type": "opportunity",
+      "topic": "debt_habit_gap"
+    },
+    "invest_habit_gap": {
+      "title": "Investing rhythm",
+      "message": "You usually invest regularly, but it has not happened recently \u2014 staying consistent builds momentum.",
+      "type": "opportunity",
+      "topic": "invest_habit_gap"
+    },
+    "goal_habit_gap": {
+      "title": "Goal funding",
+      "message": "You have been consistent with your goals before \u2014 picking it back up keeps you on track.",
+      "type": "opportunity",
+      "topic": "goal_habit_gap"
+    }
+  }
+}

@@ -1607,6 +1607,57 @@ function persistGeodeToLocalStorage() {
   }
 }
 
+var geodeCoachingCopy = null;
+
+function geodeCopyValue(root, path) {
+  if (!root || !path) return undefined;
+  var parts = String(path).split('.');
+  var cur = root;
+  for (var i = 0; i < parts.length; i++) {
+    if (!cur || !Object.prototype.hasOwnProperty.call(cur, parts[i])) return undefined;
+    cur = cur[parts[i]];
+  }
+  return cur;
+}
+
+function geodeCopyClone(v) {
+  if (Array.isArray(v)) return v.slice();
+  if (v && typeof v === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(v));
+    } catch (_eCopyClone) {
+      return Object.assign({}, v);
+    }
+  }
+  return v;
+}
+
+function geodeCopy(path, fallback) {
+  var v = geodeCopyValue(geodeCoachingCopy, path);
+  if (v === undefined) v = fallback;
+  return geodeCopyClone(v);
+}
+
+function geodeLoadCoachingCopy() {
+  try {
+    if (typeof fetch !== 'function') return;
+    fetch('coaching.json', { cache: 'force-cache' })
+      .then(function (res) {
+        if (!res || !res.ok) throw new Error('coaching_json_unavailable');
+        return res.json();
+      })
+      .then(function (json) {
+        if (json && typeof json === 'object' && !Array.isArray(json)) {
+          geodeCoachingCopy = json;
+          try { window._geodeCoachingCopyLoaded = true; } catch (_eCopyFlag) {}
+        }
+      })
+      .catch(function () {
+        try { window._geodeCoachingCopyLoaded = false; } catch (_eCopyCatch) {}
+      });
+  } catch (_eCopyLoad) {}
+}
+
 function geodeGetDefaultReminderPrefs() {
   return {
     enabled: false,
@@ -4388,14 +4439,14 @@ function geodeRenderSinceLastVisit(prevVisitTs) {
   var msg = '';
   if (geodeActivityLogSince(prevVisitTs)) {
     msg = geodeIsNoIncomeMode()
-      ? 'You made updates recently. Your snapshot reflects those changes.'
-      : 'You made updates recently. Your plan has adjusted.';
+      ? geodeCopy('sinceLastVisit.noIncomeUpdated', 'You made updates recently. Your snapshot reflects those changes.')
+      : geodeCopy('sinceLastVisit.updated', 'You made updates recently. Your plan has adjusted.');
   } else if (now - prevVisitTs > 3 * 24 * 60 * 60 * 1000) {
     msg = geodeIsNoIncomeMode()
-      ? 'It\u2019s been a few days. Your last setup is still what we\u2019re showing.'
-      : 'It\u2019s been a few days. Your plan still reflects your last setup.';
+      ? geodeCopy('sinceLastVisit.noIncomeStale', 'It\u2019s been a few days. Your last setup is still what we\u2019re showing.')
+      : geodeCopy('sinceLastVisit.stale', 'It\u2019s been a few days. Your plan still reflects your last setup.');
   } else {
-    msg = 'No major changes since your last visit.';
+    msg = geodeCopy('sinceLastVisit.noChange', 'No major changes since your last visit.');
   }
   return (
     '<div class="since-visit-line">' +
@@ -5444,6 +5495,7 @@ function checkAlerts() {
 
 // ── SPLASH ────────────────────────────────────────
 load();
+geodeLoadCoachingCopy();
 function hideSplash() {
   applyTheme(S.theme||'dark');
   setTimeout(geodeCheckReminder, 4000);
@@ -8052,100 +8104,98 @@ function geodeApplyK71ContextToHighlightCache(state) {
 
 function geodeSyntheticCashPressure() {
   var reps = geodeNudgeRepeatIndex('cash_pressure_home', 10);
-  var msgs = [
+  var msgs = geodeCopy('nudges.cash_pressure_home.variants', [
     'You\u2019re over budget this month \u2014 rebalance spending or due dates.',
     'Cash flow is negative right now \u2014 trim or reschedule before adding new commitments.',
     'This month is tight \u2014 stabilise cash before chasing growth moves.'
-  ];
+  ]);
   return {
-    title: 'Cash flow',
+    title: geodeCopy('nudges.cash_pressure_home.title', 'Cash flow'),
     message: msgs[reps % msgs.length],
-    type: 'warning',
-    topic: 'cash_pressure_home',
-    explain:
-      'Scheduled payments and expenses count against income, so a negative left-this-month means the plan reads strained for this month.'
+    type: geodeCopy('nudges.cash_pressure_home.type', 'warning'),
+    topic: geodeCopy('nudges.cash_pressure_home.topic', 'cash_pressure_home'),
+    explain: geodeCopy('nudges.cash_pressure_home.explain', 'Scheduled payments and expenses count against income, so a negative left-this-month means the plan reads strained for this month.')
   };
 }
 
 function geodeSyntheticSpending(latest, pressure) {
   var reps = geodeNudgeRepeatIndex('spending_update', 12);
-  var msgs = [
+  var msgs = geodeCopy('nudges.spending_update.variants', [
     'Left this month shifted after that spending change.',
     'Spending moved \u2014 quick check on left this month.',
     'Spending totals changed \u2014 plan room moved with them.'
-  ];
+  ]);
   var msg = msgs[reps % msgs.length];
   var d = latest ? toNum(latest.delta) : 0;
   if (d > 0 && pressure === 'strong')
-    msg = 'Spending shifted \u2014 left this month reads tighter on your plan.';
-  else if (d > 0 && pressure === 'mild') msg = 'Spending nudged up \u2014 left this month moved.';
-  else if (d < 0 && pressure === 'ok') msg = 'Spending eased a little \u2014 a bit more left this month.';
+    msg = geodeCopy('nudges.spending_update.strongMessage', 'Spending shifted \u2014 left this month reads tighter on your plan.');
+  else if (d > 0 && pressure === 'mild') msg = geodeCopy('nudges.spending_update.mildMessage', 'Spending nudged up \u2014 left this month moved.');
+  else if (d < 0 && pressure === 'ok') msg = geodeCopy('nudges.spending_update.easedMessage', 'Spending eased a little \u2014 a bit more left this month.');
   return {
-    title: 'Spending',
+    title: geodeCopy('nudges.spending_update.title', 'Spending'),
     message: msg,
     type: pressure === 'strong' ? 'warning' : 'neutral',
-    topic: 'spending_update',
-    explain:
-      'Expenses count toward monthly outflows, so they change left this month on your plan until the month resets.'
+    topic: geodeCopy('nudges.spending_update.topic', 'spending_update'),
+    explain: geodeCopy('nudges.spending_update.explain', 'Expenses count toward monthly outflows, so they change left this month on your plan until the month resets.')
   };
 }
 
 function geodeSyntheticDebtProgress(latestKind) {
   var reps = geodeNudgeRepeatIndex('debt_action_home', 10);
-  var msgs = [
+  var msgs = geodeCopy('nudges.debt_action_home.variants', [
     'Debt moved \u2014 the loudest APR still deserves the first reply.',
     'Paydown progress \u2014 the fastest win is usually the highest-interest balance.',
     'Balance shifted \u2014 shrinking the costliest line item frees the rest of your plan.'
-  ];
+  ]);
   var isPay = latestKind === 'debt_payment';
   return {
-    title: isPay ? 'Debt payment' : 'Debt',
+    title: isPay ? geodeCopy('nudges.debt_action_home.paymentTitle', 'Debt payment') : geodeCopy('nudges.debt_action_home.title', 'Debt'),
     message: msgs[reps % msgs.length],
-    type: 'positive',
-    topic: 'debt_action_home',
-    explain: 'Because interest accrues on balances, reducing the highest-APR debt cuts monthly drag the fastest.'
+    type: geodeCopy('nudges.debt_action_home.type', 'positive'),
+    topic: geodeCopy('nudges.debt_action_home.topic', 'debt_action_home'),
+    explain: geodeCopy('nudges.debt_action_home.explain', 'Because interest accrues on balances, reducing the highest-APR debt cuts monthly drag the fastest.')
   };
 }
 
 function geodeSyntheticGoalProgress() {
   var reps = geodeNudgeRepeatIndex('goal_action_home', 10);
-  var msgs = [
+  var msgs = geodeCopy('nudges.goal_action_home.variants', [
     'Goal savings moved \u2014 consistency beats occasional big jumps.',
     'Progress landed \u2014 small monthly adds keep dates realistic.',
     'You topped up a goal \u2014 steady pace is what makes targets stick.'
-  ];
+  ]);
   return {
-    title: 'Goals',
+    title: geodeCopy('nudges.goal_action_home.title', 'Goals'),
     message: msgs[reps % msgs.length],
-    type: 'positive',
-    topic: 'goal_action_home',
-    explain: 'Because goals are funded over time, regular contributions matter more than one-off spikes.'
+    type: geodeCopy('nudges.goal_action_home.type', 'positive'),
+    topic: geodeCopy('nudges.goal_action_home.topic', 'goal_action_home'),
+    explain: geodeCopy('nudges.goal_action_home.explain', 'Because goals are funded over time, regular contributions matter more than one-off spikes.')
   };
 }
 
 function geodeSyntheticInvestProgress() {
   var reps = geodeNudgeRepeatIndex('invest_action_home', 10);
-  var msgs = [
+  var msgs = geodeCopy('nudges.invest_action_home.variants', [
     'Investments moved \u2014 keep steering with your plan, not the headlines.',
     'Portfolio shifted \u2014 consistent contributions matter more than timing.',
     'You invested recently \u2014 repetition is how compounding notices you.'
-  ];
+  ]);
   return {
-    title: 'Investing',
+    title: geodeCopy('nudges.invest_action_home.title', 'Investing'),
     message: msgs[reps % msgs.length],
-    type: 'opportunity',
-    topic: 'invest_action_home',
-    explain: 'Because compounding needs time and repetition, regular investing supports long-term growth plans.'
+    type: geodeCopy('nudges.invest_action_home.type', 'opportunity'),
+    topic: geodeCopy('nudges.invest_action_home.topic', 'invest_action_home'),
+    explain: geodeCopy('nudges.invest_action_home.explain', 'Because compounding needs time and repetition, regular investing supports long-term growth plans.')
   };
 }
 
 function geodeSyntheticIncome() {
   return {
-    title: 'Income',
-    message: 'Income changed \u2014 revisit what\u2019s realistic for debt, goals, and investing.',
-    type: 'neutral',
-    topic: 'income_action_home',
-    explain: 'Because income sets the ceiling for monthly flow, updates should refresh how aggressive your plan can be.'
+    title: geodeCopy('nudges.income_action_home.title', 'Income'),
+    message: geodeCopy('nudges.income_action_home.message', 'Income changed \u2014 revisit what\u2019s realistic for debt, goals, and investing.'),
+    type: geodeCopy('nudges.income_action_home.type', 'neutral'),
+    topic: geodeCopy('nudges.income_action_home.topic', 'income_action_home'),
+    explain: geodeCopy('nudges.income_action_home.explain', 'Because income sets the ceiling for monthly flow, updates should refresh how aggressive your plan can be.')
   };
 }
 
@@ -8265,28 +8315,28 @@ function getBehaviourHabitNudges(state) {
   if (log.length < 5 && !gaps.gapDebt) return [];
   var list = [];
   if (gaps.gapDebt) {
-    list.push({
+    list.push(geodeCopy('nudges.debt_habit_gap', {
       title: 'Debt pattern',
       message: 'You typically reduce your debt steadily — continuing that pattern will keep interest down.',
       type: 'opportunity',
       topic: 'debt_habit_gap'
-    });
+    }));
   }
   if (gaps.gapInvest) {
-    list.push({
+    list.push(geodeCopy('nudges.invest_habit_gap', {
       title: 'Investing rhythm',
       message: 'You usually invest regularly, but it has not happened recently — staying consistent builds momentum.',
       type: 'opportunity',
       topic: 'invest_habit_gap'
-    });
+    }));
   }
   if (gaps.gapGoal) {
-    list.push({
+    list.push(geodeCopy('nudges.goal_habit_gap', {
       title: 'Goal funding',
       message: 'You have been consistent with your goals before — picking it back up keeps you on track.',
       type: 'opportunity',
       topic: 'goal_habit_gap'
-    });
+    }));
   }
   return list.slice(0, 2);
 }
@@ -12344,13 +12394,13 @@ function geodeHumanMomentConsistencyHint(state) {
     if (String(state.humanMomentConsistencyShownDay || '') === today) return '';
     var flags = geodeHumanMomentConsistencyFlags(state);
     if (flags.goalFollowThrough) {
-      return 'You have kept showing up for your goal. That steady rhythm matters.';
+      return geodeCopy('humanMoment.home.consistency.goalFollowThrough', 'You have kept showing up for your goal. That steady rhythm matters.');
     }
     if (flags.contributionFollowThrough) {
-      return 'You have followed through more than once recently. That kind of consistency matters.';
+      return geodeCopy('humanMoment.home.consistency.contributionFollowThrough', 'You have followed through more than once recently. That kind of consistency matters.');
     }
     if (flags.consistentWeeklyUse) {
-      return 'You have been keeping up with your plan this week. Keep going.';
+      return geodeCopy('humanMoment.home.consistency.consistentWeeklyUse', 'You have been keeping up with your plan this week. Keep going.');
     }
   } catch (_eHmHint) {}
   return '';
@@ -12361,7 +12411,7 @@ function geodeBuildHumanMomentConsistency(state) {
   if (!body) return null;
   return {
     topic: 'consistency',
-    title: 'Good rhythm',
+    title: geodeCopy('humanMoment.home.consistency.title', 'Good rhythm'),
     body: body,
     tone: 'supportive',
     source: 'consistency',
@@ -12488,29 +12538,29 @@ function geodePickHumanMoment(state) {
 
   if (ctx.hasDependants && posture === 'protect_flexibility') {
     topic = 'protect_flexibility';
-    body = 'Since this income supports others too, keeping some room may be the safer move.';
+    body = geodeCopy('humanMoment.home.dependants.body', 'Since this income supports others too, keeping some room may be the safer move.');
     source = 'dependants';
   } else if (worried && cautious) {
     topic = posture === 'review_first' ? 'review_first' : 'protect_flexibility';
-    body = 'This month already has something on your mind. Keep flexibility before adding more.';
+    body = geodeCopy('humanMoment.home.protectFlexibility.monthContext', 'This month already has something on your mind. Keep flexibility before adding more.');
     source = 'month_context';
   } else if (below && feeling === 'slow') {
     topic = 'review_first';
-    body = 'Today may need a slower pace. Review what has changed before adding anything new.';
+    body = geodeCopy('humanMoment.home.reviewFirst.realityGap', 'Today may need a slower pace. Review what has changed before adding anything new.');
     source = 'reality_gap';
   } else if (posture === 'review_first') {
     topic = 'review_first';
-    body = 'Today may need a slower pace. Review what has changed before adding anything new.';
+    body = geodeCopy('humanMoment.home.reviewFirst.default', 'Today may need a slower pace. Review what has changed before adding anything new.');
   } else if (posture === 'protect_flexibility') {
     topic = 'protect_flexibility';
-    body = 'Keep some room before adding new commitments.';
+    body = geodeCopy('humanMoment.home.protectFlexibility.default', 'Keep some room before adding new commitments.');
   } else {
     return geodeBuildHumanMomentConsistency(state);
   }
 
   var hm = {
     topic: topic,
-    title: 'Worth pausing for a moment',
+    title: geodeCopy('humanMoment.home.title', 'Worth pausing for a moment'),
     body: body,
     tone: 'cautious',
     source: source
@@ -21868,10 +21918,19 @@ function geodeHomeAskBeyndButtonHtml(state) {
 
 /** Read-only Ask Beynd modal copy from orchestration snapshot (Stage 57D). Does not mutate state. */
 function geodeGetAskBeyndUiCopyNeutralFallback() {
-  return {
+  var neutral = geodeCopy('askBeynd.modes.neutral', {
     intro: 'I\u2019m ready when you are. Ask about your plan, money, or next move.',
-    subIntro: 'Choose a prompt or type your own question.',
     starters: [
+      'How should I prioritise this month?',
+      'Am I on track?',
+      'What\u2019s costing me the most in interest?',
+      'What does my plan suggest this month?'
+    ]
+  });
+  return {
+    intro: neutral.intro || 'I\u2019m ready when you are. Ask about your plan, money, or next move.',
+    subIntro: geodeCopy('askBeynd.subIntro', 'Choose a prompt or type your own question.'),
+    starters: Array.isArray(neutral.starters) && neutral.starters.length ? neutral.starters.slice() : [
       'How should I prioritise this month?',
       'Am I on track?',
       'What\u2019s costing me the most in interest?',
@@ -21885,10 +21944,73 @@ function geodeGetAskBeyndProtectModifierStarter(state) {
   try {
     var mc = geodeGetMonthContext(state);
     if (mc && mc.worried && !mc.protect) {
-      return 'What\u2019s worth not rushing right now?';
+      return geodeCopy('askBeynd.modifierStarters.worriedOnly', 'What\u2019s worth not rushing right now?');
     }
   } catch (_eProtSt) {}
-  return 'What should I keep in mind this month?';
+  return geodeCopy('askBeynd.modifierStarters.default', 'What should I keep in mind this month?');
+}
+
+function geodeGetAskBeyndModeCopyFallback(mode) {
+  var byMode = {
+    neutral: {
+      intro: 'I\u2019m ready when you are. Ask about your plan, money, or next move.',
+      starters: [
+        'How should I prioritise this month?',
+        'Am I on track?',
+        'What\u2019s costing me the most in interest?',
+        'What does my plan suggest this month?'
+      ]
+    },
+    second_opinion: {
+      intro: 'If you want to think it through before acting, ask here.',
+      starters: [
+        'What needs me first this month?',
+        'What can safely wait?',
+        'Talk me through my plan\u2019s first step.'
+      ]
+    },
+    pressure_test: {
+      intro: 'Want to sense-check this move before you schedule it?',
+      starters: [
+        'What would make this payment feel safer?',
+        'What trade-offs should I consider?',
+        'What does my plan assume I still have room for?'
+      ]
+    },
+    reality_mismatch: {
+      intro: 'Your plan and balance check tell slightly different stories. I can help you think through that.',
+      starters: [
+        'Help me understand this gap.',
+        'What might have changed since my balance check?',
+        'Should I adjust anything, or just watch for now?'
+      ]
+    },
+    still_deciding: {
+      intro: 'No rush. I can help you sort the next useful step.',
+      starters: [
+        'What would help me decide?',
+        'What\u2019s the smallest useful next step?',
+        'What should I check before I act?'
+      ]
+    },
+    explain_plan: {
+      intro: 'I can walk through what your plan is suggesting and why.',
+      starters: [
+        'Walk me through this month\u2019s plan.',
+        'What does my plan suggest first?',
+        'Why is this the next step?'
+      ]
+    },
+    after_action: {
+      intro: 'You\u2019ve made progress. Ask if you want help choosing what\u2019s next.',
+      starters: [
+        'What should I watch for next?',
+        'What\u2019s a sensible next move from here?',
+        'How should I keep this momentum?'
+      ]
+    }
+  };
+  return geodeCopyClone(byMode[mode] || byMode.neutral);
 }
 
 function geodeGetAskBeyndUiCopy(state) {
@@ -21907,59 +22029,16 @@ function geodeGetAskBeyndUiCopy(state) {
   var hasProtect = mods.indexOf('protect_priority') >= 0;
   var hasStability = mods.indexOf('stability_first') >= 0;
 
-  var introByMode = {
-    neutral: 'I\u2019m ready when you are. Ask about your plan, money, or next move.',
-    second_opinion: 'If you want to think it through before acting, ask here.',
-    pressure_test: 'Want to sense-check this move before you schedule it?',
-    reality_mismatch:
-      'Your plan and balance check tell slightly different stories. I can help you think through that.',
-    still_deciding: 'No rush. I can help you sort the next useful step.',
-    explain_plan: 'I can walk through what your plan is suggesting and why.',
-    after_action: 'You\u2019ve made progress. Ask if you want help choosing what\u2019s next.'
-  };
-
-  var startersByMode = {
-    neutral: [
-      'How should I prioritise this month?',
-      'Am I on track?',
-      'What\u2019s costing me the most in interest?',
-      'What does my plan suggest this month?'
-    ],
-    second_opinion: [
-      'What needs me first this month?',
-      'What can safely wait?',
-      'Talk me through my plan\u2019s first step.'
-    ],
-    pressure_test: [
-      'What would make this payment feel safer?',
-      'What trade-offs should I consider?',
-      'What does my plan assume I still have room for?'
-    ],
-    reality_mismatch: [
-      'Help me understand this gap.',
-      'What might have changed since my balance check?',
-      'Should I adjust anything, or just watch for now?'
-    ],
-    still_deciding: [
-      'What would help me decide?',
-      'What\u2019s the smallest useful next step?',
-      'What should I check before I act?'
-    ],
-    explain_plan: [
-      'Walk me through this month\u2019s plan.',
-      'What does my plan suggest first?',
-      'Why is this the next step?'
-    ],
-    after_action: [
-      'What should I watch for next?',
-      'What\u2019s a sensible next move from here?',
-      'How should I keep this momentum?'
-    ]
-  };
-
-  var intro = introByMode[mode] || introByMode.neutral;
-  var subIntro = 'Choose a prompt or type your own question.';
-  var starters = (startersByMode[mode] || startersByMode.neutral).slice();
+  var modeCopy = geodeCopy('askBeynd.modes.' + mode, geodeGetAskBeyndModeCopyFallback(mode));
+  var neutralCopy = geodeCopy('askBeynd.modes.neutral', geodeGetAskBeyndModeCopyFallback('neutral'));
+  var intro = (modeCopy && modeCopy.intro) || (neutralCopy && neutralCopy.intro) || fallback.intro;
+  var subIntro = geodeCopy('askBeynd.subIntro', 'Choose a prompt or type your own question.');
+  var starters =
+    modeCopy && Array.isArray(modeCopy.starters)
+      ? modeCopy.starters.slice()
+      : neutralCopy && Array.isArray(neutralCopy.starters)
+        ? neutralCopy.starters.slice()
+        : fallback.starters.slice();
 
   if (hasStability) {
     starters = starters.filter(function (q) {
@@ -21972,7 +22051,11 @@ function geodeGetAskBeyndUiCopy(state) {
       return true;
     });
     if (starters.length < 3) {
-      starters = startersByMode.second_opinion.slice();
+      starters = geodeCopy('askBeynd.modes.second_opinion.starters', [
+        'What needs me first this month?',
+        'What can safely wait?',
+        'Talk me through my plan\u2019s first step.'
+      ]);
     }
     if (snap.userLoad === 'critical' || snap.userLoad === 'high') {
       starters = starters.slice(0, 3);
@@ -22001,7 +22084,7 @@ function geodeShouldShowAskBeyndFirstRun() {
 function geodeAskBeyndFirstRunIntroHtml() {
   return (
     '<div id="beynd-ask-first-run" class="geode-bubble-in beynd-ask-first-run">' +
-    'Ask Beynd about your plan, goals, or financial decisions. Type a question, choose an option, or follow a coaching hint when you want a steadier next step.' +
+    escHtmlLite(geodeCopy('askBeynd.firstRunIntro', 'Ask Beynd about your plan, goals, or financial decisions. Type a question, choose an option, or follow a coaching hint when you want a steadier next step.')) +
     '</div>'
   );
 }
