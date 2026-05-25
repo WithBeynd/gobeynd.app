@@ -10266,6 +10266,23 @@ function roundAdaptiveEncouragementAmount(original) {
   return r;
 }
 
+function geodeAdaptiveUsefulFloorForAction(a) {
+  if (!a || !a.type) return 0;
+  if (a.type === 'debt_payment') return 50;
+  if (a.type === 'goal_contribution') return 25;
+  if (a.type === 'investment_contribution') return 50;
+  if (a.type === 'buffer_contribution') return 25;
+  return 0;
+}
+
+function geodeAdaptiveApplyUsefulFloor(a, amount) {
+  var original = Math.max(0, Number(a && a.originalAmount != null ? a.originalAmount : a && a.amount) || 0);
+  var amt = Math.max(0, Number(amount) || 0);
+  var floor = geodeAdaptiveUsefulFloorForAction(a);
+  if (floor <= 0 || amt <= 0 || original < floor || amt >= floor) return amt;
+  return Math.min(original, floor);
+}
+
 /** Clone suggested actions with originalAmount + adaptive display amount/subtitle (does not mutate plan). */
 function applyAdaptiveLayerToSuggestedActions(actions) {
   if (!S.adaptiveDisplayModeByFamily || typeof S.adaptiveDisplayModeByFamily !== 'object') {
@@ -10291,6 +10308,10 @@ function applyAdaptiveLayerToSuggestedActions(actions) {
     var famKey = followthroughFamilyFromActionType(a.type);
     o.adaptiveMode = famKey ? modeCache[famKey] || 'full' : 'full';
     if (o.adaptiveMode === 'full') {
+      return o;
+    }
+    if (o.memorySoftened || o.softenedByMemory) {
+      o.amount = Math.min(toNum(o.originalAmount), geodeAdaptiveApplyUsefulFloor(o, o.amount));
       return o;
     }
     if (o.adaptiveMode === 'lighter') {
@@ -14568,6 +14589,7 @@ function getMonthPlan() {
   if (worstDebt && budget > 50) {
     var overpay = Math.min(Math.round(budget * stratCfg.debtRatio), 500, toNum(worstDebt.balance));
     overpay = Math.max(overpay, 50);
+    var overpayBeforeMemory = overpay;
     overpay = geodeFinancialMemorySoftenedAmount(overpay, memoryMods.debtExtraMultiplier, 50, false);
     var mi = mintCost(worstDebt);
     var totalMinPay = 0;
@@ -14591,6 +14613,10 @@ function getMonthPlan() {
       why: 'All debts accrue interest; this step targets your highest APR at ' + toNum(worstDebt.apr) + '% — about ' + fm(mi) + '/month on this balance alone.',
       color: '#f07070'
     };
+    if (overpay < overpayBeforeMemory) {
+      debtStep.memorySoftened = true;
+      debtStep.memoryReasonCodes = memoryMods.reasonCodes ? memoryMods.reasonCodes.slice(0, 6) : [];
+    }
     if (left > 0) {
       debtStep.explain =
         'Uses part of your ' + fm(left) + ' plan room this month (' + stratWord + ' strategy).';
@@ -14653,9 +14679,10 @@ function getMonthPlan() {
       var modMi = mintCost(moderateDebt);
       var modOverpay = Math.min(Math.round(budget * stratCfg.debtRatio), 300, toNum(moderateDebt.balance));
       if (modOverpay > 0) modOverpay = Math.max(modOverpay, 50);
+      var modOverpayBeforeMemory = modOverpay;
       modOverpay = geodeFinancialMemorySoftenedAmount(modOverpay, memoryMods.debtExtraMultiplier, 50, false);
       if (modOverpay > 0 && budget >= modOverpay) {
-        steps.push({
+        var modDebtStep = {
           priority: 2,
           urgency: 'medium',
           icon: 'alert-circle',
@@ -14664,7 +14691,12 @@ function getMonthPlan() {
           note: 'Reducing this balance saves about ' + fm(modMi) + '/month in interest',
           why: 'At ' + toNum(moderateDebt.apr) + '% APR, this debt creates roughly ' + fm(modMi) + '/month of interest drag. In a debt-focused plan, this gets a slice before goals and new investing.',
           color: '#f09060'
-        });
+        };
+        if (modOverpay < modOverpayBeforeMemory) {
+          modDebtStep.memorySoftened = true;
+          modDebtStep.memoryReasonCodes = memoryMods.reasonCodes ? memoryMods.reasonCodes.slice(0, 6) : [];
+        }
+        steps.push(modDebtStep);
         budget -= modOverpay;
       }
     }
@@ -14678,9 +14710,10 @@ function getMonthPlan() {
     if (offSel.status === 'overdue') {
       // Overdue goals: acknowledge and apply a small, capped recovery contribution.
       var rec = Math.min(100, Math.round(budget * 0.2));
+      var recBeforeMemory = rec;
       rec = geodeFinancialMemorySoftenedAmount(rec, memoryMods.goalRecoveryMultiplier, 20, false);
       if (rec > 0) {
-        steps.push({
+        var recStep = {
           priority: 2,
           urgency: 'high',
           icon: 'target',
@@ -14690,7 +14723,12 @@ function getMonthPlan() {
           why: 'This goal is past its target date — a small restart keeps it moving without overcommitting.',
           color: '#f5c234',
           goalStatusWhy: goalStatusWhyLine(offSel.goal)
-        });
+        };
+        if (rec < recBeforeMemory) {
+          recStep.memorySoftened = true;
+          recStep.memoryReasonCodes = memoryMods.reasonCodes ? memoryMods.reasonCodes.slice(0, 6) : [];
+        }
+        steps.push(recStep);
         budget -= rec;
       }
     } else {
@@ -14699,8 +14737,9 @@ function getMonthPlan() {
       if (budget > 20) {
     var topup = Math.min(Math.ceil(offTrack._shortfall), Math.round(budget * stratCfg.goalRatio));
     topup = Math.max(topup, 20);
+    var topupBeforeMemory = topup;
     topup = geodeFinancialMemorySoftenedAmount(topup, memoryMods.goalRecoveryMultiplier, 20, false);
-    steps.push({
+    var topupStep = {
           priority: 2,
           urgency: (offSel.status === 'off track' ? 'medium' : (offSel.status === 'at risk' ? 'low' : 'low')),
       icon: 'target',
@@ -14710,7 +14749,12 @@ function getMonthPlan() {
           why: 'You’re about ' + fm(Math.ceil(offTrack._shortfall)) + '/month behind the pace needed to hit your date.',
       color: '#f5c234',
       goalStatusWhy: goalStatusWhyLine(offTrack)
-    });
+    };
+    if (topup < topupBeforeMemory) {
+      topupStep.memorySoftened = true;
+      topupStep.memoryReasonCodes = memoryMods.reasonCodes ? memoryMods.reasonCodes.slice(0, 6) : [];
+    }
+    steps.push(topupStep);
     budget -= topup;
       }
     }
@@ -14720,9 +14764,10 @@ function getMonthPlan() {
   // Simple rule: if there is meaningful budget left after safety + goals, suggest investing it
   if (budget > 50) {
     var invest = Math.round(budget * stratCfg.investRatio);
+    var investBeforeMemory = invest;
     invest = geodeFinancialMemorySoftenedAmount(invest, memoryMods.investmentMultiplier, 50, true);
     if (invest > 0) {
-      steps.push({
+      var investStep = {
         priority: 3,
         urgency: 'low',
         icon: 'trending-up',
@@ -14731,7 +14776,12 @@ function getMonthPlan() {
         note: 'Into an ISA, pension, or savings app',
         why: 'Once high‑cost debt and safety are covered, investing helps compound progress.',
         color: '#9b7fe8'
-      });
+      };
+      if (invest < investBeforeMemory) {
+        investStep.memorySoftened = true;
+        investStep.memoryReasonCodes = memoryMods.reasonCodes ? memoryMods.reasonCodes.slice(0, 6) : [];
+      }
+      steps.push(investStep);
       budget -= invest;
     }
   }
@@ -14866,6 +14916,15 @@ function getSuggestedActions(state) {
     }
     return '';
   }
+  function carryPlanSofteningMeta(action, step) {
+    if (!action || !step) return action;
+    if (step.memorySoftened || step.softenedByMemory) {
+      action.memorySoftened = true;
+      action.softenedByMemory = true;
+      action.memoryReasonCodes = step.memoryReasonCodes ? step.memoryReasonCodes.slice(0, 6) : [];
+    }
+    return action;
+  }
 
   var debtA = null;
   var bufA = null;
@@ -14885,6 +14944,7 @@ function getSuggestedActions(state) {
         targetId: findDebtIdByName(dn),
         targetName: dn
       };
+      carryPlanSofteningMeta(debtA, stp);
     } else if (stp.label === 'Build your emergency fund') {
       var egBuf = getFirstEmergencyGoal(S);
       var esvBuf = egBuf ? toNum(egBuf.saved) : 0;
@@ -14915,6 +14975,7 @@ function getSuggestedActions(state) {
         targetId: findGoalIdByName(gn),
         targetName: gn
       };
+      carryPlanSofteningMeta(goalA, stp);
     } else if (stp.label === 'Invest what remains') {
       var inv0 = (S.investments && S.investments[0]) || null;
       invA = {
@@ -14925,6 +14986,7 @@ function getSuggestedActions(state) {
         targetId: inv0 ? inv0.id : '',
         targetName: inv0 ? inv0.name : ''
       };
+      carryPlanSofteningMeta(invA, stp);
     }
   }
 
@@ -14959,16 +15021,27 @@ function mergeFrozenSuggestedActionsWithPlan(frozen) {
     }
     var amt = toNum(fj.amount);
     if (match) {
-      out.push({
+      var matched = {
         type: fj.type,
         title: match.title,
         subtitle: match.subtitle,
         amount: amt,
         targetId: fj.targetId || '',
         targetName: match.targetName || ''
-      });
+      };
+      if (fj.memorySoftened || match.memorySoftened || fj.softenedByMemory || match.softenedByMemory) {
+        matched.memorySoftened = true;
+        matched.softenedByMemory = true;
+        matched.memoryReasonCodes =
+          fj.memoryReasonCodes && fj.memoryReasonCodes.length
+            ? fj.memoryReasonCodes.slice(0, 6)
+            : match.memoryReasonCodes
+              ? match.memoryReasonCodes.slice(0, 6)
+              : [];
+      }
+      out.push(matched);
     } else {
-      out.push({
+      var fallback = {
         type: fj.type,
         title:
           fj.type === 'debt_payment'
@@ -14982,7 +15055,13 @@ function mergeFrozenSuggestedActionsWithPlan(frozen) {
         amount: amt,
         targetId: fj.targetId || '',
         targetName: ''
-      });
+      };
+      if (fj.memorySoftened || fj.softenedByMemory) {
+        fallback.memorySoftened = true;
+        fallback.softenedByMemory = true;
+        fallback.memoryReasonCodes = fj.memoryReasonCodes ? fj.memoryReasonCodes.slice(0, 6) : [];
+      }
+      out.push(fallback);
     }
   }
   return out;
@@ -17371,7 +17450,13 @@ function geodeHomePrepareSuggestedActionsList() {
   if (stale) {
     var tsNow = Date.now();
     S.lastSuggestedActions = raw.map(function (a) {
-      return { type: a.type, amount: a.amount, targetId: a.targetId || '', ts: tsNow };
+      var row = { type: a.type, amount: a.amount, targetId: a.targetId || '', ts: tsNow };
+      if (a.memorySoftened || a.softenedByMemory) {
+        row.memorySoftened = true;
+        row.softenedByMemory = true;
+        row.memoryReasonCodes = a.memoryReasonCodes ? a.memoryReasonCodes.slice(0, 6) : [];
+      }
+      return row;
     });
     S.lastSuggestedActionsMeta = {
       ts: tsNow,
