@@ -4042,7 +4042,7 @@ function geodePlanBufferStepDisplay(step) {
         sug +
         '.',
       amountStr: sug,
-      amountCaption: 'Based on monthly expenses'
+      amountCaption: 'based on monthly expenses'
     };
   }
   return {
@@ -9437,7 +9437,7 @@ function geodeDecisionCheckHint(screenFamily) {
               : mk === 'goal'   ? 'your savings goal'
               : '';
     if (!label) return '';
-    return 'Quick check \u2014 your plan is prioritising ' + label + ' this month';
+    return 'Quick check: your plan is prioritising ' + label + ' this month';
   } catch (e) { return ''; }
 }
 
@@ -21886,7 +21886,7 @@ function rGoals(_target) {
   var c = _target || document.getElementById('content');
   var tT = S.goals.reduce(function(s,g){ return s+Number(g.amount); },0);
   var tS = S.goals.reduce(function(s,g){ return s+geodeGoalEffectiveSaved(g); },0);
-  var h = '<div style="font-size:10px;color:#bdb7dc;line-height:1.4;margin:0 0 10px">Goals are what you are saving towards — Beynd uses them in your monthly plan and net worth.</div>';
+  var h = '<div style="font-size:10px;color:#bdb7dc;line-height:1.4;margin:0 0 10px">Goals are what you are saving towards. Beynd uses them in your monthly plan and net worth.</div>';
   var _goalHint = geodeDecisionCheckHint('goal');
   if (_goalHint) {
     h += '<div style="font-size:9px;color:rgba(245,194,52,0.55);line-height:1.35;margin-bottom:10px">' + escHtmlLite(_goalHint) + '</div>';
@@ -24848,7 +24848,7 @@ function rInvest(_target) {
   var totR=S.investments.reduce(function(s,e){return s+Number(e.returns||0);},0);
   var _invHint = geodeDecisionCheckHint('invest');
   var h =
-    '<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:0 0 ' + (_invHint ? '6' : '12') + 'px">Track what you already hold \u2014 balances here shape your net worth.</div>';
+    '<div style="font-size:10px;color:var(--tx-3);line-height:1.4;margin:0 0 ' + (_invHint ? '6' : '12') + 'px">Track what you already hold. Balances here shape your net worth.</div>';
   if (_invHint) {
     h += '<div style="font-size:9px;color:rgba(245,194,52,0.55);line-height:1.35;margin-bottom:12px">' + escHtmlLite(_invHint) + '</div>';
   }
