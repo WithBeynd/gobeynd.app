@@ -4029,7 +4029,7 @@ function geodePlanBufferStepDisplay(step) {
         sug +
         '.',
       amountStr: sug,
-      amountCaption: 'Continue — based on monthly expenses'
+      amountCaption: 'based on monthly expenses'
     };
   }
   if (st === 'BUFFER_ESTIMATABLE') {
@@ -15487,14 +15487,8 @@ function geodePlanPagePrioritiesStackHtml(plan) {
           ? bufDisp.amountStr
           : fm(s.amount);
     var capShown = invDisp.amountCaption || bufDisp.amountCaption;
-    if (sug > 0 && prog.phase === 'partial' && prog.remaining >= 1 && bufDisp.amountStr !== '\u2014') {
+    if (sug > 0 && prog.phase === 'partial' && prog.remaining >= 1) {
       amtShown = fm(prog.remaining);
-      capShown =
-        (capShown ? capShown + ' \u2014 ' : '') +
-        fm(prog.applied) +
-        ' marked complete, ' +
-        fm(prog.remaining) +
-        ' left on this step';
     } else if (sug > 0 && prog.phase === 'done') {
       amtShown = fm(s.amount);
       capShown = '';
@@ -19648,10 +19642,6 @@ function geodePlanStepRealityDisplay(state, step, prog, stepIndex, existingAmoun
   if (adj.action === 'pause') {
     amtShown = 'Paused this month';
     capShown = 'Usual step ' + baselineStr;
-    if (applied > 0) {
-      capShown =
-        fm(applied) + ' marked complete \u00b7 ' + capShown;
-    }
   } else if (adj.action === 'reduce') {
     amtShown = displayStr;
     capShown = 'Was ' + baselineStr + ' \u00b7 from Reality';
@@ -19659,15 +19649,8 @@ function geodePlanStepRealityDisplay(state, step, prog, stepIndex, existingAmoun
       try {
         var leftOn = Math.max(0, toNum(adj.displayAmount) - applied);
         amtShown = fm(leftOn);
-        capShown =
-          fm(applied) +
-          ' marked complete, ' +
-          fm(leftOn) +
-          ' left on this step \u00b7 Was ' +
-          baselineStr +
-          ' \u00b7 from Reality';
       } catch (_eRpaPc) {
-        capShown = fm(applied) + ' marked complete \u00b7 ' + capShown;
+        amtShown = displayStr;
       }
     }
   }
