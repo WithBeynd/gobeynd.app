@@ -9673,6 +9673,310 @@ function geodeBehaviourContinuityPlanBannerHint(state) {
   );
 }
 
+function geodeFinancialMemoryProfile(state) {
+  state = state || S;
+  var out = {
+    hasRepeatedTightMonths: false,
+    hasBreathingRoomPressure: false,
+    hasProtectedSpendingPressure: false,
+    isGenerallyConsistent: false,
+    hasRecentSlowOrUnsurePattern: false,
+    hasRecentMovedPattern: false,
+    hasContributionReliability: false,
+    hasDebtMinimumReliability: false,
+    hasExtraDebtConsistency: false,
+    hasLapsedUsePattern: false,
+    confidence: 'low',
+    evidenceCount: 0,
+    evidence: {
+      tightPeriods: 0,
+      tightPeriodsChecked: 0,
+      consistentSignals: 0,
+      contributionSignals: 0,
+      debtMinimumSignals: 0,
+      extraDebtSignals: 0,
+      slowOrUnsureEvents: 0,
+      movedEvents: 0
+    }
+  };
+  if (!state || typeof state !== 'object') return out;
+
+  var hasIncomeData = toNum(state.income) > 0;
+  var hasExpenseData = Array.isArray(state.expenses) && state.expenses.length > 0;
+  var hasPaymentData = Array.isArray(state.payments) && state.payments.length > 0;
+  var hasGoalData = Array.isArray(state.goals) && state.goals.length > 0;
+  var hasDebtData = Array.isArray(state.debts) && state.debts.length > 0;
+  var hasInvestmentData = Array.isArray(state.investments) && state.investments.length > 0;
+  var hasSnapshotData =
+    state.snapshots &&
+    typeof state.snapshots === 'object' &&
+    !Array.isArray(state.snapshots) &&
+    Object.keys(state.snapshots).length > 0;
+  var hasRealityData = !!(state.realityCheck && state.realityCheck.amount != null);
+  var hasActivityHistory = Array.isArray(state.activityLog) && state.activityLog.length > 0;
+  var hasBehaviourHistory = Array.isArray(state.behaviourEvents) && state.behaviourEvents.length > 0;
+  var hasFollowthroughHistory =
+    Array.isArray(state.followthroughOutcomeHistory) && state.followthroughOutcomeHistory.length > 0;
+  var hasArchiveHistory =
+    (Array.isArray(state.beyondStatement) && state.beyondStatement.length > 0) ||
+    (Array.isArray(state.archivedExpenses) && state.archivedExpenses.length > 0);
+  var hasMeaningfulFinancialData =
+    hasIncomeData ||
+    hasExpenseData ||
+    hasPaymentData ||
+    hasGoalData ||
+    hasDebtData ||
+    hasInvestmentData ||
+    hasSnapshotData ||
+    hasRealityData ||
+    hasActivityHistory ||
+    hasBehaviourHistory ||
+    hasFollowthroughHistory ||
+    hasArchiveHistory;
+  if (!hasMeaningfulFinancialData) return out;
+
+  function mark() {
+    out.evidenceCount++;
+  }
+
+  function recentCutoff(days) {
+    return Date.now() - Math.max(1, Number(days) || 30) * 86400000;
+  }
+
+  function paymentIsPaid(p) {
+    if (!p) return false;
+    if (p.status === 'paid') return true;
+    try {
+      return geodePaymentEffectiveStatus(p) === 'paid';
+    } catch (_eMemPaid) {
+      return false;
+    }
+  }
+
+  function contributionPayment(p) {
+    if (!p) return false;
+    var kind = String(p.payKind || '').toLowerCase();
+    return (
+      kind === 'goal' ||
+      kind === 'debt' ||
+      kind === 'invest' ||
+      kind === 'buffer' ||
+      !!p.goalId ||
+      !!p.debtId ||
+      !!p.investId
+    );
+  }
+
+  function numericSnapshotLeft(sn) {
+    if (!sn || typeof sn !== 'object') return null;
+    var keys = ['leftThisMonth', 'monthlyLeftover', 'leftover', 'planLeft', 'cashLeft'];
+    for (var i = 0; i < keys.length; i++) {
+      if (sn[keys[i]] == null) continue;
+      var n = Number(sn[keys[i]]);
+      if (isFinite(n)) return n;
+    }
+    return null;
+  }
+
+  try {
+    var income = toNum(state.income);
+    var currentLeft = calcMonthlyLeftover(state);
+    var hasMonthlyShape =
+      income > 0 ||
+      (Array.isArray(state.expenses) && state.expenses.length > 0) ||
+      (Array.isArray(state.payments) && state.payments.length > 0);
+    var tightPeriods = 0;
+    var checkedPeriods = 0;
+    if (hasMonthlyShape) {
+      checkedPeriods++;
+      if (currentLeft < 0 || (income > 0 && currentLeft < Math.max(75, income * 0.08))) {
+        tightPeriods++;
+      }
+    }
+    var snaps = state.snapshots && typeof state.snapshots === 'object' && !Array.isArray(state.snapshots)
+      ? state.snapshots
+      : {};
+    var keys = Object.keys(snaps).sort().slice(-5);
+    for (var si = 0; si < keys.length; si++) {
+      var snapLeft = numericSnapshotLeft(snaps[keys[si]]);
+      if (snapLeft == null) continue;
+      checkedPeriods++;
+      if (snapLeft < 0 || (income > 0 && snapLeft < Math.max(75, income * 0.08))) {
+        tightPeriods++;
+      }
+    }
+    out.evidence.tightPeriods = tightPeriods;
+    out.evidence.tightPeriodsChecked = checkedPeriods;
+    if (checkedPeriods >= 2 && tightPeriods >= 2) {
+      out.hasRepeatedTightMonths = true;
+      mark();
+    }
+  } catch (_eMemTight) {}
+
+  try {
+    var protectedSummary = geodeStage62ProtectedSpendingSummary(state);
+    var affordability = computeAffordabilityContext(state);
+    var affCodes = affordability && Array.isArray(affordability.reasonCodes)
+      ? affordability.reasonCodes
+      : [];
+    var incomeForPressure = toNum(state.income);
+    var hasBreathingPressureEvidence =
+      (hasExpenseData && sumExpensesMonthly(state.expenses || []) > 0) ||
+      hasPaymentData ||
+      !!(protectedSummary && protectedSummary.rows > 0) ||
+      hasRealityData ||
+      tightPeriods > 0;
+    if (
+      affordability &&
+      hasBreathingPressureEvidence &&
+      toNum(affordability.breathingRoomFloor) > 0 &&
+      (affCodes.indexOf('breathing_room_reserved') >= 0 ||
+        toNum(affordability.suggestableRoom) <= Math.max(25, incomeForPressure * 0.03))
+    ) {
+      out.hasBreathingRoomPressure = true;
+      mark();
+    }
+    if (
+      protectedSummary &&
+      protectedSummary.rows > 0 &&
+      (protectedSummary.rows >= 2 ||
+        (incomeForPressure > 0 && protectedSummary.monthly >= incomeForPressure * 0.2) ||
+        affCodes.indexOf('protected_spending_reserved') >= 0)
+    ) {
+      out.hasProtectedSpendingPressure = true;
+      mark();
+    }
+  } catch (_eMemPressure) {}
+
+  try {
+    var flags = geodeHumanMomentConsistencyFlags(state);
+    if (flags.goalFollowThrough) out.evidence.consistentSignals++;
+    if (flags.contributionFollowThrough) out.evidence.consistentSignals++;
+    if (flags.consistentWeeklyUse) out.evidence.consistentSignals++;
+    if (out.evidence.consistentSignals >= 2 || flags.activeWeeks >= 2) {
+      out.isGenerallyConsistent = true;
+      mark();
+    }
+  } catch (_eMemConsistent) {}
+
+  try {
+    var ev = Array.isArray(state.behaviourEvents) ? state.behaviourEvents : [];
+    var ym = geodeCurrentYm();
+    for (var ei = 0; ei < ev.length; ei++) {
+      var be = ev[ei];
+      if (!be || be.ym !== ym) continue;
+      if (be.kind === 'feeling_slow' || be.kind === 'feeling_unsure') out.evidence.slowOrUnsureEvents++;
+      if (be.kind === 'feeling_moved') out.evidence.movedEvents++;
+    }
+    if (out.evidence.slowOrUnsureEvents >= 2) {
+      out.hasRecentSlowOrUnsurePattern = true;
+      mark();
+    }
+    if (out.evidence.movedEvents >= 2) {
+      out.hasRecentMovedPattern = true;
+      mark();
+    }
+  } catch (_eMemFeel) {}
+
+  try {
+    var ft = getFollowthroughProfile(state);
+    var reliableFamilies = 0;
+    if (ft.debtTotal >= 3 && ft.debtFollowRate + ft.debtPartialRate >= 0.66) reliableFamilies++;
+    if (ft.goalTotal >= 3 && ft.goalFollowRate + ft.goalPartialRate >= 0.66) reliableFamilies++;
+    if (ft.investTotal >= 3 && ft.investFollowRate + ft.investPartialRate >= 0.66) reliableFamilies++;
+    if (ft.bufferTotal >= 3 && ft.bufferFollowRate + ft.bufferPartialRate >= 0.66) reliableFamilies++;
+    out.evidence.contributionSignals += reliableFamilies;
+    var log = Array.isArray(state.activityLog) ? state.activityLog : [];
+    var cut = recentCutoff(60);
+    for (var li = 0; li < log.length; li++) {
+      var le = log[li];
+      if (!le || typeof le.ts !== 'number' || le.ts < cut) continue;
+      if (le.type === 'goal' || le.type === 'invest') out.evidence.contributionSignals++;
+      if (le.type === 'payment' && contributionPayment(le)) out.evidence.contributionSignals++;
+    }
+    if (out.evidence.contributionSignals >= 3) {
+      out.hasContributionReliability = true;
+      mark();
+    }
+  } catch (_eMemContrib) {}
+
+  try {
+    var payments = Array.isArray(state.payments) ? state.payments : [];
+    for (var pi = 0; pi < payments.length; pi++) {
+      var p = payments[pi];
+      if (!p || !p.debtId || !paymentIsPaid(p)) continue;
+      var debt = geodeDebtById(state, p.debtId);
+      var minp = geodeDebtReadMinimumPayment(debt);
+      if (minp > 0 && geodePaymentAmountTowardDebtMinimum(state, debt, p, minp) > 0) {
+        out.evidence.debtMinimumSignals++;
+      }
+      if (geodeDebtPaymentLooksLikeExtraAction(p)) {
+        out.evidence.extraDebtSignals++;
+      }
+    }
+    if (out.evidence.debtMinimumSignals >= 2) {
+      out.hasDebtMinimumReliability = true;
+      mark();
+    }
+    if (out.evidence.extraDebtSignals < 2) {
+      var debtLog = Array.isArray(state.activityLog) ? state.activityLog : [];
+      var debtCut = recentCutoff(75);
+      for (var di = 0; di < debtLog.length; di++) {
+        var de = debtLog[di];
+        if (!de || typeof de.ts !== 'number' || de.ts < debtCut) continue;
+        if (de.type === 'debt' && Number(de.delta) < 0) out.evidence.extraDebtSignals++;
+      }
+    }
+    if (out.evidence.extraDebtSignals >= 2) {
+      out.hasExtraDebtConsistency = true;
+      mark();
+    }
+  } catch (_eMemDebt) {}
+
+  try {
+    var lastSeen = Number(state.lastSeenAt) || 0;
+    var activeState =
+      (Array.isArray(state.expenses) && state.expenses.length > 0) ||
+      (Array.isArray(state.payments) && state.payments.length > 0) ||
+      (Array.isArray(state.goals) && state.goals.length > 0) ||
+      (Array.isArray(state.debts) && state.debts.length > 0) ||
+      (Array.isArray(state.investments) && state.investments.length > 0);
+    if (activeState && lastSeen > 0 && Date.now() - lastSeen >= 10 * 86400000) {
+      out.hasLapsedUsePattern = true;
+      mark();
+    }
+  } catch (_eMemLapsed) {}
+
+  if (out.evidenceCount >= 5) out.confidence = 'high';
+  else if (out.evidenceCount >= 2) out.confidence = 'medium';
+  else out.confidence = 'low';
+  return out;
+}
+
+function geodeFinancialMemoryAskBeyndHint(state, postureObj) {
+  var p = geodeFinancialMemoryProfile(state || S);
+  if (!p || p.confidence === 'low') return null;
+  var posture = postureObj && postureObj.posture ? postureObj.posture : '';
+  var tone = postureObj && postureObj.tone ? postureObj.tone : '';
+  var cautious = posture === 'review_first' || posture === 'protect_flexibility' || tone === 'cautious';
+  if (p.hasLapsedUsePattern) {
+    return 'Financial memory: They may be returning after a gap. Rebuild context gently and avoid assuming nothing changed.';
+  }
+  if ((p.hasRepeatedTightMonths || p.hasBreathingRoomPressure) && !cautious) {
+    return 'Financial memory: Recent patterns point to tight-month pressure, so favour softer pacing and protect breathing room.';
+  }
+  if (p.hasProtectedSpendingPressure && !cautious) {
+    return 'Financial memory: Protected commitments appear important here; keep flexibility before new commitments.';
+  }
+  if (p.isGenerallyConsistent || p.hasContributionReliability) {
+    return 'Financial memory: They have shown recent follow-through. Acknowledge consistency without turning it into pressure.';
+  }
+  if (p.hasDebtMinimumReliability || p.hasExtraDebtConsistency) {
+    return 'Financial memory: Debt actions have some recent follow-through. Keep extra debt guidance optional and measured.';
+  }
+  return null;
+}
+
 /** Last ~90d of followthroughOutcomeHistory → simple rates per family (no plan changes). */
 function getFollowthroughProfile(state) {
   state = state || S;
@@ -21367,6 +21671,10 @@ function geodeFormatAskBeyndContextPostureBlock() {
     var behHint = geodeBehaviourContinuityCoachHint(S, po);
     if (behHint) {
       lines.push(behHint);
+    }
+    var memoryHint = geodeFinancialMemoryAskBeyndHint(S, po);
+    if (memoryHint) {
+      lines.push(memoryHint);
     }
     return lines.join('\n');
   } catch (_eApb) {
