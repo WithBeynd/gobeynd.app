@@ -8642,6 +8642,15 @@ function geodeBehaviourContinuityMonthShiftHint(state) {
   );
 }
 
+/** Stage 66: optional Plan banner hint when repeated reverts show a preference for easy reversal. */
+function geodeBehaviourContinuityPlanBannerHint(state) {
+  var p = geodeBehaviourContinuityProfile(state || S);
+  if (!p.oftenRevertsShift) return null;
+  return (
+    'You have switched back to your usual plan view more than once this month. This shifted view stays optional and easy to reverse.'
+  );
+}
+
 /** Last ~90d of followthroughOutcomeHistory → simple rates per family (no plan changes). */
 function getFollowthroughProfile(state) {
   state = state || S;
@@ -19669,6 +19678,7 @@ function geodePlanStepRealityDisplay(state, step, prog, stepIndex, existingAmoun
 function geodeRealityPlanAlignmentPlanBannerHtml() {
   if (!geodeGetActiveRealityPlanAlignment(S)) return '';
   var h = '';
+  var _rpaPlanBannerHint = geodeBehaviourContinuityPlanBannerHint(S);
   h +=
     '<div style="margin:0 0 14px;padding:10px 12px;border-radius:11px;border:1px solid rgba(155,127,232,0.22);background:rgba(155,127,232,0.06)">';
   h +=
@@ -19679,6 +19689,12 @@ function geodeRealityPlanAlignmentPlanBannerHtml() {
     '<div style="font-size:12px;font-weight:600;color:var(--tx-1);line-height:1.4;margin-bottom:8px">' +
     escHtmlLite('Following your Reality shift') +
     '</div>';
+  if (_rpaPlanBannerHint) {
+    h +=
+      '<div style="font-size:10px;color:rgba(189,183,220,0.72);line-height:1.45;margin-bottom:8px">' +
+      escHtmlLite(_rpaPlanBannerHint) +
+      '</div>';
+  }
   h +=
     '<button type="button" class="btn btn-s" style="width:100%" onclick="geodeRevertRealityPlanAlignment()">' +
     escHtmlLite('Use your usual plan this month') +
