@@ -826,7 +826,7 @@ var S = {
   /** incomeType omitted here so missing persisted value stays unset until normalization. */
   /** K7.1: whether user supports others financially (display / nudges only) */
   hasDependants: false,
-  goals: [], debts: [], payments: [], expenses: [], investments: [],
+  goals: [], debts: [], payments: [], expenses: [], archivedExpenses: [], investments: [],
   /** Monthly totals keyed by YYYY-MM (one object per month, overwritten on update). */
   snapshots: {},
   /** Snapshot fields for “since last update” (totals + leftThisMonth); persisted on save. */
@@ -1032,6 +1032,7 @@ function load() {
   if (!Array.isArray(S.goals)) S.goals = [];
   if (!Array.isArray(S.investments)) S.investments = [];
   if (!Array.isArray(S.expenses)) S.expenses = [];
+  if (!Array.isArray(S.archivedExpenses)) S.archivedExpenses = [];
   if (!Array.isArray(S.payments)) S.payments = [];
   if (!Array.isArray(S.activityLog)) S.activityLog = [];
   trimActivityLogForRetention();
@@ -1118,6 +1119,9 @@ function load() {
 }
 function save() {
   geodeNormalizeIncomeTypeFields();
+  try {
+    geodeArchiveExpiredOneOffExpenses(S);
+  } catch (_eExpArchiveSave) {}
   try {
     captureMonthlySnapshot();
     if (!_saveHasPendingBaseline) {
@@ -2559,9 +2563,10 @@ function sumExpensesMonthly(expenses) {
   for (var i = 0; i < list.length; i++) {
     var e = list[i];
     if (!e) continue;
+    if (e.expired === true || geodeExpenseIsExpiredOneOff(e, nowYM)) continue;
     // One-off expenses: only count in the month their date falls in
-    if (e.rec !== 'yes' && e.rec !== 'annual') {
-      var eYM = e.date ? String(e.date).slice(0, 7) : '';
+    if (geodeExpenseIsOneOff(e)) {
+      var eYM = geodeExpenseMonthValue(e);
       if (eYM && eYM !== nowYM) continue; // past month one-off — skip
     }
     // Annual expenses count as 1/12 per month
@@ -2569,6 +2574,67 @@ function sumExpensesMonthly(expenses) {
     s += monthly;
   }
   return s;
+}
+
+/** One-off expense lifecycle helpers: archive past single-month spending without changing current math formulas. */
+function geodeExpenseDateValue(e) {
+  if (!e) return '';
+  return String(e.date || e.dueDate || '').slice(0, 10);
+}
+function geodeExpenseMonthValue(e) {
+  var d = geodeExpenseDateValue(e);
+  return d && d.length >= 7 ? d.slice(0, 7) : '';
+}
+function geodeExpenseIsOneOff(e) {
+  if (!e) return false;
+  if (String(e.type || '').toLowerCase() === 'one-off') return true;
+  var rec = String(e.rec || 'no').toLowerCase();
+  return rec !== 'yes' && rec !== 'annual';
+}
+function geodeExpenseIsExpiredOneOff(e, ym) {
+  if (!geodeExpenseIsOneOff(e)) return false;
+  var eYM = geodeExpenseMonthValue(e);
+  if (!eYM) return false;
+  return eYM < (ym || currentYM());
+}
+function geodeArchiveExpiredOneOffExpenses(state) {
+  state = state || S;
+  if (!state || !Array.isArray(state.expenses) || !state.expenses.length) {
+    if (state && !Array.isArray(state.archivedExpenses)) state.archivedExpenses = [];
+    return false;
+  }
+  if (!Array.isArray(state.archivedExpenses)) state.archivedExpenses = [];
+  var ym = currentYM();
+  var keep = [];
+  var changed = false;
+  var archivedById = {};
+  var ai;
+  for (ai = 0; ai < state.archivedExpenses.length; ai++) {
+    var existing = state.archivedExpenses[ai];
+    if (existing && existing.id) archivedById[String(existing.id)] = ai;
+  }
+  for (var i = 0; i < state.expenses.length; i++) {
+    var e = state.expenses[i];
+    if (!e || !geodeExpenseIsExpiredOneOff(e, ym)) {
+      if (e) keep.push(e);
+      continue;
+    }
+    var archived = Object.assign({}, e, {
+      expired: true,
+      expiredYm: geodeExpenseMonthValue(e),
+      archivedAt: Date.now(),
+      archiveReason: 'one_off_month_passed'
+    });
+    if (archived.id && Object.prototype.hasOwnProperty.call(archivedById, String(archived.id))) {
+      state.archivedExpenses[archivedById[String(archived.id)]] = archived;
+    } else {
+      archivedById[String(archived.id || 'archived_' + i + '_' + Date.now())] = state.archivedExpenses.length;
+      state.archivedExpenses.push(archived);
+    }
+    changed = true;
+  }
+  if (changed) state.expenses = keep;
+  return changed;
 }
 /**
  * Monthly cash left (FLOW only): income − scheduled payments counted this month − expenses.
@@ -2627,8 +2693,9 @@ function geodePaymentAmountTowardDebtMinimum(state, debt, p, minp) {
 function geodeExpenseAmountTowardDebtMinimum(state, debt, e, minp) {
   if (!e || !debt || minp <= 0) return 0;
   var nowYM = currentYM();
-  if (e.rec !== 'yes' && e.rec !== 'annual') {
-    var eYM = e.date ? String(e.date).slice(0, 7) : '';
+  if (e.expired === true || geodeExpenseIsExpiredOneOff(e, nowYM)) return 0;
+  if (geodeExpenseIsOneOff(e)) {
+    var eYM = geodeExpenseMonthValue(e);
     if (eYM && eYM !== nowYM) return 0;
   }
   var monthly = e.rec === 'annual' ? toNum(e.amount) / 12 : toNum(e.amount);
@@ -3068,6 +3135,7 @@ function rollupRecurringExpenseDueDates() {
   for (var i = 0; i < S.expenses.length; i++) {
     var e = S.expenses[i];
     if (!e || !e.date) continue;
+    if (geodeExpenseIsOneOff(e)) continue;
     if (e.rec !== 'yes' && e.rec !== 'annual') continue;
     try {
       var d = new Date(e.date + 'T12:00:00');
@@ -3195,6 +3263,7 @@ function syncRecurringPayments() {
   }
   if (rollupRecurringPaymentDueDates()) changed = true;
   if (rollupRecurringExpenseDueDates()) changed = true;
+  if (geodeArchiveExpiredOneOffExpenses(S)) changed = true;
   if (changed) save();
 }
 function monthlyInterest(aprPercent, balance) {
@@ -3915,7 +3984,7 @@ function geodeMonthlyExpenseTotal(state) {
   var ex = state.expenses || [];
   var sum = 0;
   for (var i = 0; i < ex.length; i++) {
-    if (ex[i]) sum += toNum(ex[i].amount);
+    if (ex[i] && ex[i].expired !== true && !geodeExpenseIsExpiredOneOff(ex[i])) sum += toNum(ex[i].amount);
   }
   return sum;
 }
@@ -8619,7 +8688,7 @@ function geodeBehaviourContinuityProfile(state) {
 /**
  * Stage 64B-1 / 65-4: at most one coach-facing continuity line for Ask Beynd (null when none or redundant).
  * postureObj optional — cautious posture skips slow/moved month hints that duplicate posture guidance.
- * Priority: reverts, then slow/unsure, then repeated shift approvals, then repeated moved feeling.
+ * Priority: slow/unsure, then repeated shift approvals, then repeated moved feeling.
  */
 function geodeBehaviourContinuityCoachHint(state, postureObj) {
   var p = geodeBehaviourContinuityProfile(state || S);
@@ -8633,12 +8702,6 @@ function geodeBehaviourContinuityCoachHint(state, postureObj) {
     behPosture === 'review_first' ||
     behPosture === 'protect_flexibility' ||
     behTone === 'cautious';
-  if (p.oftenRevertsShift) {
-    return (
-      'They have returned to their usual plan view more than once this month. ' +
-      'Keep shift suggestions optional and easy to reverse.'
-    );
-  }
   if (p.oftenSlowFeeling && !cautious) {
     return (
       'They have often indicated a slower or unsure pace this month. ' +
@@ -8660,24 +8723,12 @@ function geodeBehaviourContinuityCoachHint(state, postureObj) {
   return null;
 }
 
-/**
- * Stage 65-5: user-facing Month Shift preview helper when repeat reverts this month (null otherwise).
- * Replaces the generic “usual plan” line in the modal — does not add a second hint.
- */
-function geodeBehaviourContinuityMonthShiftHint(state) {
-  var p = geodeBehaviourContinuityProfile(state || S);
-  if (!p.oftenRevertsShift) return null;
-  return (
-    'This adjusts your Plan view for this month only. You have returned to your usual plan view more than once this month — this shift stays optional and you can switch back anytime.'
-  );
-}
-
 /** Stage 66: optional Plan banner hint when repeated reverts show a preference for easy reversal. */
 function geodeBehaviourContinuityPlanBannerHint(state) {
   var p = geodeBehaviourContinuityProfile(state || S);
   if (!p.oftenRevertsShift) return null;
   return (
-    'You have switched back to your usual plan view more than once this month. This shifted view stays optional and easy to reverse.'
+    'You have switched back more than once this month, so this shifted view stays optional and easy to reverse.'
   );
 }
 
@@ -14366,6 +14417,30 @@ function geodePlanPageOverviewHtml(plan) {
   return h;
 }
 
+/** Plan tab row amount/caption display only; scheduled zero-complete rows keep the numeric plan amount. */
+function geodePlanPageStepRowAmountDisplay(step, prog, bufDisp, invDisp) {
+  var sug = toNum(step && step.amount);
+  var amtShown =
+    invDisp && invDisp.amountStr != null
+      ? invDisp.amountStr
+      : bufDisp && bufDisp.amountStr != null
+        ? bufDisp.amountStr
+        : fm(step && step.amount);
+  var capShown =
+    (invDisp && invDisp.amountCaption) ||
+    (bufDisp && bufDisp.amountCaption) ||
+    '';
+  if (sug > 0 && prog && prog.phase === 'partial' && toNum(prog.applied) <= 0) {
+    amtShown = fm(step.amount);
+  } else if (sug > 0 && prog && prog.phase === 'partial' && prog.remaining >= 1) {
+    amtShown = fm(prog.remaining);
+  } else if (sug > 0 && prog && prog.phase === 'done') {
+    amtShown = fm(step.amount);
+    capShown = '';
+  }
+  return { amtShown: amtShown, capShown: capShown };
+}
+
 function geodePlanPageStatusSectionHtml(optSkipNegDup) {
   if (!geodeHasPlanContext()) {
     return (
@@ -15509,20 +15584,9 @@ function geodePlanPagePrioritiesStackHtml(plan) {
     if (s.label === 'Invest what remains' && invDisp.label != null && prog.phase === 'none') {
       labelShown = invDisp.label;
     }
-    var sug = toNum(s.amount);
-    var amtShown =
-      invDisp.amountStr != null
-        ? invDisp.amountStr
-        : bufDisp.amountStr != null
-          ? bufDisp.amountStr
-          : fm(s.amount);
-    var capShown = invDisp.amountCaption || bufDisp.amountCaption;
-    if (sug > 0 && prog.phase === 'partial' && prog.remaining >= 1) {
-      amtShown = fm(prog.remaining);
-    } else if (sug > 0 && prog.phase === 'done') {
-      amtShown = fm(s.amount);
-      capShown = '';
-    }
+    var rowAmt = geodePlanPageStepRowAmountDisplay(s, prog, bufDisp, invDisp);
+    var amtShown = rowAmt.amtShown;
+    var capShown = rowAmt.capShown;
     var _rpaDisp = geodePlanStepRealityDisplay(S, s, prog, i, amtShown, capShown);
     if (_rpaDisp) {
       amtShown = _rpaDisp.amtShown;
@@ -19929,9 +19993,7 @@ function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
       ) +
       '</div>';
   }
-  var _rpaModalHelper =
-    geodeBehaviourContinuityMonthShiftHint(S) ||
-    'This adjusts your Plan view for this month only. Your usual plan stays available.';
+  var _rpaModalHelper = 'This adjusts your Plan view for this month only. Your usual plan stays available.';
   h +=
     '<div style="font-size:10px;color:rgba(189,183,220,0.72);line-height:1.45;margin-top:12px">' +
     escHtmlLite(_rpaModalHelper) +
@@ -25854,6 +25916,7 @@ function geodeBeyndBackupRestorableKeyWhitelist() {
     'debts',
     'payments',
     'expenses',
+    'archivedExpenses',
     'investments',
     'snapshots',
     'lastSnapshot',
