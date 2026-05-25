@@ -389,6 +389,8 @@ textarea.fi{min-height:70px}
 .beynd-ask-compose .fi{width:100%;min-width:0;box-sizing:border-box;min-height:72px;font-size:13px;line-height:1.45;flex:0 0 auto;margin:0}
 .beynd-ask-compose .btn.btn-p{width:100%;flex:0 0 auto;margin:0;align-self:stretch}
 .beynd-ask-foot{font-size:10px;color:var(--tx-3);line-height:1.4;margin-top:10px}
+.beynd-ask-first-run{align-self:flex-start;background:var(--bg-raised);border:1px solid rgba(155,127,232,0.18);border-radius:12px 12px 12px 3px;padding:9px 12px;font-size:12px;color:var(--tx-1);max-width:88%;line-height:1.5;transition:opacity var(--motion-standard) var(--ease-out),transform var(--motion-standard) var(--ease-out)}
+.beynd-ask-first-run.is-hiding{opacity:0;transform:translateY(-4px);pointer-events:none}
 
 /* TIP */
 .tip{background:linear-gradient(135deg,rgba(155,127,232,0.1),rgba(232,124,160,0.07));border:1px solid rgba(155,127,232,0.18);border-radius:16px;padding:14px;margin-bottom:10px}
@@ -512,7 +514,7 @@ canvas{display:block}
 .geode-debt-impact-title{font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.85px;text-transform:uppercase;margin-bottom:10px;line-height:1.35}
 .geode-debt-impact-sect{font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:0.65px;text-transform:uppercase;margin-top:12px;margin-bottom:6px;line-height:1.35}
 .geode-debt-impact-sect--first{margin-top:2px}
-.geode-debt-impact-note{margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;max-width:100%}
+.geode-debt-impact-note{margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;max-width:100%}
 .geode-debt-impact-relief{font-size:11px;line-height:1.45;margin-top:4px;color:var(--tx-2)}
 .geode-debt-impact-row{margin-bottom:8px;line-height:1.45}
 .geode-debt-impact-drag{font-size:11px;line-height:1.45;color:var(--tx-1)}
@@ -541,6 +543,8 @@ canvas{display:block}
 .geode-expand-wrap{overflow:hidden}
 .geode-expand-inner{will-change:opacity,transform}
 .geode-month-context--open .geode-expand-inner{animation-duration:var(--motion-calm)}
+.geode-hm-transient{opacity:1;transform:translateY(0);transition:opacity 420ms ease,transform 420ms ease}
+.geode-hm-transient.is-hiding{opacity:0;transform:translateY(-4px);pointer-events:none}
 
 @keyframes fi{from{opacity:0}to{opacity:1}}
 @keyframes su{from{transform:translateY(60px);opacity:0}to{transform:translateY(0);opacity:1}}
@@ -857,6 +861,10 @@ var S = {
   // explainMode removed (explanations are always shown contextually)
   /** Stage K6: last Home render time (ms); 0 = not yet committed). */
   lastSeenAt: 0,
+  /** Stage YY: local day the transient consistency Human Moment was last shown. */
+  humanMomentConsistencyShownDay: '',
+  /** Stage ZZ: one-time Ask Beynd introduction has been shown. */
+  askBeyndFirstRunShown: false,
   /** Stage N: optional reminder preferences (saved locally; scheduling/delivery not wired in this build). */
   reminderPrefs: null,
   /** Home UX: user dismissed Quick Setup without finishing; softer empty Home until they engage again. */
@@ -1064,6 +1072,8 @@ function load() {
   // explainMode removed (explanations are always shown contextually)
   if (typeof S.quickSetupDismissed !== 'boolean') S.quickSetupDismissed = coercePersistedBoolean(S.quickSetupDismissed);
   if (typeof S.lastSeenAt !== 'number' || !isFinite(S.lastSeenAt) || S.lastSeenAt < 0) S.lastSeenAt = 0;
+  if (typeof S.humanMomentConsistencyShownDay !== 'string') S.humanMomentConsistencyShownDay = '';
+  if (typeof S.askBeyndFirstRunShown !== 'boolean') S.askBeyndFirstRunShown = coercePersistedBoolean(S.askBeyndFirstRunShown);
   geodeNormalizeReminderPrefs();
   var _adf = ['debt', 'goal', 'invest', 'buffer'],
     _adi;
@@ -11375,6 +11385,137 @@ function geodeHomeOrchestrationResolve(state) {
   return resolve;
 }
 
+function geodeHumanMomentActivityDay(ts) {
+  try {
+    if (typeof ts !== 'number' || !isFinite(ts) || ts <= 0) return '';
+    return geodeDateToLocalISO(new Date(ts));
+  } catch (_eHmDay) {
+    return '';
+  }
+}
+
+function geodeHumanMomentConsistencyFlags(state) {
+  state = state || S;
+  var flags = {
+    consistentWeeklyUse: false,
+    goalFollowThrough: false,
+    contributionFollowThrough: false,
+    activeDays: 0,
+    goalActions: 0,
+    contributionActions: 0,
+    activeWeeks: 0
+  };
+  try {
+    var log = Array.isArray(state.activityLog) ? state.activityLog : [];
+    if (!log.length) return flags;
+    var now = Date.now();
+    var weekCutoff = now - 7 * 86400000;
+    var followCutoff = now - 21 * 86400000;
+    var days = {};
+    for (var i = 0; i < log.length; i++) {
+      var e = log[i];
+      if (!e || typeof e.ts !== 'number' || !isFinite(e.ts)) continue;
+      var type = String(e.type || '').toLowerCase();
+      var delta = toNum(e.delta);
+      var payKind = String(e.payKind || '').toLowerCase();
+      var meaningful =
+        type === 'income' ||
+        type === 'expense' ||
+        type === 'payment' ||
+        type === 'goal' ||
+        type === 'debt' ||
+        type === 'invest';
+      if (meaningful && e.ts >= weekCutoff) {
+        var day = geodeHumanMomentActivityDay(e.ts);
+        if (day) days[day] = true;
+      }
+      if (e.ts < followCutoff || delta <= 0) continue;
+      if (type === 'goal' || (type === 'payment' && payKind === 'goal')) flags.goalActions++;
+      if (
+        type === 'payment' &&
+        (payKind === 'goal' || payKind === 'debt' || payKind === 'invest')
+      ) {
+        flags.contributionActions++;
+      }
+    }
+    for (var k in days) {
+      if (Object.prototype.hasOwnProperty.call(days, k)) flags.activeDays++;
+    }
+    try {
+      flags.activeWeeks = geodeConsecutiveActiveWeeks(state);
+    } catch (_eHmWeeks) {
+      flags.activeWeeks = 0;
+    }
+    flags.consistentWeeklyUse = flags.activeDays >= 3 || flags.activeWeeks >= 2;
+    flags.goalFollowThrough = flags.goalActions >= 2;
+    flags.contributionFollowThrough = flags.contributionActions >= 2;
+  } catch (_eHmFlags) {}
+  return flags;
+}
+
+function geodeHumanMomentConsistencyHint(state) {
+  state = state || S;
+  try {
+    var today = geodeTodayLocalISO();
+    if (!today) return '';
+    if (String(state.humanMomentConsistencyShownDay || '') === today) return '';
+    var flags = geodeHumanMomentConsistencyFlags(state);
+    if (flags.goalFollowThrough) {
+      return 'You have kept showing up for your goal. That steady rhythm matters.';
+    }
+    if (flags.contributionFollowThrough) {
+      return 'You have followed through more than once recently. That kind of consistency matters.';
+    }
+    if (flags.consistentWeeklyUse) {
+      return 'You have been keeping up with your plan this week. Keep going.';
+    }
+  } catch (_eHmHint) {}
+  return '';
+}
+
+function geodeBuildHumanMomentConsistency(state) {
+  var body = geodeHumanMomentConsistencyHint(state);
+  if (!body) return null;
+  return {
+    topic: 'consistency',
+    title: 'Good rhythm',
+    body: body,
+    tone: 'supportive',
+    source: 'consistency',
+    transient: true
+  };
+}
+
+function geodeMarkHumanMomentConsistencyShown(state) {
+  state = state || S;
+  try {
+    var today = geodeTodayLocalISO();
+    if (today) state.humanMomentConsistencyShownDay = today;
+  } catch (_eHmMark) {}
+}
+
+function geodeArmHumanMomentTransient() {
+  try {
+    var els = document.querySelectorAll('[data-geode-hm-transient="1"]');
+    for (var i = 0; i < els.length; i++) {
+      (function (el) {
+        if (!el || el.getAttribute('data-geode-hm-armed') === '1') return;
+        el.setAttribute('data-geode-hm-armed', '1');
+        window.setTimeout(function () {
+          try {
+            el.classList.add('is-hiding');
+            window.setTimeout(function () {
+              try {
+                el.style.display = 'none';
+              } catch (_eHmHide2) {}
+            }, 480);
+          } catch (_eHmHide) {}
+        }, 4200);
+      })(els[i]);
+    }
+  } catch (_eHmArm) {}
+}
+
 function geodeHumanMomentShouldSuppress(ctx, state, opts) {
   state = state || S;
   opts = opts || {};
@@ -11454,7 +11595,9 @@ function geodePickHumanMoment(state) {
   var worried = !!(mc.worried);
   var cautious = tone === 'cautious' || posture === 'protect_flexibility' || posture === 'review_first';
 
-  if (posture === 'steady_progress' || posture === 'growth_room') return null;
+  if (posture === 'steady_progress' || posture === 'growth_room') {
+    return geodeBuildHumanMomentConsistency(state);
+  }
 
   var topic = null;
   var body = null;
@@ -11479,7 +11622,7 @@ function geodePickHumanMoment(state) {
     topic = 'protect_flexibility';
     body = 'Keep some room before adding new commitments.';
   } else {
-    return null;
+    return geodeBuildHumanMomentConsistency(state);
   }
 
   var hm = {
@@ -11496,10 +11639,15 @@ function geodePickHumanMoment(state) {
 /** Home coaching strip: Human Moment OR Insight (never both). */
 function geodeHomeHumanMomentStripHtml(hm) {
   if (!hm || !hm.body) return '';
-  var st = nudgeStyle('warning', hm.topic);
+  var isTransient = hm.transient === true && hm.source === 'consistency';
+  if (isTransient) geodeMarkHumanMomentConsistencyShown(S);
+  var st = nudgeStyle(hm.tone === 'supportive' ? 'positive' : 'warning', hm.topic);
   var color = st.color || 'rgba(245,194,52,0.9)';
   var shortMsg = geodeHomeInsightShortLine(hm.body, 160);
-  var h = '<div class="geode-soft-enter" style="margin-bottom:6px">';
+  var h =
+    '<div class="geode-soft-enter' +
+    (isTransient ? ' geode-hm-transient" data-geode-hm-transient="1' : '') +
+    '" style="margin-bottom:6px">';
   h +=
     '<div style="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px">';
   h += geodeIcon('sparkles', 'ic ic-hdr-sm') + '<span>Human moment</span><span style="flex:1;height:1px;background:rgba(255,255,255,0.05)"></span></div>';
@@ -20940,13 +21088,53 @@ function geodeGetAskBeyndUiCopy(state) {
   };
 }
 
+function geodeShouldShowAskBeyndFirstRun() {
+  return S.askBeyndFirstRunShown === false;
+}
+
+function geodeAskBeyndFirstRunIntroHtml() {
+  return (
+    '<div id="beynd-ask-first-run" class="geode-bubble-in beynd-ask-first-run">' +
+    'Ask Beynd about your plan, goals, or financial decisions. Type a question, choose an option, or follow a coaching hint when you want a steadier next step.' +
+    '</div>'
+  );
+}
+
+function geodeMarkAskBeyndFirstRunShown() {
+  if (S.askBeyndFirstRunShown === true) return;
+  S.askBeyndFirstRunShown = true;
+  try {
+    persistGeodeToLocalStorage();
+  } catch (_eAskFrPersist) {}
+}
+
+function geodeArmAskBeyndFirstRunIntro() {
+  try {
+    var el = document.getElementById('beynd-ask-first-run');
+    if (!el || el.getAttribute('data-beynd-ask-first-run-armed') === '1') return;
+    el.setAttribute('data-beynd-ask-first-run-armed', '1');
+    window.setTimeout(function () {
+      try {
+        el.classList.add('is-hiding');
+        window.setTimeout(function () {
+          try {
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+          } catch (_eAskFrRemove) {}
+        }, 260);
+      } catch (_eAskFrHide) {}
+    }, 4200);
+  } catch (_eAskFrArm) {}
+}
+
 function geodeOpenAskBeynd() {
   _beynd_chat_history = [];
   var uiCopy = geodeGetAskBeyndUiCopy(S);
+  var showFirstRunIntro = geodeShouldShowAskBeyndFirstRun();
   var h = mh('Ask Beynd');
   h += '<div style="font-size:10px;color:var(--tx-3);line-height:1.45;margin:-4px 0 10px">Ask from your plan and the picture you have built in Beynd. Bank connection is not live yet.</div>';
   h += '<div class="beynd-ask-sheet">';
   h += '<div id="beynd-chat-messages" class="beynd-ask-messages">';
+  if (showFirstRunIntro) h += geodeAskBeyndFirstRunIntroHtml();
   h +=
     '<div class="geode-bubble-in" style="align-self:flex-start;background:var(--bg-raised);border-radius:12px 12px 12px 3px;padding:9px 12px;font-size:13px;color:var(--tx-1);max-width:88%;line-height:1.55">' +
     escHtmlLite(uiCopy.intro) +
@@ -20966,6 +21154,10 @@ function geodeOpenAskBeynd() {
   h += '<div class="beynd-ask-foot">When you ask, Beynd sends a short financial summary to answer your question. Your plan stays on this device, and this chat is not stored by Beynd.</div>';
   h += '</div>';
   openModal(h);
+  if (showFirstRunIntro) {
+    geodeMarkAskBeyndFirstRunShown();
+    geodeArmAskBeyndFirstRunIntro();
+  }
 }
 
 function geodeApplyChatBubbleEnter(el) {
@@ -21517,6 +21709,7 @@ function rHome() {
   S.lastSeenAt = Date.now();
   persistGeodeToLocalStorage();
   c.innerHTML = h;
+  geodeArmHumanMomentTransient();
   if (Array.isArray(S._pendingLastShownHighlightTopics)) {
     S.lastShownNudgeTopics = S._pendingLastShownHighlightTopics.slice();
   }
@@ -25925,6 +26118,8 @@ function geodeBeyndBackupRestorableKeyWhitelist() {
     '_suggestionBatchResolved',
     'adaptiveDisplayModeByFamily',
     'lastSeenAt',
+    'humanMomentConsistencyShownDay',
+    'askBeyndFirstRunShown',
     'reminderPrefs',
     'quickSetupDismissed',
     'realityCheck',
