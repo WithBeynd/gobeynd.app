@@ -1964,6 +1964,189 @@ function computeSnapshotFigures() {
   var netWorth = totalSaved + totalInvestments - totalDebt;
   return { totalDebt: totalDebt, totalSaved: totalSaved, totalInvestments: totalInvestments, netWorth: netWorth, figVersion: 2 };
 }
+
+/** Pure dashboard read-model contract (shadow only). Does not render, persist, snapshot, or mutate input state. */
+function geodeDashboardSnapshot(state, opts) {
+  opts = opts || {};
+  var st = state && typeof state === 'object' ? state : {};
+  var reasonCodes = [];
+  function pushReason(code) {
+    if (code && reasonCodes.indexOf(code) < 0) reasonCodes.push(code);
+  }
+  function arr(v) {
+    return Array.isArray(v) ? v : [];
+  }
+  function monthFromInput(value) {
+    if (typeof value === 'string') {
+      if (/^\d{4}-\d{2}$/.test(value)) return value;
+      if (value.length >= 7 && /^\d{4}-\d{2}/.test(value)) return value.slice(0, 7);
+    }
+    if (value instanceof Date && !isNaN(value.getTime())) return getMonthKey(value);
+    return '';
+  }
+  var monthKey = monthFromInput(opts.monthKey) || monthFromInput(opts.today) || currentYM();
+  function dayFromInput(value) {
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+    if (value instanceof Date && !isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+    return '';
+  }
+  var todayForCompare = dayFromInput(opts.today);
+  if (!todayForCompare) {
+    try { todayForCompare = geodeTodayLocalISO(); } catch (_eDashToday) { todayForCompare = ''; }
+  }
+  function previousMonthKey(key) {
+    var m = /^(\d{4})-(\d{2})$/.exec(String(key || ''));
+    if (!m) return '';
+    return getMonthKey(new Date(Number(m[1]), Number(m[2]) - 2, 1));
+  }
+  function expenseMonthValue(e) {
+    var d = String((e && (e.date || e.dueDate)) || '').slice(0, 10);
+    return d && d.length >= 7 ? d.slice(0, 7) : '';
+  }
+  function expenseIsOneOff(e) {
+    if (!e) return false;
+    if (String(e.type || '').toLowerCase() === 'one-off') return true;
+    var rec = String(e.rec || 'no').toLowerCase();
+    return rec !== 'yes' && rec !== 'annual';
+  }
+  function expenseIsExpiredOneOffForMonth(e) {
+    if (!expenseIsOneOff(e)) return false;
+    var eYm = expenseMonthValue(e);
+    return !!(eYm && eYm < monthKey);
+  }
+  function expenseMonthlyAmount(e) {
+    if (!e) return 0;
+    if (e._archived === true || e._isStale === true || e.expired === true || expenseIsExpiredOneOffForMonth(e)) return 0;
+    if (expenseIsOneOff(e)) {
+      var eYm = expenseMonthValue(e);
+      if (eYm && eYm !== monthKey) return 0;
+    }
+    return String(e.rec || '').toLowerCase() === 'annual' ? toNum(e.amount) / 12 : toNum(e.amount);
+  }
+  function paymentCountsForMonth(p) {
+    if (!p) return false;
+    var status = String(p.status || '');
+    var pDate = String(p.date || '').slice(0, 10);
+    if (status === 'overdue') return true;
+    if (status !== 'paid' && pDate && todayForCompare && pDate < todayForCompare) return true;
+    if (p.rec === 'yes') {
+      if (status === 'paid') return String(p.lastPaidYM || '') === monthKey;
+      return true;
+    }
+    if (!p.date) return true;
+    return pDate.slice(0, 7) === monthKey;
+  }
+  var debts = arr(st.debts);
+  var goals = arr(st.goals);
+  var investments = arr(st.investments);
+  var expenses = arr(st.expenses);
+  var payments = arr(st.payments);
+  var archived = arr(st.archivedExpenses);
+  var statement = arr(st.beyondStatement);
+  var totalDebt = debts.reduce(function (sum, debt) { return sum + toNum(debt && debt.balance); }, 0);
+  var totalSaved = goals.reduce(function (sum, goal) {
+    return sum + geodeGoalEffectiveSavedFromState(st, goal);
+  }, 0);
+  var totalInvestments = geodeUnlinkedInvestmentBalance(st);
+  var netWorth = totalSaved + totalInvestments - totalDebt;
+  var monthlyExpenses = expenses.reduce(function (sum, e) { return sum + expenseMonthlyAmount(e); }, 0);
+  var monthlyPayments = payments.reduce(function (sum, p) {
+    return sum + (paymentCountsForMonth(p) ? toNum(p && p.amount) : 0);
+  }, 0);
+  var leftThisMonth = toNum(st.income) - monthlyPayments - monthlyExpenses;
+  if (!st || !Object.keys(st).length) pushReason('missing_state');
+  if (toNum(st.income) <= 0) pushReason('no_income');
+  if (!debts.length && !goals.length && !investments.length && !expenses.length && !payments.length) pushReason('empty_financial_profile');
+  if (leftThisMonth < 0) pushReason('left_this_month_negative');
+  var snapshots = st.snapshots && typeof st.snapshots === 'object' ? st.snapshots : {};
+  var snapshotRows = Array.isArray(snapshots)
+    ? snapshots
+    : Object.keys(snapshots).map(function (key) {
+        var row = snapshots[key] || {};
+        return Object.assign({}, row, { monthKey: row.monthKey || key });
+      });
+  var previousKey = previousMonthKey(monthKey);
+  var previous = previousKey && !Array.isArray(snapshots) ? snapshots[previousKey] || null : null;
+  if (!previous && previousKey) {
+    for (var si = 0; si < snapshotRows.length; si++) {
+      if (snapshotRows[si] && String(snapshotRows[si].monthKey || '') === previousKey) {
+        previous = snapshotRows[si];
+        break;
+      }
+    }
+  }
+  var deltas = null;
+  if (previous) {
+    deltas = {
+      totalDebt: totalDebt - toNum(previous.totalDebt),
+      totalSaved: totalSaved - toNum(previous.totalSaved),
+      totalInvestments: totalInvestments - toNum(previous.totalInvestments),
+      netWorth: netWorth - toNum(previous.netWorth),
+      comparable: geodeSnapshotFiguresSameVersion(previous, { figVersion: 2 })
+    };
+  } else {
+    pushReason('no_previous_month_snapshot');
+  }
+  var archivedOneOffContext = null;
+  if (opts.includeArchivedOneOffContext) {
+    var archivedTotal = archived.reduce(function (sum, e) { return sum + toNum(e && e.amount); }, 0);
+    var statementOneOffTotal = statement.reduce(function (sum, item) {
+      var reason = String((item && (item.archiveReason || item.reason)) || '').toLowerCase();
+      return sum + (reason.indexOf('one') >= 0 ? toNum(item && item.amount) : 0);
+    }, 0);
+    archivedOneOffContext = {
+      archivedRows: archived.length,
+      archivedTotal: archivedTotal,
+      statementRows: statement.length,
+      statementOneOffTotal: statementOneOffTotal
+    };
+  }
+  var chartSeries = null;
+  if (opts.includeChartSeries) {
+    chartSeries = snapshotRows.map(function (row) {
+      return {
+        monthKey: String((row && row.monthKey) || ''),
+        netWorth: toNum(row && row.netWorth),
+        totalSaved: toNum(row && row.totalSaved),
+        totalInvestments: toNum(row && row.totalInvestments),
+        totalDebt: toNum(row && row.totalDebt),
+        assets: toNum(row && row.totalSaved) + toNum(row && row.totalInvestments),
+        figVersion: toNum(row && row.figVersion)
+      };
+    }).filter(function (row) {
+      return !!row.monthKey;
+    }).sort(function (a, b) {
+      return a.monthKey < b.monthKey ? -1 : a.monthKey > b.monthKey ? 1 : 0;
+    });
+  }
+  return {
+    netWorth: netWorth,
+    totalSaved: totalSaved,
+    totalInvestments: totalInvestments,
+    totalDebt: totalDebt,
+    leftThisMonth: leftThisMonth,
+    monthlySummary: {
+      monthKey: monthKey,
+      income: toNum(st.income),
+      monthlyExpenses: monthlyExpenses,
+      monthlyPayments: monthlyPayments,
+      previousMonthKey: previousKey,
+      hasPreviousMonthSnapshot: !!previous,
+      deltas: deltas
+    },
+    archivedOneOffContext: archivedOneOffContext,
+    chartSeries: chartSeries,
+    chartTotals: {
+      assets: totalSaved + totalInvestments,
+      debt: totalDebt,
+      netWorth: netWorth,
+      spending: monthlyExpenses,
+      payments: monthlyPayments,
+      investments: totalInvestments
+    },
+    reasonCodes: reasonCodes
+  };
+}
 function extendLastSnapshotFigures(fig) {
   return {
     totalDebt: fig.totalDebt,
