@@ -2693,6 +2693,417 @@ function geodeFinancialPosture(state, opts) {
     }
   };
 }
+
+/** Pure affordability read-model contract (shadow only). */
+function geodeAffordabilitySnapshot(state, opts) {
+  opts = opts || {};
+  var st = state && typeof state === 'object' ? state : {};
+  var reasonCodes = [];
+  function reason(code) {
+    if (code && reasonCodes.indexOf(code) < 0) reasonCodes.push(code);
+  }
+  function arr(v) {
+    return Array.isArray(v) ? v : [];
+  }
+  function monthFromInput(value) {
+    if (typeof value === 'string') {
+      if (/^\d{4}-\d{2}$/.test(value)) return value;
+      if (value.length >= 7 && /^\d{4}-\d{2}/.test(value)) return value.slice(0, 7);
+    }
+    if (value instanceof Date && !isNaN(value.getTime())) {
+      var dm = value.getMonth() + 1;
+      return value.getFullYear() + '-' + (dm < 10 ? '0' : '') + dm;
+    }
+    return '';
+  }
+  function dayFromInput(value) {
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+    if (value instanceof Date && !isNaN(value.getTime())) {
+      var m = String(value.getMonth() + 1).padStart(2, '0');
+      var d = String(value.getDate()).padStart(2, '0');
+      return value.getFullYear() + '-' + m + '-' + d;
+    }
+    return '';
+  }
+  function dayMs(day) {
+    if (!day) return 0;
+    var d = new Date(String(day).slice(0, 10) + 'T12:00:00');
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  }
+  function monthMatchesDate(day, monthKey) {
+    var d = String(day || '').slice(0, 10);
+    if (!d) return false;
+    if (!/^\d{4}-\d{2}/.test(d)) return true;
+    return d.slice(0, 7) === monthKey;
+  }
+  function expenseDate(e) {
+    return String((e && (e.date || e.dueDate)) || '').slice(0, 10);
+  }
+  function expenseMonth(e) {
+    var d = expenseDate(e);
+    return d && d.length >= 7 ? d.slice(0, 7) : '';
+  }
+  function expenseIsOneOff(e) {
+    if (!e) return false;
+    if (String(e.type || '').toLowerCase() === 'one-off') return true;
+    var rec = String(e.rec || 'no').toLowerCase();
+    return rec !== 'yes' && rec !== 'annual';
+  }
+  function expenseMonthlyAmount(e) {
+    if (!e) return 0;
+    if (e._archived === true || e._isStale === true || e.expired === true) return 0;
+    if (expenseIsOneOff(e)) {
+      var eYm = expenseMonth(e);
+      if (eYm && monthKey && eYm < monthKey) return 0;
+      if (eYm && monthKey && eYm !== monthKey) return 0;
+    }
+    return String(e.rec || '').toLowerCase() === 'annual' ? toNum(e.amount) / 12 : toNum(e.amount);
+  }
+  function paymentEffectiveStatus(p) {
+    if (!p) return '';
+    var stRaw = String(p.status || '').toLowerCase();
+    if (stRaw === 'paid' || stRaw === 'overdue') return stRaw;
+    var pDate = String(p.date || '').slice(0, 10);
+    if (stRaw === 'upcoming' && pDate && todayKey && pDate < todayKey) return 'overdue';
+    return stRaw;
+  }
+  function paymentCountsForMonth(p) {
+    if (!p) return false;
+    var status = paymentEffectiveStatus(p);
+    var rawStatus = String(p.status || '').toLowerCase();
+    if (status === 'overdue' || rawStatus === 'overdue') return true;
+    if (String(p.rec || '').toLowerCase() === 'yes') {
+      if (rawStatus === 'paid') return String(p.lastPaidYM || '') === monthKey;
+      return true;
+    }
+    if (!p.date) return true;
+    return monthMatchesDate(p.date, monthKey);
+  }
+  function paymentCountsConfirmed(p) {
+    if (!p) return false;
+    if (String(p.status || '').toLowerCase() !== 'paid') return false;
+    if (String(p.rec || '').toLowerCase() === 'yes') return String(p.lastPaidYM || '') === monthKey;
+    if (!p.date) return true;
+    return monthMatchesDate(p.date, monthKey);
+  }
+  function latestActivityAfter(ts) {
+    if (!ts) return false;
+    var log = arr(st.activityLog);
+    for (var i = 0; i < log.length; i++) {
+      if (log[i] && typeof log[i].ts === 'number' && log[i].ts > ts) return true;
+    }
+    return false;
+  }
+  function monthContextForInput() {
+    var mc = opts.monthContext && typeof opts.monthContext === 'object' ? opts.monthContext : st.monthContext;
+    if (!mc || typeof mc !== 'object' || Array.isArray(mc)) return { protect: '', worried: '', success: '', hasAny: false };
+    if (mc.ym && monthKey && String(mc.ym) !== monthKey) return { protect: '', worried: '', success: '', hasAny: false };
+    var protect = String(mc.protect || '').trim();
+    var worried = String(mc.worried || '').trim();
+    var success = String(mc.success || '').trim();
+    return {
+      ym: String(mc.ym || monthKey || ''),
+      protect: protect,
+      worried: worried,
+      success: success,
+      hasAny: !!(protect || worried || success)
+    };
+  }
+  function paymentProtectedReason(p, protectText) {
+    if (!p) return '';
+    var txtReason = geodeStage62ProtectedReasonForText(p.name || '', '', protectText);
+    if (txtReason) return txtReason;
+    if (String(p.payKind || '').toLowerCase() === 'debt' && p.debtId) {
+      var linked = geodeDebtById(st, p.debtId);
+      var minp = geodeDebtReadMinimumPayment(linked);
+      if (minp > 0 && toNum(p.amount) <= minp * 1.15) return 'debt_minimum';
+    }
+    return '';
+  }
+  function paymentAmountTowardDebtMinimum(debt, p, minp) {
+    if (!p || !debt || minp <= 0) return 0;
+    if (!paymentCountsForMonth(p)) return 0;
+    var amt = toNum(p.amount);
+    if (amt <= 0) return 0;
+    if (geodeDebtPaymentLooksLikeExtraAction(p)) return 0;
+    var did = String(debt.id || '');
+    var dname = String(debt.name || '').toLowerCase().trim();
+    if (did && String(p.debtId || '') === did) return amt;
+    var pnm = String(p.name || '').toLowerCase();
+    if (dname && pnm.indexOf(dname) >= 0 && amt >= minp * 0.85) return amt;
+    return 0;
+  }
+  function expenseAmountTowardDebtMinimum(debt, e, minp) {
+    if (!e || !debt || minp <= 0) return 0;
+    var monthly = expenseMonthlyAmount(e);
+    if (monthly <= 0) return 0;
+    var dname = String(debt.name || '').toLowerCase().trim();
+    var nm = String(e.name || '').toLowerCase();
+    if (dname && nm.indexOf(dname) >= 0 && monthly >= minp * 0.85) return monthly;
+    if (/debt\s+minimum|^min\s*payment|minimum\s*payment\b/i.test(nm) && monthly >= minp * 0.85) {
+      if (debts.length === 1 || (dname && nm.indexOf(dname) >= 0)) return monthly;
+    }
+    return 0;
+  }
+  function representedDebtMinimum(debt) {
+    var minp = geodeDebtReadMinimumPayment(debt);
+    if (minp <= 0) return 0;
+    var paySum = 0;
+    var pi;
+    for (pi = 0; pi < payments.length; pi++) {
+      paySum += paymentAmountTowardDebtMinimum(debt, payments[pi], minp);
+    }
+    var expSum = 0;
+    for (var ei = 0; ei < expenses.length; ei++) {
+      expSum += expenseAmountTowardDebtMinimum(debt, expenses[ei], minp);
+    }
+    return Math.min(minp, paySum + expSum);
+  }
+  function realityFromInput() {
+    var input = opts.realityStatus && typeof opts.realityStatus === 'object' ? opts.realityStatus : null;
+    var fallback = { hasData: false, balance: null, estimate: planRoom, gap: null, status: 'none', confidence: 'estimated', daysOld: 0, activitySinceCheck: false };
+    if (input) {
+      var inputBalance = input.balance != null ? toNum(input.balance) : input.amount != null ? toNum(input.amount) : null;
+      var inputGap = input.gap != null ? toNum(input.gap) : inputBalance != null ? inputBalance - planRoom : null;
+      return {
+        hasData: !!input.hasData,
+        balance: inputBalance,
+        estimate: input.estimate != null ? toNum(input.estimate) : planRoom,
+        gap: inputGap,
+        status: String(input.status || ''),
+        confidence: String(input.confidence || 'estimated'),
+        daysOld: toNum(input.daysOld),
+        activitySinceCheck: !!input.activitySinceCheck
+      };
+    }
+    var check = st.realityCheck && typeof st.realityCheck === 'object' ? st.realityCheck : null;
+    if (!check || String(check.ym || '') !== monthKey || check.amount == null) return fallback;
+    var balance = toNum(check.amount);
+    var gap = balance - planRoom;
+    var gapAbs = Math.abs(gap);
+    var ratio = gapAbs / Math.max(balance, 1);
+    var conf = 'high';
+    if (ratio >= 0.25) conf = 'low';
+    else if (ratio >= 0.1) conf = 'moderate';
+    var checkedAt = toNum(check.date);
+    var daysOld = checkedAt > 0 && todayTime > 0 ? Math.max(0, Math.floor((todayTime - checkedAt) / 86400000)) : 0;
+    if (daysOld > 10) conf = 'low';
+    else if (daysOld > 3 && conf === 'high') conf = 'moderate';
+    var activitySinceCheck = latestActivityAfter(checkedAt);
+    if (activitySinceCheck) {
+      if (conf === 'high') conf = 'moderate';
+      else if (conf === 'moderate') conf = 'low';
+    }
+    return {
+      hasData: true,
+      balance: balance,
+      estimate: planRoom,
+      gap: gap,
+      status: gapAbs > 50 ? (gap < 0 ? 'overstated' : 'understated') : 'aligned',
+      confidence: conf,
+      daysOld: daysOld,
+      activitySinceCheck: activitySinceCheck
+    };
+  }
+  function emotionalPostureFromSignals(realityMode) {
+    if (feeling === 'slow' || feeling === 'unsure') return 'review_first';
+    if (feeling === 'moved') return 'protect_flexibility';
+    if ((incomeType === 'irregular' && hasDependants) || (hasDependants && realityMode === 'below_plan')) return 'protect_flexibility';
+    if (realityMode === 'below_plan') return 'protect_flexibility';
+    if (String(st.planStrategy || '') === 'growth' && realityMode === 'above_plan' && (feeling === 'still' || !feeling)) return 'growth_room';
+    if (realityMode === 'aligned' && !irregularIncome && !hasDependants && (feeling === 'still' || !feeling)) return 'steady_progress';
+    return 'unknown';
+  }
+
+  var monthKey = monthFromInput(opts.monthKey) || monthFromInput(opts.today) || monthFromInput(st.monthContext && st.monthContext.ym) || monthFromInput(st.realityCheck && st.realityCheck.ym);
+  var todayKey = dayFromInput(opts.today);
+  var todayTime = dayMs(todayKey);
+  var income = toNum(st.income);
+  var incomeType = String(st.incomeType || (income > 0 ? 'stable' : 'none'));
+  var positiveIncome = st.incomeExplicitlySet === true && income > 0;
+  var irregularIncome = positiveIncome && incomeType === 'irregular';
+  var hasDependants = st.hasDependants === true;
+  var mc = monthContextForInput();
+  var feeling = String(opts.realityFeeling || '').toLowerCase();
+  if (feeling !== 'still' && feeling !== 'moved' && feeling !== 'slow' && feeling !== 'unsure') feeling = '';
+  var expenses = arr(st.expenses);
+  var payments = arr(st.payments);
+  var debts = arr(st.debts);
+
+  var monthlyExpenses = 0;
+  var protectedSpendingTotal = 0;
+  var protectedRows = 0;
+  var protectedReasons = {};
+  for (var ei = 0; ei < expenses.length; ei++) {
+    var ex = expenses[ei];
+    var exAmt = expenseMonthlyAmount(ex);
+    monthlyExpenses += exAmt;
+    if (exAmt <= 0) continue;
+    var exReason = geodeStage62ProtectedReasonForText(ex && ex.name, ex && ex.cat, mc.protect);
+    if (!exReason) continue;
+    protectedSpendingTotal += exAmt;
+    protectedRows++;
+    protectedReasons[exReason] = (protectedReasons[exReason] || 0) + 1;
+  }
+
+  var paymentOutflow = 0;
+  var confirmedPaymentOutflow = 0;
+  var scheduledCommitments = 0;
+  var completedCommitments = 0;
+  var overdueCommitments = 0;
+  var requiredMinimumScheduled = 0;
+  for (var pi = 0; pi < payments.length; pi++) {
+    var p = payments[pi];
+    var pAmt = toNum(p && p.amount);
+    if (paymentCountsForMonth(p)) paymentOutflow += pAmt;
+    if (paymentCountsConfirmed(p)) confirmedPaymentOutflow += pAmt;
+    if (!p || !paymentCountsForMonth(p) || pAmt <= 0) continue;
+    var pst = paymentEffectiveStatus(p);
+    if (pst === 'paid') completedCommitments += pAmt;
+    else if (pst === 'overdue') overdueCommitments += pAmt;
+    else scheduledCommitments += pAmt;
+    if (paymentProtectedReason(p, mc.protect) === 'debt_minimum') requiredMinimumScheduled += pAmt;
+  }
+
+  var requiredDebtMinimums = 0;
+  var representedMinimums = 0;
+  var debtMinimumAudit = [];
+  for (var di = 0; di < debts.length; di++) {
+    var debt = debts[di];
+    if (!debt) continue;
+    var minp = geodeDebtReadMinimumPayment(debt);
+    if (minp <= 0) continue;
+    var represented = representedDebtMinimum(debt);
+    var unresolved = Math.max(0, minp - represented);
+    requiredDebtMinimums += minp;
+    representedMinimums += represented;
+    if (opts.includeAuditDetails) {
+      debtMinimumAudit.push({
+        id: debt.id || null,
+        name: debt.name || '',
+        minimum: minp,
+        represented: represented,
+        unresolved: unresolved
+      });
+    }
+  }
+  var unresolvedMinimums = Math.max(0, requiredDebtMinimums - representedMinimums);
+  var planRoom = income - paymentOutflow - monthlyExpenses;
+  var confirmedRoom = income - confirmedPaymentOutflow - monthlyExpenses;
+
+  var reality = realityFromInput();
+  var realityMode = 'no_balance';
+  if (reality.hasData) {
+    if (reality.gap < -50 || reality.status === 'overstated') realityMode = 'below_plan';
+    else if (reality.gap > 50 || reality.status === 'understated') realityMode = 'above_plan';
+    else realityMode = 'aligned';
+  }
+  var emotionalPosture = emotionalPostureFromSignals(realityMode);
+
+  var breathingRoomFloor = Math.max(50, income * 0.08);
+  if (irregularIncome) breathingRoomFloor *= 1.18;
+  if (hasDependants) breathingRoomFloor *= 1.18;
+  if (protectedSpendingTotal > 0) breathingRoomFloor = Math.max(breathingRoomFloor, protectedSpendingTotal * 0.12);
+  if (feeling === 'slow' || feeling === 'unsure' || emotionalPosture === 'review_first') breathingRoomFloor *= 1.22;
+  else if (feeling === 'moved' || emotionalPosture === 'protect_flexibility') breathingRoomFloor *= 1.15;
+  breathingRoomFloor = Math.max(0, Math.round(breathingRoomFloor));
+
+  var suggestableBeforeReality = 0;
+  var suggestableRoom = 0;
+  var realityGapAdjustment = 0;
+  var postureMultiplier = 1;
+  var realityReasonCodes = [];
+  if (planRoom <= 0) {
+    reason('plan_room_negative');
+  } else {
+    suggestableBeforeReality = Math.max(0, planRoom - unresolvedMinimums - breathingRoomFloor);
+    suggestableRoom = suggestableBeforeReality;
+    if (unresolvedMinimums > 0) reason('min_not_in_cashflow');
+    if (breathingRoomFloor > 0 && suggestableBeforeReality < planRoom - unresolvedMinimums) reason('breathing_room_reserved');
+    if (protectedRows > 0) reason('protected_spending_reserved');
+    if (reality.hasData) {
+      if (realityMode === 'below_plan') {
+        realityGapAdjustment = Math.min(suggestableRoom, Math.abs(toNum(reality.gap)));
+        suggestableRoom = Math.max(0, suggestableRoom - realityGapAdjustment);
+        realityReasonCodes.push('reality_balance_below_plan');
+      } else if (realityMode === 'above_plan') {
+        realityReasonCodes.push('reality_balance_above_plan');
+      } else {
+        realityReasonCodes.push('reality_aligned');
+      }
+      if (reality.activitySinceCheck) realityReasonCodes.push('activity_since_reality_check');
+      if (typeof reality.daysOld === 'number' && reality.daysOld > 7) realityReasonCodes.push('reality_check_older_than_week');
+    } else {
+      realityReasonCodes.push('no_reality_balance');
+    }
+    if (feeling === 'slow' || emotionalPosture === 'review_first') postureMultiplier = Math.min(postureMultiplier, 0.62);
+    if (feeling === 'unsure') postureMultiplier = Math.min(postureMultiplier, 0.72);
+    if (feeling === 'moved' || emotionalPosture === 'protect_flexibility') postureMultiplier = Math.min(postureMultiplier, 0.78);
+    if (mc.worried) postureMultiplier = Math.min(postureMultiplier, 0.78);
+    if (mc.protect) postureMultiplier = Math.min(postureMultiplier, 0.86);
+    if (postureMultiplier < 1) {
+      suggestableRoom = Math.floor(suggestableRoom * postureMultiplier);
+      realityReasonCodes.push('soft_recovery_pace');
+    }
+    for (var ri = 0; ri < realityReasonCodes.length; ri++) reason(realityReasonCodes[ri]);
+  }
+  if (!positiveIncome) reason('no_income');
+
+  var confidence = 'high';
+  if (planRoom <= 0 || !positiveIncome) confidence = 'low';
+  else if (unresolvedMinimums > 0 || suggestableRoom < planRoom * 0.25 || postureMultiplier < 1) confidence = 'moderate';
+
+  return {
+    income: income,
+    monthlyExpenses: monthlyExpenses,
+    paymentOutflow: paymentOutflow,
+    confirmedPaymentOutflow: confirmedPaymentOutflow,
+    requiredDebtMinimums: requiredDebtMinimums,
+    unresolvedMinimums: unresolvedMinimums,
+    scheduledCommitments: scheduledCommitments,
+    completedCommitments: completedCommitments,
+    overdueCommitments: overdueCommitments,
+    requiredMinimumScheduled: requiredMinimumScheduled,
+    protectedSpendingTotal: protectedSpendingTotal,
+    protectedRows: protectedRows,
+    breathingRoomFloor: breathingRoomFloor,
+    realityBalance: reality.hasData ? reality.balance : null,
+    realityEstimate: reality.estimate,
+    realityGap: reality.hasData ? reality.gap : null,
+    realityMode: realityMode,
+    emotionalPosture: emotionalPosture,
+    planRoom: planRoom,
+    confirmedRoom: confirmedRoom,
+    suggestableRoom: suggestableRoom,
+    confidence: confidence,
+    reasonCodes: reasonCodes,
+    audit: opts.includeAuditDetails === true
+      ? {
+          monthKey: monthKey,
+          todayKey: todayKey,
+          positiveIncome: positiveIncome,
+          incomeType: incomeType,
+          hasDependants: hasDependants,
+          protectedReasons: protectedReasons,
+          representedDebtMinimums: representedMinimums,
+          debtMinimums: debtMinimumAudit,
+          suggestableBeforeReality: suggestableBeforeReality,
+          realityAdjustment: {
+            suggestableBeforeReality: suggestableBeforeReality,
+            suggestableAfterReality: suggestableRoom,
+            realityGapAdjustment: realityGapAdjustment,
+            postureMultiplier: postureMultiplier,
+            reasonCodes: realityReasonCodes
+          },
+          monthContext: {
+            hasProtect: !!mc.protect,
+            hasWorry: !!mc.worried,
+            hasSuccess: !!mc.success
+          }
+        }
+      : null
+  };
+}
 function extendLastSnapshotFigures(fig) {
   return {
     totalDebt: fig.totalDebt,
