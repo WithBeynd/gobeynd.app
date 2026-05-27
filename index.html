@@ -3704,6 +3704,186 @@ function toNum(v, fallback) {
   var n = Number(v);
   return isNaN(n) ? (fallback===undefined ? 0 : fallback) : n;
 }
+
+// ── PURE MONTH/TIME SCOPING UTILITIES (Stage 75C; shadow only, unwired) ──────────────
+// Contract: these helpers do not read globals, do not mutate inputs, do not touch storage/DOM/window,
+// and do not fall back to "today" unless an explicit input is provided via opts.
+function geodePureMonthKey(input) {
+  try {
+    if (typeof input === 'string') {
+      if (/^\d{4}-\d{2}$/.test(input)) return input;
+      if (/^\d{4}-\d{2}-\d{2}/.test(input)) return input.slice(0, 7);
+      return '';
+    }
+    if (input instanceof Date && !isNaN(input.getTime())) {
+      var m = input.getMonth() + 1;
+      return input.getFullYear() + '-' + (m < 10 ? '0' : '') + m;
+    }
+    if (typeof input === 'number' && isFinite(input)) {
+      var d = new Date(input);
+      if (isNaN(d.getTime())) return '';
+      var mm = d.getMonth() + 1;
+      return d.getFullYear() + '-' + (mm < 10 ? '0' : '') + mm;
+    }
+  } catch (_ePm) {}
+  return '';
+}
+function geodePureDateKey(input) {
+  try {
+    if (typeof input === 'string') {
+      if (/^\d{4}-\d{2}-\d{2}/.test(input)) return input.slice(0, 10);
+      return '';
+    }
+    if (input instanceof Date && !isNaN(input.getTime())) {
+      var y = input.getFullYear();
+      var m = String(input.getMonth() + 1).padStart(2, '0');
+      var day = String(input.getDate()).padStart(2, '0');
+      return y + '-' + m + '-' + day;
+    }
+    if (typeof input === 'number' && isFinite(input)) {
+      var d = new Date(input);
+      if (isNaN(d.getTime())) return '';
+      var yy = d.getFullYear();
+      var mm = String(d.getMonth() + 1).padStart(2, '0');
+      var dd = String(d.getDate()).padStart(2, '0');
+      return yy + '-' + mm + '-' + dd;
+    }
+  } catch (_ePd) {}
+  return '';
+}
+function geodePureDateCompare(a, b) {
+  var da = geodePureDateKey(a);
+  var db = geodePureDateKey(b);
+  if (!da || !db) return null;
+  if (da === db) return 0;
+  return da < db ? -1 : 1;
+}
+function geodePureIsDateBefore(a, b) {
+  return geodePureDateCompare(a, b) === -1;
+}
+function geodePureExpenseIsOneOff(expense) {
+  if (!expense) return false;
+  if (String(expense.type || '').toLowerCase() === 'one-off') return true;
+  var rec = String(expense.rec || 'no').toLowerCase();
+  return rec !== 'yes' && rec !== 'annual';
+}
+function geodePureExpenseMonthValue(expense) {
+  var d = String((expense && (expense.date || expense.dueDate)) || '').slice(0, 10);
+  if (!d || d.length < 7) return '';
+  return /^\d{4}-\d{2}/.test(d) ? d.slice(0, 7) : '';
+}
+function geodePureExpenseMonthlyAmount(expense, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var monthKey = geodePureMonthKey(opts.monthKey);
+  if (!expense) return 0;
+  if (expense._archived === true || expense._isStale === true || expense.expired === true) return 0;
+  var rec = String(expense.rec || 'no').toLowerCase();
+  var amt = toNum(expense.amount);
+  if (amt <= 0) return 0;
+  if (geodePureExpenseIsOneOff(expense)) {
+    var eYm = geodePureExpenseMonthValue(expense);
+    if (!eYm) return 0;
+    if (monthKey && eYm !== monthKey) return 0;
+    if (monthKey && eYm < monthKey) return 0;
+  }
+  if (rec === 'annual') return amt / 12;
+  return amt;
+}
+function geodePurePaymentEffectiveStatus(payment, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  if (!payment) return '';
+  var st = String(payment.status || '').toLowerCase();
+  if (st === 'paid' || st === 'overdue') return st;
+  if (st === 'upcoming' && payment.date) {
+    var todayKey = geodePureDateKey(opts.today);
+    var d = geodePureDateKey(payment.date);
+    if (todayKey && d && d < todayKey) return 'overdue';
+  }
+  return st;
+}
+function geodePurePaymentCountsForMonth(payment, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var monthKey = geodePureMonthKey(opts.monthKey);
+  var todayKey = geodePureDateKey(opts.today);
+  if (!payment) return false;
+  var st = geodePurePaymentEffectiveStatus(payment, opts);
+  if (st === 'overdue') return true;
+  if (String(payment.status || '').toLowerCase() === 'overdue') return true;
+  var rec = String(payment.rec || '').toLowerCase();
+  if (rec === 'yes') {
+    if (String(payment.status || '').toLowerCase() === 'paid') return String(payment.lastPaidYM || '') === monthKey;
+    return true;
+  }
+  if (!payment.date) return true;
+  var d = geodePureDateKey(payment.date);
+  if (!d) return true; // fail-open like legacy Date parsing paths
+  if (todayKey && d < todayKey) return true; // past-due one-time rows still count
+  if (!monthKey) return false;
+  return d.slice(0, 7) === monthKey;
+}
+function geodePurePaymentAmountForMonth(payment, opts) {
+  return geodePurePaymentCountsForMonth(payment, opts) ? Math.max(0, toNum(payment && payment.amount)) : 0;
+}
+function geodePurePaymentConfirmedAmountForMonth(payment, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var monthKey = geodePureMonthKey(opts.monthKey);
+  if (!payment) return 0;
+  var st = String(payment.status || '').toLowerCase();
+  if (!(st === 'paid' || st === 'done' || st === 'completed')) return 0;
+  var rec = String(payment.rec || '').toLowerCase();
+  if (rec === 'yes') return String(payment.lastPaidYM || '') === monthKey ? Math.max(0, toNum(payment.amount)) : 0;
+  if (!payment.date) return Math.max(0, toNum(payment.amount));
+  var d = geodePureDateKey(payment.date);
+  if (!d) return Math.max(0, toNum(payment.amount)); // fail-open on malformed dates
+  if (!monthKey) return 0;
+  return d.slice(0, 7) === monthKey ? Math.max(0, toNum(payment.amount)) : 0;
+}
+function geodePureSumMonthlyExpenses(state, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  var ex = Array.isArray(state.expenses) ? state.expenses : [];
+  var s = 0;
+  for (var i = 0; i < ex.length; i++) s += geodePureExpenseMonthlyAmount(ex[i], opts);
+  return s;
+}
+function geodePureSumPaymentOutflow(state, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  var pay = Array.isArray(state.payments) ? state.payments : [];
+  var s = 0;
+  for (var i = 0; i < pay.length; i++) s += geodePurePaymentAmountForMonth(pay[i], opts);
+  return s;
+}
+function geodePureSumConfirmedPaymentOutflow(state, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  var pay = Array.isArray(state.payments) ? state.payments : [];
+  var s = 0;
+  for (var i = 0; i < pay.length; i++) s += geodePurePaymentConfirmedAmountForMonth(pay[i], opts);
+  return s;
+}
+function geodePureMonthlyCashflow(state, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var reasonCodes = [];
+  var monthKey = geodePureMonthKey(opts.monthKey);
+  var todayKey = geodePureDateKey(opts.today);
+  if (!monthKey) reasonCodes.push('missing_monthKey');
+  if (!todayKey) reasonCodes.push('missing_today');
+  var income = toNum(state.income);
+  var monthlyExpenses = geodePureSumMonthlyExpenses(state, { monthKey: monthKey, today: todayKey });
+  var paymentOutflow = geodePureSumPaymentOutflow(state, { monthKey: monthKey, today: todayKey });
+  var confirmedPaymentOutflow = geodePureSumConfirmedPaymentOutflow(state, { monthKey: monthKey, today: todayKey });
+  var planRoom = income - paymentOutflow - monthlyExpenses;
+  var confirmedRoom = income - confirmedPaymentOutflow - monthlyExpenses;
+  return {
+    income: income,
+    monthlyExpenses: monthlyExpenses,
+    paymentOutflow: paymentOutflow,
+    confirmedPaymentOutflow: confirmedPaymentOutflow,
+    planRoom: planRoom,
+    confirmedRoom: confirmedRoom,
+    reasonCodes: reasonCodes
+  };
+}
+
 function calcTotals(state) {
   state = state || S;
   var debts = state.debts || [];
