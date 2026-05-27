@@ -4260,19 +4260,67 @@ function geodePlanSnapshot(state, opts) {
     monthKey: monthKey,
     today: todayKey,
     steps: outSteps,
+    firstIncompleteStep: null,
+    priorityStep: null,
     planSignature: planSignature,
-    sourceSignals: {
+    totals: null,
+    progress: null,
+    affordability: afford
+      ? Object.assign({}, afford, { _source: 'opts' })
+      : { suggestableRoom: toNum(suggestableRoom), _source: 'cashflow', monthKey: monthKey, today: todayKey },
+    posture: null,
+    memoryModifiers: mm
+      ? {
+          debtExtraMultiplier: debtMult,
+          goalRecoveryMultiplier: goalMult,
+          investmentMultiplier: invMult,
+          bufferPreference: bufferPref,
+          reasonCodes: Array.isArray(mm.reasonCodes) ? mm.reasonCodes.slice(0, 12) : [],
+          confidence: typeof mm.confidence === 'string' ? String(mm.confidence) : 'unknown'
+        }
+      : null,
+    sequencing: {
       strategy: strategy,
-      isIrregular: isIrregular,
-      hasDependants: hasDeps,
+      ratios: Object.assign({}, stratCfg),
+      budget: {
+        suggestableRoom: toNum(suggestableRoom),
+        initialBudget: toNum(suggestableRoom),
+        remainingBudget: toNum(budget)
+      }
+    },
+    caps: {
+      floors: { debt: 50, goal: 20, invest: 50, buffer: 25 }
+    },
+    sourceSignals: {
+      usedMonthKey: !!monthKey,
+      usedToday: !!todayKey,
       usedAffordability: !!afford,
       usedCashflowFallback: !afford,
       usedMemoryModifiers: !!mm,
+      strategy: strategy,
+      isIrregular: isIrregular,
+      hasDependants: hasDeps,
       hasDebts: debts.length > 0,
       hasGoals: goals.length > 0,
       hasInvestments: investments.length > 0
     },
-    reasonCodes: reasonCodes
+    reasonCodes: reasonCodes.slice(),
+    audit: opts.audit === true ? {
+      shadowOnly: true,
+      limitations: [
+        'no_progress',
+        'no_first_incomplete_step',
+        'no_priority_step',
+        'no_computeAffordabilityContext',
+        'no_memory_modifiers_derivation',
+        'goal_logic_simplified',
+        'buffer_logic_simplified'
+      ],
+      inputs: {
+        monthKey: monthKey,
+        today: todayKey
+      }
+    } : null
   };
 }
 
