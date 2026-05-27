@@ -4036,6 +4036,246 @@ function geodePurePlanSignatureFromSteps(steps, state, opts) {
   return parts.join('|');
 }
 
+// ── PURE PLAN SNAPSHOT (Stage 76B; minimal core; shadow only, unwired) ──────────────
+// Contract: deterministic from explicit inputs only; no globals, no hidden time, no storage/DOM/window, no mutation.
+// This is a decision-model core only: structured steps + signature; no progress / first-incomplete / UI copy.
+function geodePlanSnapshot(state, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  opts = opts && typeof opts === 'object' ? opts : {};
+
+  var reasonCodes = [];
+  var monthKey = geodePureMonthKey(opts.monthKey);
+  var todayKey = geodePureDateKey(opts.today);
+  if (!monthKey) reasonCodes.push('missing_monthKey');
+  if (!todayKey) reasonCodes.push('missing_today');
+
+  var strategy = String(opts.strategy || state.planStrategy || 'balanced');
+  var stratCfg = getStrategyConfig(strategy);
+
+  // Prefer explicit inputs from opts; fallback to pure derivations only.
+  var cashflow = opts.cashflow && typeof opts.cashflow === 'object'
+    ? opts.cashflow
+    : geodePureMonthlyCashflow(state, { monthKey: monthKey, today: todayKey });
+  var afford = opts.affordability && typeof opts.affordability === 'object' ? opts.affordability : null;
+  var suggestableRoom =
+    afford && typeof afford.suggestableRoom === 'number' && isFinite(afford.suggestableRoom)
+      ? afford.suggestableRoom
+      : cashflow && typeof cashflow.planRoom === 'number'
+        ? cashflow.planRoom
+        : 0;
+  if (!afford) reasonCodes.push('affordability_fallback_cashflow');
+
+  // Memory modifiers must be explicit (do not call memory profile/modifiers here).
+  var mm = opts.memoryModifiers && typeof opts.memoryModifiers === 'object' ? opts.memoryModifiers : null;
+  if (!mm) reasonCodes.push('memory_modifiers_missing_default_1x');
+  var debtMult = mm && isFinite(Number(mm.debtExtraMultiplier)) ? Number(mm.debtExtraMultiplier) : 1;
+  var goalMult = mm && isFinite(Number(mm.goalRecoveryMultiplier)) ? Number(mm.goalRecoveryMultiplier) : 1;
+  var invMult = mm && isFinite(Number(mm.investmentMultiplier)) ? Number(mm.investmentMultiplier) : 1;
+  var bufferPref = mm && typeof mm.bufferPreference === 'string' ? mm.bufferPreference : 'normal';
+
+  // Lightweight “context” flags derived from explicit state only (no geodeCtx()).
+  var incomeType = String(state.incomeType || 'stable');
+  var isIrregular = incomeType === 'irregular';
+  var hasDeps = !!state.hasDependants;
+  if (isIrregular) {
+    stratCfg = {
+      debtRatio: Math.min(stratCfg.debtRatio, 0.35),
+      goalRatio: stratCfg.goalRatio,
+      investRatio: Math.max(stratCfg.investRatio - 0.2, 0.3),
+      emergencyCapRatio: Math.min(stratCfg.emergencyCapRatio + 0.2, 0.8)
+    };
+  }
+  if (hasDeps) {
+    stratCfg = {
+      debtRatio: stratCfg.debtRatio,
+      goalRatio: stratCfg.goalRatio,
+      investRatio: Math.max(stratCfg.investRatio - 0.15, 0.3),
+      emergencyCapRatio: Math.max(stratCfg.emergencyCapRatio, 0.7)
+    };
+  }
+
+  var debts = Array.isArray(state.debts) ? state.debts : [];
+  var goals = Array.isArray(state.goals) ? state.goals : [];
+  var investments = Array.isArray(state.investments) ? state.investments : [];
+
+  var budget = Math.max(0, toNum(suggestableRoom));
+  var steps = [];
+
+  function pushStep(rawStep) {
+    if (!rawStep || typeof rawStep.amount !== 'number') return;
+    if (!(rawStep.amount > 0)) return;
+    steps.push(rawStep);
+  }
+  function roundAmt(x) {
+    return Math.max(0, Math.round(toNum(x)));
+  }
+
+  // Step: high-interest debt extra (APR > 10)
+  var worstDebt = selectWorstHighAprDebt(debts, 10);
+  if (worstDebt && budget > 50) {
+    var overpay0 = Math.min(roundAmt(budget * stratCfg.debtRatio), 500, roundAmt(worstDebt.balance));
+    overpay0 = Math.max(overpay0, 50);
+    var overpay = geodeFinancialMemorySoftenedAmount(overpay0, debtMult, 50, false);
+    if (overpay > 0 && budget >= overpay) {
+      pushStep({
+        priority: 1,
+        label: 'Reduce high‑interest ' + String(worstDebt.name || 'debt'),
+        amount: overpay,
+        originalAmount: overpay0,
+        memorySoftened: overpay < overpay0,
+        memoryReasonCodes: mm && Array.isArray(mm.reasonCodes) ? mm.reasonCodes.slice(0, 6) : []
+      });
+      budget -= overpay;
+    }
+  }
+
+  // Step: emergency buffer (only when no emergency goal exists)
+  var hasEmergencyGoal = false;
+  for (var gi = 0; gi < goals.length; gi++) {
+    if (geodeIsEmergencyBufferGoal(goals[gi])) { hasEmergencyGoal = true; break; }
+  }
+  if (!hasEmergencyGoal && budget > 0 && steps.length < 4) {
+    var emCap = stratCfg.emergencyCapRatio;
+    if (bufferPref === 'preserve') {
+      emCap = Math.min(0.85, Math.max(emCap, emCap + 0.05));
+    }
+    var ef0 = Math.min(roundAmt(budget * emCap), budget);
+    // Growth: reserve a small slice for goals when any goal exists.
+    if (strategy === 'growth' && goals.length > 0) {
+      var reserve = Math.min(50, roundAmt(budget * 0.1));
+      ef0 = Math.min(ef0, Math.max(0, budget - reserve));
+    }
+    if (ef0 > 0) {
+      pushStep({
+        priority: 2,
+        label: 'Build your emergency fund',
+        amount: ef0,
+        originalAmount: ef0,
+        memorySoftened: false,
+        memoryReasonCodes: []
+      });
+      budget -= ef0;
+    }
+  }
+
+  // Step: moderate-interest debt (Debt-focused only, only when no high-interest step fired)
+  var hasHighDebtStep = false;
+  for (var si = 0; si < steps.length; si++) {
+    if (steps[si] && String(steps[si].label || '').indexOf('Reduce high') === 0) { hasHighDebtStep = true; break; }
+  }
+  if (strategy === 'debt' && !hasHighDebtStep && budget > 50) {
+    var moderateDebt = selectWorstDebtAboveApr(debts, 5);
+    if (moderateDebt) {
+      var mod0 = Math.min(roundAmt(budget * stratCfg.debtRatio), 300, roundAmt(moderateDebt.balance));
+      if (mod0 > 0) mod0 = Math.max(mod0, 50);
+      var mod = geodeFinancialMemorySoftenedAmount(mod0, debtMult, 50, false);
+      if (mod > 0 && budget >= mod) {
+        pushStep({
+          priority: 2,
+          label: 'Pay down ' + String(moderateDebt.name || 'debt'),
+          amount: mod,
+          originalAmount: mod0,
+          memorySoftened: mod < mod0,
+          memoryReasonCodes: mm && Array.isArray(mm.reasonCodes) ? mm.reasonCodes.slice(0, 6) : []
+        });
+        budget -= mod;
+      }
+    }
+  }
+
+  // Step: goal contribution (minimal, date-free). Prefer primary goal, else first.
+  function pickPrimaryGoal(goals0) {
+    for (var i = 0; i < goals0.length; i++) if (goals0[i] && goals0[i].isPrimary) return goals0[i];
+    for (var j = 0; j < goals0.length; j++) if (goals0[j]) return goals0[j];
+    return null;
+  }
+  var g0 = pickPrimaryGoal(goals);
+  if (g0 && budget > 20) {
+    var gTarget = toNum(g0.amount);
+    var gSaved = toNum(g0.saved);
+    var gRemaining = Math.max(0, gTarget - gSaved);
+    if (gRemaining > 0) {
+      var goal0 = Math.min(Math.max(20, roundAmt(budget * stratCfg.goalRatio)), roundAmt(gRemaining), budget);
+      var goalAmt = geodeFinancialMemorySoftenedAmount(goal0, goalMult, 20, false);
+      if (goalAmt > 0 && budget >= goalAmt) {
+        pushStep({
+          priority: 2,
+          label: 'Catch up on ' + String(g0.name || 'goal'),
+          amount: goalAmt,
+          originalAmount: goal0,
+          memorySoftened: goalAmt < goal0,
+          memoryReasonCodes: mm && Array.isArray(mm.reasonCodes) ? mm.reasonCodes.slice(0, 6) : []
+        });
+        budget -= goalAmt;
+      }
+    }
+  }
+
+  // Step: invest remainder
+  if (budget > 50) {
+    var inv0 = roundAmt(budget * stratCfg.investRatio);
+    var invAmt = geodeFinancialMemorySoftenedAmount(inv0, invMult, 50, true);
+    if (invAmt > 0 && budget >= invAmt) {
+      pushStep({
+        priority: 3,
+        label: 'Invest what remains',
+        amount: invAmt,
+        originalAmount: inv0,
+        memorySoftened: invAmt < inv0,
+        memoryReasonCodes: mm && Array.isArray(mm.reasonCodes) ? mm.reasonCodes.slice(0, 6) : []
+      });
+      budget -= invAmt;
+    }
+  }
+
+  // Stable ordering: by priority then insertion order. Attach sequenceIndex and identity metadata.
+  steps.sort(function (a, b) {
+    var pa = a && a.priority != null ? a.priority : 9;
+    var pb = b && b.priority != null ? b.priority : 9;
+    if (pa !== pb) return pa - pb;
+    return 0;
+  });
+  var outSteps = [];
+  for (var k = 0; k < steps.length; k++) {
+    var st = steps[k];
+    if (!st) continue;
+    var ident = geodePurePlanStepIdentity(st, state, { monthKey: monthKey });
+    outSteps.push(Object.assign({}, st, {
+      sequenceIndex: k,
+      stepId: ident.stepId,
+      family: ident.family,
+      kind: ident.kind,
+      targetKind: ident.targetKind,
+      targetId: ident.targetId,
+      targetName: ident.targetName,
+      signatureAmount: ident.signatureAmount,
+      matchMethod: ident.matchMethod,
+      confidence: ident.confidence
+    }));
+  }
+  var planSignature = geodePurePlanSignatureFromSteps(outSteps, state, { monthKey: monthKey });
+
+  return {
+    version: 1,
+    monthKey: monthKey,
+    today: todayKey,
+    steps: outSteps,
+    planSignature: planSignature,
+    sourceSignals: {
+      strategy: strategy,
+      isIrregular: isIrregular,
+      hasDependants: hasDeps,
+      usedAffordability: !!afford,
+      usedCashflowFallback: !afford,
+      usedMemoryModifiers: !!mm,
+      hasDebts: debts.length > 0,
+      hasGoals: goals.length > 0,
+      hasInvestments: investments.length > 0
+    },
+    reasonCodes: reasonCodes
+  };
+}
+
 function calcTotals(state) {
   state = state || S;
   var debts = state.debts || [];
