@@ -12965,6 +12965,1218 @@ function geodeOrchestrationSnapshot(state) {
 }
 
 /**
+ * Pure shadow orchestration snapshot v2 (Stage 73). Parity-only — does not render, persist,
+ * mutate state, read globals, or call impure Home orchestration helpers.
+ * Compose via geodeDashboardSnapshot, geodeFinancialPosture, geodeAffordabilitySnapshot + opts.
+ */
+function geodeOrchestrationSnapshotV2(state, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var st = state && typeof state === 'object' ? state : {};
+  var reasonCodes = [];
+  var suppressions = [];
+  var dedupeDecisions = [];
+
+  function pushReason(code) {
+    if (code && reasonCodes.indexOf(code) < 0) reasonCodes.push(code);
+  }
+  function pushSuppression(surface, reason, blockedBy) {
+    suppressions.push({ surface: surface || '', reason: reason || '', blockedBy: blockedBy || '' });
+  }
+  function pushDedupe(kept, dropped, reason, detail) {
+    dedupeDecisions.push({
+      kept: kept || '',
+      dropped: dropped || '',
+      reason: reason || '',
+      detail: detail || ''
+    });
+  }
+  function arr(v) {
+    return Array.isArray(v) ? v : [];
+  }
+  function monthFromInput(value) {
+    if (typeof value === 'string') {
+      if (/^\d{4}-\d{2}$/.test(value)) return value;
+      if (value.length >= 7 && /^\d{4}-\d{2}/.test(value)) return value.slice(0, 7);
+    }
+    if (value instanceof Date && !isNaN(value.getTime())) return getMonthKey(value);
+    return '';
+  }
+  function dayFromInput(value) {
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+    if (value instanceof Date && !isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+    return '';
+  }
+  function v2DatePast(isoDate, todayKey) {
+    var d = String(isoDate || '').slice(0, 10);
+    return !!(d && todayKey && d < todayKey);
+  }
+  function v2PaymentIsContribution(p) {
+    if (!p) return false;
+    var kind = String(p.payKind || '').toLowerCase();
+    return (
+      kind === 'goal' ||
+      kind === 'invest' ||
+      kind === 'debt' ||
+      !!(p.goalId || p.investId || p.debtId)
+    );
+  }
+  function v2HasPastDueUnconfirmedContributions(st0, todayKey) {
+    if (!todayKey) return false;
+    var list = arr(st0.payments);
+    var i, p, d;
+    for (i = 0; i < list.length; i++) {
+      p = list[i];
+      if (!p || !p.date) continue;
+      if (String(p.status || '').toLowerCase() === 'paid') continue;
+      if (!v2PaymentIsContribution(p)) continue;
+      d = String(p.date).slice(0, 10);
+      if (d && d < todayKey) return true;
+    }
+    return false;
+  }
+  function v2HasScheduledContributionsNeedingReview(st0, todayKey, monthKey) {
+    if (!todayKey || !monthKey) return false;
+    var list = arr(st0.payments);
+    var i, p, d, stPay;
+    for (i = 0; i < list.length; i++) {
+      p = list[i];
+      if (!p) continue;
+      stPay = String(p.status || '').toLowerCase();
+      if (stPay === 'paid' || stPay === 'done' || stPay === 'completed') continue;
+      if (String(p.rec || '').toLowerCase() !== 'yes') continue;
+      if (!p.date) continue;
+      d = String(p.date).slice(0, 10);
+      if (d.slice(0, 7) !== monthKey) continue;
+      if (!v2PaymentIsContribution(p)) continue;
+      if (d < todayKey) continue;
+      return true;
+    }
+    return false;
+  }
+  function v2ActivityDayFromTs(ts) {
+    try {
+      if (typeof ts !== 'number' || !isFinite(ts) || ts <= 0) return '';
+      var d = new Date(ts);
+      if (isNaN(d.getTime())) return '';
+      var y = d.getFullYear();
+      var m = String(d.getMonth() + 1).padStart(2, '0');
+      var day = String(d.getDate()).padStart(2, '0');
+      return y + '-' + m + '-' + day;
+    } catch (_eV2ActDay) {
+      return '';
+    }
+  }
+  function v2DayMs(day) {
+    if (!day) return 0;
+    try {
+      var d = new Date(String(day).slice(0, 10) + 'T12:00:00');
+      return isNaN(d.getTime()) ? 0 : d.getTime();
+    } catch (_eV2DayMs) {
+      return 0;
+    }
+  }
+  function v2ConsecutiveActiveWeeks(st0, todayKey, nowMs) {
+    var log = arr(st0.activityLog);
+    if (!log.length) return 0;
+    var MS_WEEK = 7 * 86400000;
+    var anchorMs = todayKey ? v2DayMs(todayKey) : nowMs > 0 ? nowMs : 0;
+    if (!anchorMs) return 0;
+    var anchor = new Date(anchorMs);
+    var dow = anchor.getDay();
+    var mondayMs = new Date(
+      anchor.getFullYear(),
+      anchor.getMonth(),
+      anchor.getDate() - ((dow + 6) % 7)
+    ).getTime();
+    var streak = 0;
+    var w, i, e;
+    for (w = 0; w < 10; w++) {
+      var wStart = mondayMs - w * MS_WEEK;
+      var wEnd = wStart + MS_WEEK;
+      var found = false;
+      for (i = 0; i < log.length; i++) {
+        e = log[i];
+        if (e && typeof e.ts === 'number' && e.ts >= wStart && e.ts < wEnd) {
+          found = true;
+          break;
+        }
+      }
+      if (found) streak++;
+      else if (w > 0) break;
+    }
+    return streak >= 2 ? streak : 0;
+  }
+  function v2ConsistencyFlags(st0, nowMs, todayKey) {
+    var flags = {
+      consistentWeeklyUse: false,
+      goalFollowThrough: false,
+      contributionFollowThrough: false,
+      activeDays: 0,
+      goalActions: 0,
+      contributionActions: 0,
+      activeWeeks: 0
+    };
+    var log = arr(st0.activityLog);
+    if (!log.length || !(nowMs > 0)) return flags;
+    var weekCutoff = nowMs - 7 * 86400000;
+    var followCutoff = nowMs - 21 * 86400000;
+    var days = {};
+    var i, e, type, delta, payKind, meaningful, day;
+    for (i = 0; i < log.length; i++) {
+      e = log[i];
+      if (!e || typeof e.ts !== 'number' || !isFinite(e.ts)) continue;
+      type = String(e.type || '').toLowerCase();
+      delta = toNum(e.delta);
+      payKind = String(e.payKind || '').toLowerCase();
+      meaningful =
+        type === 'income' ||
+        type === 'expense' ||
+        type === 'payment' ||
+        type === 'goal' ||
+        type === 'debt' ||
+        type === 'invest';
+      if (meaningful && e.ts >= weekCutoff) {
+        day = v2ActivityDayFromTs(e.ts);
+        if (day) days[day] = true;
+      }
+      if (e.ts < followCutoff || delta <= 0) continue;
+      if (type === 'goal' || (type === 'payment' && payKind === 'goal')) flags.goalActions++;
+      if (type === 'payment' && (payKind === 'goal' || payKind === 'debt' || payKind === 'invest')) {
+        flags.contributionActions++;
+      }
+    }
+    for (var k in days) {
+      if (Object.prototype.hasOwnProperty.call(days, k)) flags.activeDays++;
+    }
+    flags.activeWeeks = v2ConsecutiveActiveWeeks(st0, todayKey, nowMs);
+    flags.consistentWeeklyUse = flags.activeDays >= 3 || flags.activeWeeks >= 2;
+    flags.goalFollowThrough = flags.goalActions >= 2;
+    flags.contributionFollowThrough = flags.contributionActions >= 2;
+    return flags;
+  }
+  function v2NeutralDashboardSnapshot() {
+    return { leftThisMonth: 0, monthlySummary: { monthlyExpenses: 0 } };
+  }
+  function v2NeutralFinancialPosture() {
+    return { posture: 'unknown', pressureLevel: 'unknown', recommendedTone: 'calm' };
+  }
+  function v2NeutralAffordabilitySnapshot() {
+    return { emotionalPosture: 'unknown' };
+  }
+  function v2PaymentEffectiveStatus(p, todayKey) {
+    if (!p) return '';
+    var stRaw = String(p.status || '');
+    if (stRaw === 'paid' || stRaw === 'overdue') return stRaw;
+    if (stRaw === 'upcoming' && p.date && v2DatePast(p.date, todayKey)) return 'overdue';
+    return stRaw;
+  }
+  function v2HasOverdue(payments, todayKey) {
+    for (var pi = 0; pi < payments.length; pi++) {
+      var p = payments[pi];
+      if (!p) continue;
+      if (String(p.status || '') === 'paid') continue;
+      if (String(p.status || '') === 'overdue') return true;
+      if (v2PaymentEffectiveStatus(p, todayKey) === 'overdue') return true;
+      if (p.date && v2DatePast(p.date, todayKey)) return true;
+    }
+    return false;
+  }
+  function v2OverdueItems(st0, todayKey) {
+    var items = [];
+    var payments = arr(st0.payments);
+    var goals = arr(st0.goals);
+    var pi, gi, p, g, d, daysLate, remaining;
+    for (pi = 0; pi < payments.length; pi++) {
+      p = payments[pi];
+      if (!p || !p.date || String(p.status || '') === 'paid') continue;
+      if (!v2DatePast(p.date, todayKey)) continue;
+      d = String(p.date).slice(0, 10);
+      daysLate = 1;
+      if (todayKey && d) {
+        try {
+          var t0 = new Date(todayKey + 'T12:00:00').getTime();
+          var t1 = new Date(d + 'T12:00:00').getTime();
+          if (!isNaN(t0) && !isNaN(t1)) daysLate = Math.max(1, Math.round((t0 - t1) / 86400000));
+        } catch (_eOdDays) {}
+      }
+      items.push({
+        kind: 'payment',
+        name: p.name || 'Payment',
+        amount: toNum(p.amount),
+        daysLate: daysLate,
+        id: p.id,
+        debtId: p.debtId ? String(p.debtId) : ''
+      });
+    }
+    for (gi = 0; gi < goals.length; gi++) {
+      g = goals[gi];
+      if (!g || !g.targetDate) continue;
+      remaining = toNum(g.amount) - geodeGoalEffectiveSavedFromState(st0, g);
+      if (remaining <= 0) continue;
+      if (!v2DatePast(g.targetDate, todayKey)) continue;
+      d = String(g.targetDate).slice(0, 10);
+      daysLate = 1;
+      if (todayKey && d) {
+        try {
+          var tg0 = new Date(todayKey + 'T12:00:00').getTime();
+          var tg1 = new Date(d + 'T12:00:00').getTime();
+          if (!isNaN(tg0) && !isNaN(tg1)) daysLate = Math.max(1, Math.round((tg0 - tg1) / 86400000));
+        } catch (_eGDays) {}
+      }
+      items.push({
+        kind: 'goal',
+        name: g.name || 'Goal',
+        remaining: remaining,
+        daysLate: daysLate,
+        id: g.id,
+        debtId: ''
+      });
+    }
+    return items;
+  }
+  function v2IncomeIsBlank(st0) {
+    return !st0.incomeExplicitlySet;
+  }
+  function v2IsEmptyState(st0) {
+    if (!v2IncomeIsBlank(st0)) return false;
+    if (arr(st0.debts).length) return false;
+    if (arr(st0.goals).length) return false;
+    if (arr(st0.expenses).length) return false;
+    if (arr(st0.payments).length) return false;
+    if (arr(st0.investments).length) return false;
+    return true;
+  }
+  function v2IncomeContext(st0) {
+    if (!st0.incomeExplicitlySet || toNum(st0.income) <= 0) return 'NONE';
+    if (String(st0.incomeType || '') === 'irregular') return 'IRREGULAR';
+    return 'STABLE';
+  }
+  function v2HasMeaningfulUserAction(st0) {
+    if (arr(st0.debts).length) return true;
+    if (arr(st0.goals).length) return true;
+    if (arr(st0.investments).length) return true;
+    if (arr(st0.payments).length) return true;
+    return false;
+  }
+  function v2NormMaText(str) {
+    return String(str || '')
+      .toLowerCase()
+      .replace(/\u2019|\u2018/g, "'")
+      .replace(/\bwhat's\b/g, 'what is')
+      .replace(/\bwhats\b/g, 'what is')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  function v2PlanStepDebtGoalIds(step, st0) {
+    if (!step || !step.label) return { debtId: '', goalId: '' };
+    var lb = String(step.label);
+    if (lb.indexOf('Reduce high') === 0) {
+      var dn = lb.replace(/^Reduce high[\u2011\u2010\-]interest /, '').trim();
+      var dlist = arr(st0.debts);
+      for (var di = 0; di < dlist.length; di++) {
+        if (dlist[di] && String(dlist[di].name || '').trim() === dn) {
+          return { debtId: String(dlist[di].id || ''), goalId: '' };
+        }
+      }
+      return { debtId: '', goalId: '' };
+    }
+    if (lb.indexOf('Restart progress on ') === 0) {
+      var gn1 = lb.slice('Restart progress on '.length).trim();
+      var gl1 = arr(st0.goals);
+      for (var g1 = 0; g1 < gl1.length; g1++) {
+        if (gl1[g1] && String(gl1[g1].name || '').trim() === gn1) return { debtId: '', goalId: String(gl1[g1].id || '') };
+      }
+    }
+    if (lb.indexOf('Catch up on ') === 0) {
+      var gn2 = lb.slice('Catch up on '.length).trim();
+      var gl2 = arr(st0.goals);
+      for (var g2 = 0; g2 < gl2.length; g2++) {
+        if (gl2[g2] && String(gl2[g2].name || '').trim() === gn2) return { debtId: '', goalId: String(gl2[g2].id || '') };
+      }
+    }
+    return { debtId: '', goalId: '' };
+  }
+  function v2FilterOverdueForPlanStep(items, step, st0) {
+    if (!step || !items.length) return items;
+    var dg = v2PlanStepDebtGoalIds(step, st0);
+    if (!dg.debtId && !dg.goalId) return items;
+    return items.filter(function (item) {
+      if (item.kind === 'goal' && dg.goalId && String(item.id) === String(dg.goalId)) return false;
+      if (item.kind === 'payment' && dg.debtId && item.debtId && String(item.debtId) === String(dg.debtId)) {
+        return false;
+      }
+      return true;
+    });
+  }
+  function v2PeekAlignment(st0, monthKey) {
+    var a = st0.realityPlanAlignment;
+    if (!a || typeof a !== 'object') return null;
+    if (a.status !== 'approved' || a.version !== 1) return null;
+    if (String(a.ym || '') !== monthKey) return null;
+    if (!Array.isArray(a.stepAdjustments) || !a.stepAdjustments.length) return null;
+    return a;
+  }
+  function v2MonthContext(st0, monthKey) {
+    if (opts.monthContext && typeof opts.monthContext === 'object') {
+      var omc = opts.monthContext;
+      if (!omc.ym || String(omc.ym) === monthKey) return omc;
+    }
+    var mc = st0.monthContext;
+    if (!mc || typeof mc !== 'object') return null;
+    if (mc.ym && String(mc.ym) !== monthKey) return null;
+    return mc;
+  }
+  function v2RealityStatus(st0, monthKey) {
+    if (opts.realityStatus && typeof opts.realityStatus === 'object') return opts.realityStatus;
+    var rc = st0.realityCheck;
+    if (!rc || rc.ym !== monthKey) return { hasData: false, confidence: 'estimated' };
+    var actual = toNum(rc.amount);
+    var income = toNum(st0.income);
+    var expenses = arr(st0.expenses);
+    var payments = arr(st0.payments);
+    var monthlyExpenses = 0;
+    var monthlyPayments = 0;
+    var ei, payi, pay;
+    for (ei = 0; ei < expenses.length; ei++) {
+      monthlyExpenses += toNum(expenses[ei] && expenses[ei].amount);
+    }
+    for (payi = 0; payi < payments.length; payi++) {
+      pay = payments[payi];
+      if (!pay) continue;
+      if (String(pay.rec || '').toLowerCase() === 'yes') monthlyPayments += toNum(pay.amount);
+      else if (pay.date && String(pay.date).slice(0, 7) === monthKey) monthlyPayments += toNum(pay.amount);
+    }
+    var leftover = income - monthlyPayments - monthlyExpenses;
+    var gap = actual - leftover;
+    var gapAbs = Math.abs(gap);
+    var status = 'aligned';
+    if (gapAbs > 50) status = gap < 0 ? 'overstated' : 'understated';
+    var confidence = gapAbs / Math.max(actual, 1) >= 0.25 ? 'low' : gapAbs / Math.max(actual, 1) >= 0.1 ? 'moderate' : 'high';
+    var daysOld = 0;
+    if (rc.date && typeof opts.now === 'number' && isFinite(opts.now)) {
+      daysOld = Math.floor((opts.now - rc.date) / 86400000);
+    }
+    if (daysOld > 10) confidence = 'low';
+    else if (daysOld > 3 && confidence === 'high') confidence = 'moderate';
+    return { hasData: true, gap: gap, status: status, confidence: confidence, daysOld: daysOld, activitySinceCheck: false };
+  }
+  function v2CoachingPosture(fp, aff, feeling, mc) {
+    var ep = aff && aff.emotionalPosture ? aff.emotionalPosture : 'unknown';
+    var fpPosture = fp && fp.posture ? fp.posture : 'unknown';
+    if (fpPosture === 'growth_room') return { posture: 'growth_room', tone: 'encouraging' };
+    if (fpPosture === 'lapsedReview') return { posture: 'review_first', tone: 'cautious' };
+    if (ep === 'steady_progress') return { posture: 'steady_progress', tone: 'calm' };
+    if (ep === 'review_first' || fp.pressureLevel === 'critical' || fp.pressureLevel === 'high') {
+      return { posture: 'review_first', tone: 'cautious' };
+    }
+    if (ep === 'protect_flexibility' || (mc && mc.worried)) {
+      return { posture: 'protect_flexibility', tone: 'cautious' };
+    }
+    return { posture: ep || 'unknown', tone: (fp && fp.recommendedTone) || 'calm' };
+  }
+  function v2HmDuplicatesMainAction(hm, mainTitle, mainSub) {
+    if (!hm) return true;
+    var body = String(hm.body || '');
+    var title = String(hm.title || '');
+    var mainT = String(mainTitle || '');
+    var mainS = String(mainSub || '');
+    if (geodeWhySkipsGoalRepeat(mainT, body) === '') return true;
+    if (geodeWhySkipsGoalRepeat(body, mainT) === '') return true;
+    if (geodeWhySkipsGoalRepeat(mainT, title) === '') return true;
+    var mn = v2NormMaText(mainT + ' ' + mainS);
+    var bodyLo = body.toLowerCase();
+    if (mn.indexOf('buffer') >= 0 && hm.topic === 'protect_flexibility') return true;
+    if (mn.indexOf('dependant') >= 0 && body.indexOf('supports others') >= 0) return true;
+    if (
+      hm.topic === 'review_first' &&
+      (bodyLo.indexOf('slower pace') >= 0 || bodyLo.indexOf('review what has changed') >= 0) &&
+      (mn.indexOf('bring spend') >= 0 || mn.indexOf('back to plan') >= 0)
+    ) {
+      return true;
+    }
+    return false;
+  }
+  function v2PickHumanMoment(st0, ctx) {
+    if (ctx.suppressed) return null;
+    var postureObj = ctx.postureObj;
+    var posture = postureObj && postureObj.posture;
+    var tone = postureObj && postureObj.tone;
+    var feeling = ctx.feeling;
+    var rs = ctx.rs || {};
+    var gap = rs.hasData && typeof rs.gap === 'number' ? rs.gap : null;
+    var below = rs.hasData && ((gap != null && gap < -50) || rs.status === 'overstated');
+    var mc = ctx.monthCtx || {};
+    var worried = !!(mc.worried || mc.worry);
+    var cautious = tone === 'cautious' || posture === 'protect_flexibility' || posture === 'review_first';
+    if (posture === 'steady_progress' || posture === 'growth_room') {
+      if (String(st0.humanMomentConsistencyShownDay || '') === ctx.todayKey) return null;
+      var flags = v2ConsistencyFlags(st0, ctx.nowMs, ctx.todayKey);
+      if (flags.goalFollowThrough) {
+        return {
+          topic: 'consistency',
+          title: 'Good rhythm',
+          body: 'goal_follow_through',
+          tone: 'supportive',
+          source: 'consistency',
+          transient: true
+        };
+      }
+      if (flags.contributionFollowThrough) {
+        return {
+          topic: 'consistency',
+          title: 'Good rhythm',
+          body: 'contribution_follow_through',
+          tone: 'supportive',
+          source: 'consistency',
+          transient: true
+        };
+      }
+      if (flags.consistentWeeklyUse) {
+        return {
+          topic: 'consistency',
+          title: 'Good rhythm',
+          body: 'consistent_weekly_use',
+          tone: 'supportive',
+          source: 'consistency',
+          transient: true
+        };
+      }
+      return null;
+    }
+    var topic = null;
+    var bodyKey = null;
+    var source = 'context_posture';
+    if (ctx.hasDependants && posture === 'protect_flexibility') {
+      topic = 'protect_flexibility';
+      bodyKey = 'dependants';
+      source = 'dependants';
+    } else if (worried && cautious) {
+      topic = posture === 'review_first' ? 'review_first' : 'protect_flexibility';
+      bodyKey = 'month_context';
+      source = 'month_context';
+    } else if (below && feeling === 'slow') {
+      topic = 'review_first';
+      bodyKey = 'reality_gap';
+      source = 'reality_gap';
+    } else if (posture === 'review_first') {
+      topic = 'review_first';
+      bodyKey = 'default';
+      source = 'context_posture';
+    } else if (posture === 'protect_flexibility') {
+      topic = 'protect_flexibility';
+      bodyKey = 'default';
+      source = 'context_posture';
+    } else {
+      return null;
+    }
+    var hm = { topic: topic, title: 'human_moment', body: bodyKey, tone: 'cautious', source: source, transient: false };
+    if (v2HmDuplicatesMainAction(hm, ctx.mainActionTitle, ctx.mainActionSub)) return null;
+    return hm;
+  }
+  function v2MainActionIntent(kind, detail) {
+    return { kind: kind || 'none', detail: detail || '' };
+  }
+  function v2ResolveMainAction(st0, flags) {
+    var out = {
+      show: false,
+      title: '',
+      sub: '',
+      amount: null,
+      cta: '',
+      kind: 'none',
+      planStepIndex: null,
+      runIntent: v2MainActionIntent('none', ''),
+      reasonCodes: []
+    };
+    if (flags.empty) {
+      out.show = true;
+      out.title = 'Start your setup';
+      out.cta = 'Quick setup';
+      out.kind = 'setup';
+      out.runIntent = v2MainActionIntent('setup', 'quick_setup');
+      out.reasonCodes.push('empty_state');
+      return out;
+    }
+    if (flags.incomeCtx === 'NONE') {
+      out.show = true;
+      out.title = 'Set your monthly income';
+      out.cta = 'Set income';
+      out.kind = 'setup';
+      out.runIntent = v2MainActionIntent('setup', 'set_income');
+      out.reasonCodes.push('income_none');
+      return out;
+    }
+    if (flags.hasOverdue) {
+      out.show = true;
+      out.title = 'Clear overdue items first';
+      out.cta = 'Go to Money';
+      out.kind = 'overdue';
+      out.runIntent = v2MainActionIntent('money', 'payments');
+      out.reasonCodes.push('obligation_overdue');
+      return out;
+    }
+    if (flags.overBudgetPersistent && flags.plan && !flags.planHasMeaningfulStep) {
+      out.reasonCodes.push('over_budget_suppresses_empty_plan_ma');
+      return out;
+    }
+    if (!flags.hasMeaningfulExpenses && !flags.hasMeaningfulUserAction) {
+      out.show = true;
+      out.title = 'Add your spending';
+      out.cta = 'Add spending';
+      out.kind = 'setup';
+      out.runIntent = v2MainActionIntent('money', 'expenses');
+      out.reasonCodes.push('no_spending_baseline');
+      return out;
+    }
+    if (flags.plan && flags.firstIncomplete) {
+      var step = flags.firstIncomplete.step;
+      var ix = flags.firstIncomplete.index;
+      var lb = String(step.label || '');
+      out.show = true;
+      out.planStepIndex = ix;
+      out.amount = toNum(step.amount);
+      if (lb.indexOf('Reduce high') === 0) {
+        out.kind = 'debt';
+        out.title = lb;
+        out.cta = 'Schedule extra payment';
+        out.runIntent = v2MainActionIntent('money', 'schedule_debt_extra');
+      } else if (lb === 'Build your emergency fund') {
+        out.kind = 'buffer';
+        out.title = lb;
+        out.cta = 'Plan a buffer contribution';
+        out.runIntent = v2MainActionIntent('money', 'schedule_buffer');
+      } else if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
+        out.kind = 'goal';
+        out.title = lb;
+        out.cta = 'Plan a contribution';
+        out.runIntent = v2MainActionIntent('money', 'schedule_goal');
+      } else if (lb === 'Invest what remains') {
+        out.kind = 'invest';
+        out.title = lb;
+        out.cta = 'Plan a contribution';
+        out.runIntent = v2MainActionIntent('money', 'schedule_invest');
+      } else {
+        out.kind = 'plan';
+        out.title = lb || 'Review your plan';
+        out.cta = 'Review plan';
+        out.runIntent = v2MainActionIntent('plan', 'monthly');
+      }
+      out.reasonCodes.push('plan_first_incomplete_step');
+      return out;
+    }
+    if (flags.plan && flags.planHasMeaningfulStep && !flags.firstIncomplete) {
+      out.show = true;
+      out.title = 'Your monthly plan is complete';
+      out.cta = 'View plan';
+      out.kind = 'plan';
+      out.runIntent = v2MainActionIntent('plan', 'monthly');
+      out.reasonCodes.push('plan_complete');
+      return out;
+    }
+    if (!flags.plan) {
+      out.show = true;
+      out.title = 'Review your plan';
+      out.cta = 'Review plan';
+      out.kind = 'plan';
+      out.runIntent = v2MainActionIntent('plan', 'monthly');
+      out.reasonCodes.push('plan_not_injected');
+      return out;
+    }
+    out.show = true;
+    out.title = 'Review your plan';
+    out.cta = 'Review plan';
+    out.kind = 'plan';
+    out.runIntent = v2MainActionIntent('plan', 'monthly');
+    out.reasonCodes.push('plan_fallback');
+    return out;
+  }
+  function v2MainInsightKind(plan, st0) {
+    if (!plan || !plan.steps) return 'none';
+    var firstInc = geodeFirstIncompletePlanStep(plan, st0);
+    if (!firstInc || !firstInc.step) return 'none';
+    var lb = String(firstInc.step.label || '');
+    if (lb.indexOf('Reduce high') === 0) return 'debt';
+    if (lb === 'Build your emergency fund') return 'buffer';
+    if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) return 'goal';
+    if (lb === 'Invest what remains') return 'invest';
+    return 'none';
+  }
+
+  var monthKey = monthFromInput(opts.monthKey) || monthFromInput(opts.today) || '';
+  var todayKey = dayFromInput(opts.today);
+  var nowMs =
+    typeof opts.now === 'number' && isFinite(opts.now) ? opts.now : todayKey ? v2DayMs(todayKey) : 0;
+  var sessionFlags = opts.sessionFlags && typeof opts.sessionFlags === 'object' ? opts.sessionFlags : {};
+  var feeling = '';
+  if (typeof opts.realityFeeling === 'string') feeling = opts.realityFeeling;
+  var sf = sessionFlags;
+  var payments = arr(st.payments);
+  var hasOverdue = v2HasOverdue(payments, todayKey);
+  var empty = v2IsEmptyState(st);
+  var incomeCtx = v2IncomeContext(st);
+  var affordGatePending = sf.affordGatePending === true || opts.affordGatePending === true;
+  var hasExplicitSnapOpts = !!(monthKey && todayKey);
+  var dashboard;
+  var financialPosture;
+  var affordability;
+  if (hasExplicitSnapOpts) {
+    var snapOpts = {
+      monthKey: monthKey,
+      today: todayKey,
+      monthContext: v2MonthContext(st, monthKey),
+      realityFeeling: feeling,
+      realityStatus: opts.realityStatus,
+      recoveryState: opts.recoveryState,
+      affordGatePending: affordGatePending,
+      activeAlignment: opts.activeAlignment
+    };
+    dashboard = geodeDashboardSnapshot(st, snapOpts);
+    financialPosture = geodeFinancialPosture(st, snapOpts);
+    affordability = geodeAffordabilitySnapshot(st, snapOpts);
+  } else {
+    dashboard = v2NeutralDashboardSnapshot();
+    financialPosture = v2NeutralFinancialPosture();
+    affordability = v2NeutralAffordabilitySnapshot();
+  }
+  var left = toNum(dashboard.leftThisMonth);
+  var income = toNum(st.income);
+  var hasMeaningfulExpenses = toNum(dashboard.monthlySummary && dashboard.monthlySummary.monthlyExpenses) > 0;
+  var mc = v2MonthContext(st, monthKey);
+  var rs = v2RealityStatus(st, monthKey);
+  var alignmentActive = !!v2PeekAlignment(st, monthKey);
+  var subsDue = arr(opts.subsDueSoon);
+  var subsDueVisible = subsDue.length > 0;
+  var overdueItems = v2OverdueItems(st, todayKey);
+  var plan = opts.plan && typeof opts.plan === 'object' ? opts.plan : null;
+  var planSteps = plan ? arr(plan.steps) : [];
+  var planHasMeaningfulStep = false;
+  var psi;
+  for (psi = 0; psi < planSteps.length; psi++) {
+    if (planSteps[psi] && toNum(planSteps[psi].amount) > 0) {
+      planHasMeaningfulStep = true;
+      break;
+    }
+  }
+  var firstIncomplete = plan ? geodeFirstIncompletePlanStep(plan, st) : null;
+  var resolvedPlanStep = null;
+  if (!empty && incomeCtx !== 'NONE' && !hasOverdue && firstIncomplete && firstIncomplete.step) {
+    resolvedPlanStep = firstIncomplete.step;
+  }
+  overdueItems = v2FilterOverdueForPlanStep(overdueItems, resolvedPlanStep, st);
+  var needsAttentionVisible = hasOverdue && overdueItems.length > 0;
+  var overBudgetPersistent =
+    left < 0 &&
+    !!st.hasOnboarded &&
+    hasMeaningfulExpenses &&
+    sf.qsJustFinished !== true;
+  var T = PAO_PRESSURE_THRESHOLDS;
+  var pressure = 'ok';
+  if (left < T.homeStrongLeftBelow) pressure = 'strong';
+  else if (income > 0 && left < Math.max(T.homeMildMinLeftAbsolute, income * T.incomeRatioHigh)) pressure = 'mild';
+  var mainActionTitle = hasOverdue ? 'Clear overdue items first' : '';
+  var mainActionSub = '';
+  var maNorm = v2NormMaText(mainActionTitle + ' ' + mainActionSub);
+  var mainActionOverdue = maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('clear overdue') >= 0;
+  var contribReviewNeeded =
+    v2HasPastDueUnconfirmedContributions(st, todayKey) ||
+    v2HasScheduledContributionsNeedingReview(st, todayKey, monthKey);
+  var critical = needsAttentionVisible || mainActionOverdue || hasOverdue;
+  var focused = !critical && (pressure === 'strong' || left < 0);
+  var homeBand = critical ? 'critical' : focused ? 'focused' : 'open';
+  if (homeBand === 'critical') pushReason('home_band_critical');
+  else if (homeBand === 'focused') pushReason('home_band_focused');
+  if (left < 0) pushReason('cash_leftover_negative');
+  if (hasOverdue) pushReason('obligation_overdue');
+
+  var paoBand = 'open';
+  if (financialPosture.pressureLevel === 'critical' || financialPosture.posture === 'critical') {
+    paoBand = 'critical';
+  } else if (financialPosture.pressureLevel === 'high' || financialPosture.posture === 'pinched') {
+    paoBand = 'pinched';
+  } else if (financialPosture.pressureLevel === 'moderate' || financialPosture.posture === 'narrow') {
+    paoBand = 'narrow';
+  }
+  if (paoBand === 'critical') pushReason('pao_band_critical');
+  else if (paoBand === 'pinched') pushReason('pao_band_pinched');
+
+  var humanLoadLevel = 'low';
+  if (feeling === 'moved' || feeling === 'unsure' || (mc && (mc.worried || mc.worry))) humanLoadLevel = 'high';
+  else if (feeling === 'slow' || (mc && mc.protect) || !!st.hasDependants) humanLoadLevel = 'moderate';
+  if (humanLoadLevel === 'high') pushReason('human_load_high');
+
+  var decisionMode = 'none';
+  if (affordGatePending) {
+    decisionMode = 'scheduling';
+    pushReason('afford_gate_pending');
+  } else if (alignmentActive) {
+    decisionMode = 'aligning';
+    pushReason('alignment_active');
+  } else {
+    var coachingPosture = v2CoachingPosture(financialPosture, affordability, feeling, mc);
+    var reviewFirst = coachingPosture.posture === 'review_first';
+    var gapReview = rs.hasData && typeof rs.gap === 'number' && rs.gap < -50 && !alignmentActive;
+    var feelReview = feeling === 'unsure' || feeling === 'slow';
+    if (gapReview) pushReason('reality_gap');
+    if (feelReview) pushReason('human_feeling_cautious');
+    if (reviewFirst || gapReview || feelReview) {
+      decisionMode = 'review';
+      if (reviewFirst) pushReason('posture_review_first');
+    }
+  }
+
+  var loadRank = { low: 0, moderate: 1, high: 2, critical: 3 };
+  var userLoad = 'low';
+  if (homeBand === 'critical' || paoBand === 'critical') userLoad = 'critical';
+  if (loadRank[userLoad] < loadRank.critical) {
+    if (
+      homeBand === 'focused' ||
+      left < 0 ||
+      paoBand === 'pinched' ||
+      humanLoadLevel === 'high' ||
+      decisionMode === 'scheduling' ||
+      decisionMode === 'aligning'
+    ) {
+      userLoad = 'high';
+    }
+  }
+  if (loadRank[userLoad] < loadRank.high) {
+    var moderateSignal = false;
+    var rec = opts.recoveryState;
+    if (rec && rec.phase === 'emerging') moderateSignal = true;
+    else if (rec && toNum(rec.last) >= 3 && toNum(rec.current) > 0 && toNum(rec.current) <= 2) moderateSignal = true;
+    if (String(st.incomeType || '') === 'irregular') moderateSignal = true;
+    if (st.hasDependants) moderateSignal = true;
+    if (paoBand === 'narrow') moderateSignal = true;
+    if (humanLoadLevel === 'moderate') moderateSignal = true;
+    if (mc && (mc.worried || mc.worry)) moderateSignal = true;
+    if (decisionMode === 'review') moderateSignal = true;
+    if (moderateSignal) userLoad = 'moderate';
+  }
+
+  var primaryFocus = { type: 'none', label: '' };
+  if (empty) {
+    primaryFocus = { type: 'setup', label: 'Start setup' };
+    pushReason('empty_state');
+  } else if (incomeCtx === 'NONE') {
+    primaryFocus = { type: 'setup', label: 'Set income' };
+    pushReason('income_none');
+  } else if (needsAttentionVisible || mainActionOverdue || hasOverdue) {
+    primaryFocus = { type: 'overdue', label: 'Clear overdue items first' };
+  } else if (overBudgetPersistent) {
+    primaryFocus = { type: 'over_budget', label: 'Over budget' };
+  } else if (resolvedPlanStep && resolvedPlanStep.label) {
+    primaryFocus = { type: 'plan', label: String(resolvedPlanStep.label) };
+  } else {
+    var maPf = v2ResolveMainAction(st, {
+      empty: empty,
+      incomeCtx: incomeCtx,
+      hasOverdue: hasOverdue,
+      overBudgetPersistent: overBudgetPersistent,
+      hasMeaningfulExpenses: hasMeaningfulExpenses,
+      hasMeaningfulUserAction: v2HasMeaningfulUserAction(st),
+      plan: plan,
+      planHasMeaningfulStep: planHasMeaningfulStep,
+      firstIncomplete: firstIncomplete
+    });
+    if (maPf.title) primaryFocus = { type: 'main_action', label: String(maPf.title) };
+  }
+
+  var deferredItems = [];
+  var disclosureNeeded = [];
+  function pushDeferred(item) {
+    if (!item || !item.kind) return;
+    deferredItems.push(item);
+  }
+  function pushDisclosure(code, surface, copy) {
+    if (!code || !copy) return;
+    disclosureNeeded.push({ code: code, surface: surface || 'home', copy: copy });
+  }
+  if (homeBand === 'critical' && subsDueVisible) {
+    pushDeferred({
+      kind: 'subscription',
+      id: subsDue[0] && subsDue[0].id != null ? String(subsDue[0].id) : '',
+      reason: 'home_band_critical',
+      resurfaceAfter: 'band_below_critical'
+    });
+    pushReason('subscription_card_deferred');
+    pushDisclosure(
+      'defer_subscription',
+      'home_main_action',
+      'Subscription renewal can wait until overdue items are cleared.'
+    );
+  }
+  if (contribReviewNeeded && homeBand === 'critical') {
+    pushDeferred({
+      kind: 'contribution',
+      id: '',
+      reason: 'home_band_critical',
+      resurfaceAfter: 'band_below_critical'
+    });
+    pushReason('contribution_reminder_deferred');
+    pushDisclosure(
+      'defer_contribution',
+      'home_main_action',
+      'Mark contributions complete in Money if they\u2019ve been paid.'
+    );
+  }
+  if (homeBand === 'critical') {
+    pushDeferred({
+      kind: 'insight_strip',
+      id: '',
+      reason: 'home_band_critical',
+      resurfaceAfter: 'band_below_critical'
+    });
+    pushReason('insight_strip_suppressed');
+    pushSuppression('coachingStrip', 'home_band_critical', 'insight');
+  }
+
+  var hmCtx = {
+    suppressed: false,
+    hasOverdue: hasOverdue,
+    needsAttentionVisible: needsAttentionVisible,
+    subsDueVisible: subsDueVisible,
+    hasPostSetupRealityPrompt: sf.postQsRealityPrompt === true,
+    hasDependants: !!st.hasDependants,
+    postureObj: v2CoachingPosture(financialPosture, affordability, feeling, mc),
+    monthCtx: mc,
+    feeling: feeling,
+    rs: rs,
+    mainActionTitle: mainActionTitle,
+    mainActionSub: mainActionSub,
+    todayKey: todayKey,
+    nowMs: nowMs
+  };
+  if (empty) hmCtx.suppressed = true;
+  if (incomeCtx === 'NONE') hmCtx.suppressed = true;
+  if (incomeCtx !== 'NONE' && !hasMeaningfulExpenses) hmCtx.suppressed = true;
+  if (hmCtx.hasPostSetupRealityPrompt) hmCtx.suppressed = true;
+  if (hmCtx.subsDueVisible) hmCtx.suppressed = true;
+  if (hmCtx.hasOverdue) hmCtx.suppressed = true;
+  if (hmCtx.needsAttentionVisible) hmCtx.suppressed = true;
+  if (alignmentActive && opts.observeAlignmentActive !== false) hmCtx.suppressed = true;
+  if (mainActionOverdue) hmCtx.suppressed = true;
+
+  var hmSnap = hmCtx.suppressed ? null : v2PickHumanMoment(st, hmCtx);
+  if (!hmSnap && hmCtx.suppressed) {
+    pushDeferred({
+      kind: 'human_moment',
+      id: '',
+      reason: 'competing_home_priority',
+      resurfaceAfter: 'load_below_high'
+    });
+    pushReason('human_moment_suppressed');
+  }
+
+  var insightStripWouldShow = false;
+  if (typeof opts.insightStripWouldShow === 'boolean') {
+    insightStripWouldShow = opts.insightStripWouldShow;
+  }
+
+  var askBeyndMode = 'neutral';
+  var askBeyndModifiers = [];
+  function pushModifier(code) {
+    if (code && askBeyndModifiers.indexOf(code) < 0) askBeyndModifiers.push(code);
+  }
+  if (decisionMode === 'scheduling') {
+    askBeyndMode = 'pressure_test';
+  } else {
+    var feelUnsureOrSlow = feeling === 'unsure' || feeling === 'slow';
+    var materialGap = reasonCodes.indexOf('reality_gap') >= 0;
+    var staleReality = false;
+    if (!rs.hasData) staleReality = true;
+    else {
+      if (rs.confidence === 'low') staleReality = true;
+      if (typeof rs.daysOld === 'number' && rs.daysOld > 3) staleReality = true;
+      if (rs.activitySinceCheck) staleReality = true;
+    }
+    var afterActionSnap = sf.overdueCleared === true;
+    var thinPlanSnap = empty || incomeCtx === 'NONE';
+    if (!thinPlanSnap) {
+      thinPlanSnap = !planHasMeaningfulStep;
+    }
+    if (afterActionSnap) askBeyndMode = 'after_action';
+    else if (decisionMode === 'aligning' || materialGap) askBeyndMode = 'reality_mismatch';
+    else if (decisionMode === 'review' && (feelUnsureOrSlow || staleReality)) askBeyndMode = 'still_deciding';
+    else if (primaryFocus.type === 'setup' || thinPlanSnap) askBeyndMode = 'explain_plan';
+    else if (userLoad === 'critical' || userLoad === 'high') askBeyndMode = 'second_opinion';
+  }
+  if (userLoad === 'critical' || userLoad === 'high' || paoBand === 'pinched' || paoBand === 'critical') {
+    pushReason('ask_beynd_stability_first');
+    pushModifier('stability_first');
+  }
+  if (userLoad === 'critical') pushModifier('stability_first');
+  if (mc && (mc.protect || mc.worried || mc.worry)) pushModifier('protect_priority');
+
+  var mainAction = v2ResolveMainAction(st, {
+    empty: empty,
+    incomeCtx: incomeCtx,
+    hasOverdue: hasOverdue,
+    overBudgetPersistent: overBudgetPersistent,
+    hasMeaningfulExpenses: hasMeaningfulExpenses,
+    hasMeaningfulUserAction: v2HasMeaningfulUserAction(st),
+    plan: plan,
+    planHasMeaningfulStep: planHasMeaningfulStep,
+    firstIncomplete: firstIncomplete
+  });
+
+  var humanMoment = {
+    show: false,
+    topic: null,
+    title: null,
+    body: null,
+    tone: null,
+    source: null,
+    transient: false,
+    reasonCodes: []
+  };
+  if (hmSnap) {
+    humanMoment.show = true;
+    humanMoment.topic = hmSnap.topic;
+    humanMoment.title = hmSnap.title;
+    humanMoment.body = hmSnap.body;
+    humanMoment.tone = hmSnap.tone;
+    humanMoment.source = hmSnap.source;
+    humanMoment.transient = !!hmSnap.transient;
+    humanMoment.reasonCodes.push('human_moment_eligible');
+  }
+
+  var insight = {
+    show: false,
+    topic: null,
+    title: null,
+    message: null,
+    type: null,
+    slot: null,
+    reasonCodes: []
+  };
+  var coachingStripType = null;
+  if (incomeCtx !== 'NONE' && hasMeaningfulExpenses) {
+    if (homeBand === 'critical') {
+      pushSuppression('coachingStrip', 'home_band_critical', 'human_moment_and_insight');
+      pushDedupe('none', 'insight', 'home_band_critical', 'coaching_strip');
+      pushDedupe('none', 'human_moment', 'home_band_critical', 'coaching_strip');
+    } else if (humanMoment.show) {
+      coachingStripType = 'human_moment';
+      pushDedupe('human_moment', 'insight', 'coaching_strip_exclusive', '');
+      if (insightStripWouldShow) {
+        pushDedupe('human_moment', 'insight', 'human_moment_wins', 'resolver_lane');
+      }
+    } else if (insightStripWouldShow) {
+      coachingStripType = 'insight';
+      insight.show = true;
+      insight.reasonCodes.push('insight_primary');
+    }
+  }
+
+  var overBudget = {
+    show: overBudgetPersistent,
+    amountOver: overBudgetPersistent ? Math.abs(left) : 0,
+    variant: overBudgetPersistent ? 'persistent' : 'none',
+    reasonCodes: overBudgetPersistent ? ['cash_leftover_negative'] : []
+  };
+
+  var sinceLastVisit = { show: false, messageKey: null, reasonCodes: [] };
+  var prevLastSeen = toNum(st.lastSeenAt);
+  var recoveryActive = false;
+  var recSt = opts.recoveryState;
+  if (recSt && toNum(recSt.last) >= 3 && toNum(recSt.current) > 0 && toNum(recSt.current) <= 2) {
+    recoveryActive = true;
+  }
+  if (
+    prevLastSeen > 0 &&
+    !empty &&
+    !recoveryActive &&
+    sf.postQsRealityPrompt !== true &&
+    sf.qsJustFinished !== true &&
+    !hasOverdue &&
+    !overdueItems.length &&
+    !(left < 0 && sf.qsJustFinished !== true && st.hasOnboarded && hasMeaningfulExpenses) &&
+    homeBand !== 'critical'
+  ) {
+    sinceLastVisit.show = true;
+    sinceLastVisit.messageKey = 'since_last_visit_eligible';
+    sinceLastVisit.reasonCodes.push('since_last_visit_eligible');
+    pushReason('surface_since_last_visit');
+  }
+
+  var anticipatoryStrip = { show: false, bodyKey: null, wouldShowToday: false, reasonCodes: [] };
+  if (!empty && todayKey) {
+    var alreadyFirstOpen = String(st.homeFirstOpenDay || '') === todayKey;
+    var alreadyAnticipatory = String(st.homeAnticipatoryShownDay || '') === todayKey;
+    if (!alreadyFirstOpen && !alreadyAnticipatory) {
+      anticipatoryStrip.wouldShowToday = true;
+      if (hasOverdue) anticipatoryStrip.bodyKey = 'overdue';
+      else if (contribReviewNeeded) anticipatoryStrip.bodyKey = 'past_due_contrib';
+      else if (left < 0) anticipatoryStrip.bodyKey = 'under_pressure';
+      else anticipatoryStrip.bodyKey = 'default';
+      anticipatoryStrip.reasonCodes.push('anticipatory_eligible');
+    } else {
+      anticipatoryStrip.reasonCodes.push('anticipatory_already_shown_or_first_open');
+    }
+  }
+
+  var askBeyndEntry = {
+    show: true,
+    emphasis: userLoad === 'critical' || userLoad === 'high' ? 'quiet' : 'normal',
+    mode: askBeyndMode,
+    modifiers: askBeyndModifiers.slice(),
+    introKey: 'askBeynd.modes.' + askBeyndMode,
+    starterKeys: [],
+    reasonCodes: []
+  };
+  if (askBeyndEntry.emphasis === 'quiet') askBeyndEntry.reasonCodes.push('user_load_' + userLoad);
+
+  var focusGoal = { show: false, mode: 'none', goalId: null, name: null, progressPct: null, reasonCodes: [] };
+  var goals = arr(st.goals);
+  if (goals.length > 0) {
+    focusGoal.show = true;
+    var gFocus = selectPrimaryGoal(goals) || goals[0];
+    focusGoal.goalId = gFocus && gFocus.id != null ? String(gFocus.id) : null;
+    focusGoal.name = gFocus && gFocus.name ? String(gFocus.name) : null;
+    var mainKind = v2MainInsightKind(plan, st);
+    var dgFg = resolvedPlanStep ? v2PlanStepDebtGoalIds(resolvedPlanStep, st) : { goalId: '' };
+    if (mainKind === 'goal' && dgFg.goalId && gFocus && String(gFocus.id) === String(dgFg.goalId)) {
+      focusGoal.mode = 'compact';
+      focusGoal.reasonCodes.push('dedup_main_action');
+      pushDedupe('main_action', 'focus_goal', 'dedup_main_action', dgFg.goalId);
+    } else {
+      focusGoal.mode = 'full';
+      focusGoal.reasonCodes.push('goals_present');
+    }
+    pushReason('surface_focus_goal');
+  }
+
+  var suggestedActions = {
+    show: false,
+    items: [],
+    frozen: !!(st.lastSuggestedActions && st.lastSuggestedActions.length),
+    stale: false,
+    refreshReason: null,
+    reasonCodes: ['suggested_actions_not_surface_on_home_v2']
+  };
+
+  var surfaces = {
+    overBudget: { show: overBudget.show, reason: overBudget.show ? 'cash_leftover_negative' : null },
+    needsAttention: {
+      show: needsAttentionVisible,
+      reason: needsAttentionVisible ? 'obligation_overdue' : null
+    },
+    mainAction: {
+      show: !!(mainAction.show && (mainAction.title || mainAction.cta)),
+      reason: mainAction.show ? 'main_action_available' : null
+    },
+    mutedLines: [],
+    subscriptionCard: {
+      show: subsDueVisible && homeBand !== 'critical',
+      reason: subsDueVisible ? (homeBand === 'critical' ? 'deferred_critical' : 'subs_due') : null
+    },
+    coachingStrip: {
+      show: !!coachingStripType,
+      type: coachingStripType,
+      reason: coachingStripType
+        ? coachingStripType === 'human_moment'
+          ? 'human_moment_eligible'
+          : 'insight_primary'
+        : homeBand === 'critical'
+          ? 'home_band_critical'
+          : null
+    },
+    metaLine: {
+      show: homeBand === 'focused' && !insightStripWouldShow && !humanMoment.show,
+      text:
+        homeBand === 'focused' && !insightStripWouldShow && !humanMoment.show
+          ? 'Keeping Home focused on what needs you first.'
+          : null,
+      reason: homeBand === 'focused' && !insightStripWouldShow && !humanMoment.show ? 'home_focused_quiet' : null
+    },
+    askBeynd: {
+      show: true,
+      emphasis: askBeyndEntry.emphasis,
+      reason: askBeyndEntry.reasonCodes[0] || null
+    },
+    shortcuts: { show: true, reason: null },
+    focusGoal: {
+      show: focusGoal.show,
+      mode: focusGoal.mode,
+      reason: focusGoal.reasonCodes[0] || null
+    },
+    sinceLastVisit: {
+      show: sinceLastVisit.show,
+      reason: sinceLastVisit.show ? 'since_last_visit_eligible' : null
+    },
+    decorativeFooters: { show: false, reason: null }
+  };
+  var showDecor = false;
+  if (!empty && income > 0 && !hasOverdue && left >= 0) {
+    var streakCount = typeof sf.streakCount === 'number' ? sf.streakCount : 0;
+    if (!(left > income * 0.2 && streakCount >= 5)) showDecor = true;
+  }
+  if (showDecor && homeBand !== 'critical' && homeBand !== 'focused') {
+    surfaces.decorativeFooters.show = true;
+    surfaces.decorativeFooters.reason = 'message_eligible';
+  } else if (homeBand === 'critical' || homeBand === 'focused') {
+    surfaces.decorativeFooters.reason = 'home_band_load';
+  }
+
+  if (homeBand === 'critical' && subsDueVisible) {
+    surfaces.mutedLines.push({
+      text: 'Subscription renewal can wait until overdue items are cleared.',
+      onClickRoute: null,
+      kind: 'subscription',
+      reason: 'home_band_critical'
+    });
+  }
+  if (homeBand === 'critical' && contribReviewNeeded) {
+    surfaces.mutedLines.push({
+      text: 'Mark contributions complete in Money if they\u2019ve been paid.',
+      onClickRoute: "msub='payments';goTab('money')",
+      kind: 'contribution',
+      reason: 'home_band_critical'
+    });
+  }
+
+  return {
+    version: 2,
+    homeBand: homeBand,
+    userLoad: userLoad,
+    decisionMode: decisionMode,
+    primaryFocus: primaryFocus,
+    deferredItems: deferredItems,
+    disclosureNeeded: disclosureNeeded,
+    askBeyndMode: askBeyndMode,
+    askBeyndModifiers: askBeyndModifiers,
+    reasonCodes: reasonCodes,
+    insightStripWouldShow: insightStripWouldShow,
+    mainAction: mainAction,
+    humanMoment: humanMoment,
+    insight: insight,
+    focusGoal: focusGoal,
+    suggestedActions: suggestedActions,
+    overBudget: overBudget,
+    sinceLastVisit: sinceLastVisit,
+    anticipatoryStrip: anticipatoryStrip,
+    askBeyndEntry: askBeyndEntry,
+    surfaces: surfaces,
+    suppressions: suppressions,
+    dedupeDecisions: dedupeDecisions,
+    sourceSignals: {
+      dashboard: dashboard,
+      financialPosture: financialPosture,
+      affordability: affordability,
+      pressureBand: paoBand,
+      humanLoadLevel: humanLoadLevel,
+      leftThisMonth: left,
+      incomeContext: incomeCtx,
+      hasOverdue: hasOverdue,
+      alignmentActive: alignmentActive,
+      planInjected: !!plan
+    },
+    audit: opts.audit === true ? { monthKey: monthKey, todayKey: todayKey, empty: empty } : undefined
+  };
+}
+
+/**
  * Read-only deferred queue snapshot (Stage 59C). Instrumentation only — does not mutate state,
  * affect plan math, or change Home render output. Centralises "not now, still reachable" decisions.
  */
