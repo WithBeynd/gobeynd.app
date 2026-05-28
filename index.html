@@ -6792,6 +6792,426 @@ function geodeSuggestedPresentationSnapshot(state, suggestedActionSnapshot, adap
 
 // ── END PURE SUGGESTED PRESENTATION SNAPSHOT ──────────────────────────────────
 
+// ── PRESENTATION PARITY HARNESS (Stage 80B-A; dev-gated diagnostics only; shadow, unwired) ──
+// Compares production presentation overlay helpers vs geodeSuggestedPresentationSnapshot.
+// Surgically fixtures/restores global S fields used by overlay helpers; no Home prep or window assign.
+
+var GEODE_PRESENTATION_PARITY_S_KEYS = [
+  'income',
+  'incomeExplicitlySet',
+  'incomeType',
+  'incomeTypeUserSet',
+  'hasDependants',
+  'debts',
+  'goals',
+  'expenses',
+  'payments',
+  'investments'
+];
+
+function geodeSuggestedPresentationParityDevEnabled() {
+  return geodeAdaptiveParityDevEnabled();
+}
+
+function geodePresentationParitySnapSFields() {
+  var snap = {};
+  var i, key;
+  for (i = 0; i < GEODE_PRESENTATION_PARITY_S_KEYS.length; i++) {
+    key = GEODE_PRESENTATION_PARITY_S_KEYS[i];
+    snap[key] = geodeAdaptiveParityDeepClone(S[key]);
+  }
+  return snap;
+}
+
+function geodePresentationParityRestoreSFields(snap) {
+  snap = snap || {};
+  var k;
+  for (k in snap) {
+    if (!Object.prototype.hasOwnProperty.call(snap, k)) continue;
+    S[k] = geodeAdaptiveParityDeepClone(snap[k]);
+  }
+}
+
+function geodePresentationParityApplyFixtureOntoS(state, stateFixture) {
+  var src =
+    stateFixture && typeof stateFixture === 'object' && Object.keys(stateFixture).length
+      ? stateFixture
+      : state && typeof state === 'object'
+        ? state
+        : null;
+  if (!src) return;
+  var i, key;
+  for (i = 0; i < GEODE_PRESENTATION_PARITY_S_KEYS.length; i++) {
+    key = GEODE_PRESENTATION_PARITY_S_KEYS[i];
+    if (src[key] !== undefined) {
+      S[key] = geodeAdaptiveParityDeepClone(src[key]);
+    }
+  }
+}
+
+function geodePresentationParityRowKey(a) {
+  if (!a) return '';
+  if (a.actionId != null && String(a.actionId) !== '') return String(a.actionId);
+  return [String(a.type || ''), String(a.targetId || ''), String(a.promptKind || '')].join('|');
+}
+
+/** Clone post-adaptive rows for production overlay input (production uses amount field). */
+function geodePresentationParityBridgePostAdaptiveRows(actions) {
+  var out = [];
+  var i, a, row, amt;
+  for (i = 0; i < (actions || []).length; i++) {
+    a = actions[i];
+    if (!a || !a.type) continue;
+    row = geodeAdaptiveParityDeepClone(a);
+    amt =
+      row.displayAmount != null
+        ? toNum(row.displayAmount)
+        : row.amount != null
+          ? toNum(row.amount)
+          : row.suggestedAmount != null
+            ? toNum(row.suggestedAmount)
+            : toNum(row.planAmount);
+    row.amount = amt;
+    if (row.subtitleOverride != null && String(row.subtitleOverride) !== '') {
+      row.subtitle = String(row.subtitleOverride);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/** Build adaptive-display-shaped rows for pure geodeSuggestedPresentationSnapshot input. */
+function geodePresentationParityBridgeAdaptiveDisplayRows(actions) {
+  var out = [];
+  var i, a;
+  for (i = 0; i < (actions || []).length; i++) {
+    a = actions[i];
+    if (!a) continue;
+    out.push(geodePurePresentationBridgeAdaptiveRow(geodeAdaptiveParityDeepClone(a)));
+  }
+  return out;
+}
+
+function geodePresentationParityNormalizeRow(r, source) {
+  r = r && typeof r === 'object' ? r : {};
+  source = source === 'pure' ? 'pure' : 'production';
+  var title = source === 'pure' ? r.presentationTitle : r.title;
+  var sub = source === 'pure' ? r.presentationSubtitle : r.subtitle;
+  var amt =
+    source === 'pure'
+      ? toNum(
+          r.presentationAmount != null
+            ? r.presentationAmount
+            : r.displayAmount != null
+              ? r.displayAmount
+              : r.amount
+        )
+      : toNum(r.amount);
+  var flags =
+    source === 'pure' && r.overlayFlags && typeof r.overlayFlags === 'object'
+      ? {
+          bufferReadiness: r.overlayFlags.bufferReadiness != null ? String(r.overlayFlags.bufferReadiness) : null,
+          investBehaviour: r.overlayFlags.investBehaviour != null ? String(r.overlayFlags.investBehaviour) : null,
+          isBufferContextPrompt: !!r.overlayFlags.isBufferContextPrompt,
+          promptKind: r.overlayFlags.promptKind != null ? String(r.overlayFlags.promptKind) : null
+        }
+      : {
+          bufferReadiness: r._bufferReadiness != null ? String(r._bufferReadiness) : null,
+          investBehaviour: r._investBehaviour != null ? String(r._investBehaviour) : null,
+          isBufferContextPrompt: !!r._isBufferContextPrompt,
+          promptKind: r.promptKind != null ? String(r.promptKind) : null
+        };
+  return {
+    type: String(r.type || ''),
+    title: String(title || '').trim(),
+    subtitle: String(sub || '').trim(),
+    amount: amt,
+    targetId: String(r.targetId || ''),
+    presentationKind:
+      source === 'pure'
+        ? String(r.presentationKind || (r.type === 'context_prompt' ? 'context_prompt' : 'action'))
+        : r.type === 'context_prompt'
+          ? 'context_prompt'
+          : 'action',
+    overlayFlags: flags
+  };
+}
+
+function geodePresentationParityRowsEqual(a, b) {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch (_ePresEq) {
+    return false;
+  }
+}
+
+function geodePresentationParityCompareRowLists(prodRows, pureRows) {
+  var mismatches = [];
+  var prodNorm = (prodRows || []).map(function (r) {
+    return geodePresentationParityNormalizeRow(r, 'production');
+  });
+  var pureNorm = (pureRows || []).map(function (r) {
+    return geodePresentationParityNormalizeRow(r, 'pure');
+  });
+  if (prodNorm.length !== pureNorm.length) {
+    mismatches.push({
+      field: 'actionCount',
+      production: prodNorm.length,
+      pure: pureNorm.length
+    });
+    return mismatches;
+  }
+  var i;
+  for (i = 0; i < prodNorm.length; i++) {
+    if (!geodePresentationParityRowsEqual(prodNorm[i], pureNorm[i])) {
+      mismatches.push({
+        index: i,
+        keyProduction: geodePresentationParityRowKey(prodRows[i]),
+        keyPure: geodePresentationParityRowKey(pureRows[i]),
+        production: prodNorm[i],
+        pure: pureNorm[i]
+      });
+    }
+  }
+  return mismatches;
+}
+
+/**
+ * Stage 80B-A: parity harness (production presentation overlays vs geodeSuggestedPresentationSnapshot).
+ * Does not persist, render, assign window._geodeSuggestedActions, or call Home prep / adaptive layer.
+ */
+function geodeSuggestedPresentationParityHarness(state, adaptiveDisplaySnapshot, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  state = state && typeof state === 'object' ? state : {};
+  adaptiveDisplaySnapshot =
+    adaptiveDisplaySnapshot && typeof adaptiveDisplaySnapshot === 'object' ? adaptiveDisplaySnapshot : {};
+
+  var stateFixture = opts.stateFixture && typeof opts.stateFixture === 'object' ? opts.stateFixture : null;
+  var sSnap = geodePresentationParitySnapSFields();
+  var restoredOk = false;
+  var prodActions = [];
+  var presSnap = null;
+  var rowMismatches = [];
+  var stateMismatches = [];
+  var metaMismatches = [];
+  var errors = [];
+
+  var bufferExpected =
+    opts.bufferReadinessState != null ? String(opts.bufferReadinessState) : '';
+  var investExpected =
+    opts.investmentBehaviourState != null ? String(opts.investmentBehaviourState) : '';
+
+  var srcActions =
+    opts.actions && Array.isArray(opts.actions)
+      ? opts.actions
+      : adaptiveDisplaySnapshot.actions && Array.isArray(adaptiveDisplaySnapshot.actions)
+        ? adaptiveDisplaySnapshot.actions
+        : [];
+
+  var prodInput = geodePresentationParityBridgePostAdaptiveRows(srcActions);
+
+  var suggestedActionSnapshot =
+    opts.suggestedActionSnapshot && typeof opts.suggestedActionSnapshot === 'object'
+      ? opts.suggestedActionSnapshot
+      : { version: 1, monthKey: opts.monthKey || '', today: opts.today || '' };
+
+  var presOpts = {
+    planSnapshot: opts.planSnapshot && typeof opts.planSnapshot === 'object' ? opts.planSnapshot : {},
+    bufferReadinessState: bufferExpected,
+    investmentBehaviourState: investExpected,
+    monthKey: opts.monthKey,
+    today: opts.today,
+    audit: opts.audit
+  };
+  if (opts.contextFlags && typeof opts.contextFlags === 'object') {
+    presOpts.contextFlags = opts.contextFlags;
+  }
+
+  try {
+    geodePresentationParityApplyFixtureOntoS(state, stateFixture);
+
+    if (bufferExpected) {
+      try {
+        var bufLive = geodeGetBufferReadinessState();
+        if (bufLive !== bufferExpected) {
+          stateMismatches.push({
+            field: 'bufferReadinessState',
+            live: bufLive,
+            expected: bufferExpected
+          });
+        }
+      } catch (eBuf) {
+        errors.push({
+          phase: 'buffer_readiness_live',
+          message: String(eBuf && eBuf.message ? eBuf.message : eBuf)
+        });
+      }
+    }
+
+    if (investExpected) {
+      try {
+        var invLive = geodeGetInvestmentBehaviourState();
+        if (invLive !== investExpected) {
+          stateMismatches.push({
+            field: 'investmentBehaviourState',
+            live: invLive,
+            expected: investExpected
+          });
+        }
+      } catch (eInv) {
+        errors.push({
+          phase: 'investment_behaviour_live',
+          message: String(eInv && eInv.message ? eInv.message : eInv)
+        });
+      }
+    }
+
+    try {
+      var afterOrder = geodeOrderSuggestedActionsForPriority1(geodeAdaptiveParityDeepClone(prodInput));
+      var afterContext = geodeAdjustActionsForContext(afterOrder);
+      var afterBuffer = geodeApplyBufferReadinessToSuggestedActions(afterContext);
+      prodActions = geodeApplyInvestmentBehaviourToSuggestedActions(afterBuffer);
+    } catch (eProd) {
+      errors.push({
+        phase: 'production_presentation_overlays',
+        message: String(eProd && eProd.message ? eProd.message : eProd)
+      });
+      prodActions = [];
+    }
+
+    try {
+      var adaptiveForPure = Object.assign({}, adaptiveDisplaySnapshot, {
+        version: adaptiveDisplaySnapshot.version != null ? adaptiveDisplaySnapshot.version : 1,
+        monthKey:
+          adaptiveDisplaySnapshot.monthKey != null
+            ? adaptiveDisplaySnapshot.monthKey
+            : opts.monthKey != null
+              ? opts.monthKey
+              : '',
+        today:
+          adaptiveDisplaySnapshot.today != null
+            ? adaptiveDisplaySnapshot.today
+            : opts.today != null
+              ? opts.today
+              : '',
+        actions: geodePresentationParityBridgeAdaptiveDisplayRows(srcActions)
+      });
+      presSnap = geodeSuggestedPresentationSnapshot(
+        state,
+        suggestedActionSnapshot,
+        adaptiveForPure,
+        presOpts
+      );
+    } catch (ePres) {
+      errors.push({
+        phase: 'pure_presentation_snapshot',
+        message: String(ePres && ePres.message ? ePres.message : ePres)
+      });
+      presSnap = null;
+    }
+  } finally {
+    geodePresentationParityRestoreSFields(sSnap);
+    restoredOk = true;
+    var i, key;
+    for (i = 0; i < GEODE_PRESENTATION_PARITY_S_KEYS.length; i++) {
+      key = GEODE_PRESENTATION_PARITY_S_KEYS[i];
+      if (!geodeAdaptiveParityJsonEqual(S[key], sSnap[key])) {
+        restoredOk = false;
+        break;
+      }
+    }
+  }
+
+  if (presSnap) {
+    rowMismatches = geodePresentationParityCompareRowLists(
+      prodActions,
+      presSnap.actions || []
+    );
+
+    if (bufferExpected === 'BUFFER_COMPLETE') {
+      var droppedN = presSnap.dropped && presSnap.dropped.length ? presSnap.dropped.length : 0;
+      var hadBuffer = 0;
+      var bi;
+      for (bi = 0; bi < prodInput.length; bi++) {
+        if (prodInput[bi] && prodInput[bi].type === 'buffer_contribution') hadBuffer++;
+      }
+      if (droppedN !== hadBuffer || prodActions.length !== prodInput.length - hadBuffer) {
+        metaMismatches.push({
+          field: 'buffer_complete_drop',
+          productionActionCount: prodActions.length,
+          pureDropped: droppedN,
+          inputBufferRows: hadBuffer
+        });
+      }
+    }
+
+    if (bufferExpected === 'NO_BUFFER_CONTEXT') {
+      var synN = presSnap.syntheticPrompts && presSnap.syntheticPrompts.length ? presSnap.syntheticPrompts.length : 0;
+      var promptN = 0;
+      var pi;
+      for (pi = 0; pi < (prodActions || []).length; pi++) {
+        if (prodActions[pi] && prodActions[pi].type === 'context_prompt') promptN++;
+      }
+      if (synN < 1 || promptN < 1) {
+        metaMismatches.push({
+          field: 'buffer_context_prompt',
+          productionPromptRows: promptN,
+          pureSyntheticPrompts: synN
+        });
+      }
+    }
+  }
+
+  var ok =
+    restoredOk &&
+    errors.length === 0 &&
+    stateMismatches.length === 0 &&
+    rowMismatches.length === 0 &&
+    metaMismatches.length === 0;
+
+  var report = {
+    ok: ok,
+    restoredOk: restoredOk,
+    stateMismatches: stateMismatches,
+    rowMismatches: rowMismatches,
+    metaMismatches: metaMismatches,
+    errors: errors,
+    production: {
+      actions: geodeAdaptiveParityDeepClone(prodActions)
+    },
+    pure: {
+      presentationSnapshot: presSnap
+    }
+  };
+  if (opts.audit === true) {
+    report.audit = {
+      devGate: geodeSuggestedPresentationParityDevEnabled(),
+      actionCountIn: prodInput.length,
+      actionCountProduction: prodActions.length,
+      actionCountPure: presSnap && presSnap.actions ? presSnap.actions.length : 0,
+      sFieldsSnapshotted: GEODE_PRESENTATION_PARITY_S_KEYS.slice(),
+      overlayStages: [
+        'geodeOrderSuggestedActionsForPriority1',
+        'geodeAdjustActionsForContext',
+        'geodeApplyBufferReadinessToSuggestedActions',
+        'geodeApplyInvestmentBehaviourToSuggestedActions'
+      ]
+    };
+  }
+  return report;
+}
+
+(function geodePresentationParityExposeDevTools() {
+  if (!geodeSuggestedPresentationParityDevEnabled()) return;
+  try {
+    window.geodeSuggestedPresentationParityHarness = geodeSuggestedPresentationParityHarness;
+    window.geodeSuggestedPresentationParityDevEnabled = geodeSuggestedPresentationParityDevEnabled;
+    window.geodeSuggestedPresentationSnapshot = geodeSuggestedPresentationSnapshot;
+  } catch (_ePresEx) {}
+})();
+
+// ── END PRESENTATION PARITY HARNESS ───────────────────────────────────────────
+
 function calcTotals(state) {
   state = state || S;
   var debts = state.debts || [];
