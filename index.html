@@ -6037,6 +6037,338 @@ function geodeAdaptiveDisplaySnapshot(state, suggestedActionSnapshot, adaptiveMo
   };
 }
 
+// ── ADAPTIVE PARITY HARNESS (Stage 79C-A; dev-gated diagnostics only; shadow, unwired) ──
+// Compares production applyAdaptiveLayerToSuggestedActions vs geodeAdaptiveModeSnapshot + geodeAdaptiveDisplaySnapshot.
+// Surgically injects/restores S.followthroughOutcomeHistory and S.adaptiveDisplayModeByFamily only.
+
+function geodeAdaptiveParityDevEnabled() {
+  try {
+    if (typeof location !== 'undefined') {
+      var h = String(location.hostname || '').toLowerCase();
+      if (h === 'localhost' || h === '127.0.0.1') return true;
+      var q = String(location.search || '');
+      if (q.indexOf('geode_adaptive_dev=1') >= 0 || q.indexOf('geode_adaptive_dev=true') >= 0) return true;
+    }
+    if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('geode_adaptive_dev') === '1') {
+      return true;
+    }
+  } catch (_eAdpDev) {}
+  return false;
+}
+
+function geodeAdaptiveParityDeepClone(v) {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  try {
+    return JSON.parse(JSON.stringify(v));
+  } catch (_eAdpClone) {
+    if (Array.isArray(v)) return v.slice();
+    if (v && typeof v === 'object') return Object.assign({}, v);
+    return v;
+  }
+}
+
+function geodeAdaptiveParitySnapSAdaptiveFields() {
+  return {
+    followthroughOutcomeHistory: geodeAdaptiveParityDeepClone(S.followthroughOutcomeHistory),
+    adaptiveDisplayModeByFamily: geodeAdaptiveParityDeepClone(S.adaptiveDisplayModeByFamily)
+  };
+}
+
+function geodeAdaptiveParityRestoreSAdaptiveFields(snap) {
+  snap = snap || {};
+  S.followthroughOutcomeHistory = geodeAdaptiveParityDeepClone(snap.followthroughOutcomeHistory);
+  S.adaptiveDisplayModeByFamily = geodeAdaptiveParityDeepClone(snap.adaptiveDisplayModeByFamily);
+}
+
+function geodeAdaptiveParityJsonEqual(a, b) {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch (_eAdpEq) {
+    return false;
+  }
+}
+
+function geodeAdaptiveParityRowKey(a) {
+  if (!a) return '';
+  if (a.actionId != null && String(a.actionId) !== '') return String(a.actionId);
+  return [String(a.type || ''), String(a.targetId || '')].join('|');
+}
+
+function geodeAdaptiveParityBaseAmount(a) {
+  if (!a) return 0;
+  return toNum(
+    a.suggestedAmount != null ? a.suggestedAmount : a.planAmount != null ? a.planAmount : a.amount
+  );
+}
+
+/** Bridge 78A-style or harness rows to production applyAdaptiveLayer input shape. */
+function geodeAdaptiveParityBridgeToProductionRows(actions) {
+  var out = [];
+  var i, a, row;
+  for (i = 0; i < (actions || []).length; i++) {
+    a = actions[i];
+    if (!a || !a.type) continue;
+    row = Object.assign({}, a);
+    row.amount = geodeAdaptiveParityBaseAmount(row);
+    out.push(row);
+  }
+  return out;
+}
+
+/** Ensure suggestedActionSnapshot.actions carry plan/suggested amounts for pure display snapshot. */
+function geodeAdaptiveParityNormalizeSuggestedSnapshotActions(actions) {
+  var out = [];
+  var i, a, row, base;
+  for (i = 0; i < (actions || []).length; i++) {
+    a = actions[i];
+    if (!a || !a.type) continue;
+    base = geodeAdaptiveParityBaseAmount(a);
+    row = Object.assign({}, a);
+    if (row.planAmount == null) row.planAmount = base;
+    if (row.suggestedAmount == null) row.suggestedAmount = base;
+    out.push(row);
+  }
+  return out;
+}
+
+function geodeAdaptiveParityResolveProdSubtitle(pureRow) {
+  if (!pureRow) return '';
+  var key = pureRow.adaptiveSubtitleKey != null ? String(pureRow.adaptiveSubtitleKey) : '';
+  var fallback = pureRow.subtitleOverride != null ? String(pureRow.subtitleOverride) : '';
+  if (!key) return fallback;
+  try {
+    return String(geodeCopy(key, fallback) || '').trim();
+  } catch (_eAdpSub) {
+    return fallback;
+  }
+}
+
+/**
+ * Stage 79C-A: parity harness (production adaptive layer vs pure 79A/79B snapshots).
+ * Does not persist, render, or call Home prep. Restores global S adaptive fields in finally.
+ */
+function geodeAdaptiveParityHarness(state, suggestedActionSnapshot, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  state = state && typeof state === 'object' ? state : {};
+  suggestedActionSnapshot =
+    suggestedActionSnapshot && typeof suggestedActionSnapshot === 'object' ? suggestedActionSnapshot : {};
+
+  var compareSubtitles = opts.compareSubtitles !== false;
+  var limitFamilies = opts.families && Array.isArray(opts.families) ? opts.families : null;
+  var fixture = opts.fixture && typeof opts.fixture === 'object' ? opts.fixture : {};
+  var sSnap = geodeAdaptiveParitySnapSAdaptiveFields();
+  var restoredOk = false;
+  var prodActions = [];
+  var modeSnap = null;
+  var displaySnap = null;
+  var modeMismatches = [];
+  var rowMismatches = [];
+  var errors = [];
+
+  var srcActions = opts.actions && Array.isArray(opts.actions) ? opts.actions : suggestedActionSnapshot.actions;
+  var bridgedProd = geodeAdaptiveParityBridgeToProductionRows(srcActions);
+  var pureActions = geodeAdaptiveParityNormalizeSuggestedSnapshotActions(srcActions);
+
+  var snapForPure = Object.assign({}, suggestedActionSnapshot, {
+    version: suggestedActionSnapshot.version != null ? suggestedActionSnapshot.version : 1,
+    monthKey:
+      suggestedActionSnapshot.monthKey != null
+        ? suggestedActionSnapshot.monthKey
+        : opts.monthKey != null
+          ? opts.monthKey
+          : '',
+    today:
+      suggestedActionSnapshot.today != null
+        ? suggestedActionSnapshot.today
+        : opts.today != null
+          ? opts.today
+          : '',
+    actions: pureActions
+  });
+
+  var modeOpts = Object.assign({}, opts, {
+    adaptiveDisplayModeByFamily:
+      fixture.adaptiveDisplayModeByFamily != null
+        ? geodeAdaptiveParityDeepClone(fixture.adaptiveDisplayModeByFamily)
+        : state.adaptiveDisplayModeByFamily != null
+          ? geodeAdaptiveParityDeepClone(state.adaptiveDisplayModeByFamily)
+          : sSnap.adaptiveDisplayModeByFamily
+  });
+
+  try {
+    if (fixture.followthroughOutcomeHistory != null) {
+      S.followthroughOutcomeHistory = geodeAdaptiveParityDeepClone(fixture.followthroughOutcomeHistory);
+    } else if (state.followthroughOutcomeHistory != null) {
+      S.followthroughOutcomeHistory = geodeAdaptiveParityDeepClone(state.followthroughOutcomeHistory);
+    }
+    if (fixture.adaptiveDisplayModeByFamily != null) {
+      S.adaptiveDisplayModeByFamily = geodeAdaptiveParityDeepClone(fixture.adaptiveDisplayModeByFamily);
+    } else if (state.adaptiveDisplayModeByFamily != null) {
+      S.adaptiveDisplayModeByFamily = geodeAdaptiveParityDeepClone(state.adaptiveDisplayModeByFamily);
+    }
+
+    try {
+      prodActions = applyAdaptiveLayerToSuggestedActions(geodeAdaptiveParityDeepClone(bridgedProd));
+    } catch (eProd) {
+      errors.push({ phase: 'production_apply', message: String(eProd && eProd.message ? eProd.message : eProd) });
+      prodActions = [];
+    }
+
+    try {
+      modeSnap = geodeAdaptiveModeSnapshot(state, snapForPure, modeOpts);
+    } catch (eMode) {
+      errors.push({ phase: 'pure_mode', message: String(eMode && eMode.message ? eMode.message : eMode) });
+      modeSnap = null;
+    }
+
+    try {
+      displaySnap = geodeAdaptiveDisplaySnapshot(state, snapForPure, modeSnap || {}, opts);
+    } catch (eDisp) {
+      errors.push({ phase: 'pure_display', message: String(eDisp && eDisp.message ? eDisp.message : eDisp) });
+      displaySnap = null;
+    }
+  } finally {
+    geodeAdaptiveParityRestoreSAdaptiveFields(sSnap);
+    restoredOk =
+      geodeAdaptiveParityJsonEqual(S.followthroughOutcomeHistory, sSnap.followthroughOutcomeHistory) &&
+      geodeAdaptiveParityJsonEqual(S.adaptiveDisplayModeByFamily, sSnap.adaptiveDisplayModeByFamily);
+  }
+
+  var pureByKey = {};
+  var pureList = displaySnap && Array.isArray(displaySnap.actions) ? displaySnap.actions : [];
+  var pi, prow;
+  for (pi = 0; pi < pureList.length; pi++) {
+    prow = pureList[pi];
+    if (!prow) continue;
+    pureByKey[geodeAdaptiveParityRowKey(prow)] = prow;
+  }
+
+  var prodByFam = {};
+  var famSet = {};
+  var ri, prodRow, famKey, pureRow, pureMode, prodMode;
+  for (ri = 0; ri < prodActions.length; ri++) {
+    prodRow = prodActions[ri];
+    if (!prodRow) continue;
+    famKey = followthroughFamilyFromActionType(prodRow.type);
+    if (famKey) {
+      famSet[famKey] = true;
+      prodByFam[famKey] = prodRow.adaptiveMode || 'full';
+    }
+    pureRow = pureByKey[geodeAdaptiveParityRowKey(prodRow)] || null;
+    if (!pureRow) {
+      rowMismatches.push({
+        key: geodeAdaptiveParityRowKey(prodRow),
+        field: 'row',
+        production: prodRow,
+        pure: null,
+        message: 'pure row missing for production action'
+      });
+      continue;
+    }
+    if (toNum(prodRow.amount) !== toNum(pureRow.displayAmount)) {
+      rowMismatches.push({
+        key: geodeAdaptiveParityRowKey(prodRow),
+        field: 'amount',
+        production: toNum(prodRow.amount),
+        pure: toNum(pureRow.displayAmount)
+      });
+    }
+    if (toNum(prodRow.originalAmount) !== toNum(pureRow.originalAmount)) {
+      rowMismatches.push({
+        key: geodeAdaptiveParityRowKey(prodRow),
+        field: 'originalAmount',
+        production: toNum(prodRow.originalAmount),
+        pure: toNum(pureRow.originalAmount)
+      });
+    }
+    prodMode = prodRow.adaptiveMode || 'full';
+    pureMode = pureRow.adaptiveMode || 'full';
+    if (prodMode !== pureMode) {
+      rowMismatches.push({
+        key: geodeAdaptiveParityRowKey(prodRow),
+        field: 'adaptiveMode',
+        production: prodMode,
+        pure: pureMode
+      });
+    }
+    if (compareSubtitles && prodMode === 'encouragement_only') {
+      var prodSub = String(prodRow.subtitle || '').trim();
+      var pureSub = geodeAdaptiveParityResolveProdSubtitle(pureRow);
+      if (prodSub !== pureSub) {
+        rowMismatches.push({
+          key: geodeAdaptiveParityRowKey(prodRow),
+          field: 'subtitle',
+          production: prodSub,
+          pure: pureSub,
+          subtitleKey: pureRow.adaptiveSubtitleKey || null
+        });
+      }
+    }
+  }
+
+  for (famKey in famSet) {
+    if (!Object.prototype.hasOwnProperty.call(famSet, famKey)) continue;
+    if (limitFamilies && limitFamilies.indexOf(famKey) < 0) continue;
+    prodMode = prodByFam[famKey] || 'full';
+    pureMode =
+      modeSnap &&
+      modeSnap.recommendedAdaptiveDisplayModeByFamily &&
+      modeSnap.recommendedAdaptiveDisplayModeByFamily[famKey]
+        ? modeSnap.recommendedAdaptiveDisplayModeByFamily[famKey]
+        : 'full';
+    if (prodMode !== pureMode) {
+      modeMismatches.push({
+        family: famKey,
+        production: prodMode,
+        pure: pureMode
+      });
+    }
+  }
+
+  var ok =
+    restoredOk &&
+    errors.length === 0 &&
+    modeMismatches.length === 0 &&
+    rowMismatches.length === 0;
+
+  var report = {
+    ok: ok,
+    restoredOk: restoredOk,
+    modeMismatches: modeMismatches,
+    rowMismatches: rowMismatches,
+    errors: errors,
+    production: {
+      actions: geodeAdaptiveParityDeepClone(prodActions)
+    },
+    pure: {
+      modeSnapshot: modeSnap,
+      displaySnapshot: displaySnap
+    }
+  };
+  if (opts.audit === true) {
+    report.audit = {
+      devGate: geodeAdaptiveParityDevEnabled(),
+      actionCount: bridgedProd.length,
+      familiesCompared: Object.keys(famSet),
+      sFieldsSnapshotted: ['followthroughOutcomeHistory', 'adaptiveDisplayModeByFamily']
+    };
+  }
+  return report;
+}
+
+(function geodeAdaptiveParityExposeDevTools() {
+  if (!geodeAdaptiveParityDevEnabled()) return;
+  try {
+    window.geodeAdaptiveParityHarness = geodeAdaptiveParityHarness;
+    window.geodeAdaptiveParityDevEnabled = geodeAdaptiveParityDevEnabled;
+    window.geodeAdaptiveModeSnapshot = geodeAdaptiveModeSnapshot;
+    window.geodeAdaptiveDisplaySnapshot = geodeAdaptiveDisplaySnapshot;
+  } catch (_eAdpEx) {}
+})();
+
+// ── END ADAPTIVE PARITY HARNESS ───────────────────────────────────────────────
+
 function calcTotals(state) {
   state = state || S;
   var debts = state.debts || [];
