@@ -4738,6 +4738,406 @@ function geodePlanSnapshot(state, opts) {
   };
 }
 
+// ── PURE PLAN PROGRESS SNAPSHOT (Stage 77C; shadow only, unwired) ───────────────────
+// Contract: deterministic from explicit inputs; uses planSnapshot step metadata (stepId/family/targetId), not labels.
+function geodePureFirstEmergencyGoalFromState(state) {
+  state = state && typeof state === 'object' ? state : {};
+  var list = Array.isArray(state.goals) ? state.goals : [];
+  for (var i = 0; i < list.length; i++) {
+    var g = list[i];
+    if (g && geodeIsEmergencyBufferGoal(g)) return g;
+  }
+  return null;
+}
+
+function geodePureSumConfirmedForGoalId(state, goalId, opts) {
+  if (!goalId) return 0;
+  state = state && typeof state === 'object' ? state : {};
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var sum = 0;
+  var pay = Array.isArray(state.payments) ? state.payments : [];
+  for (var i = 0; i < pay.length; i++) {
+    var p = pay[i];
+    if (!p || String(p.goalId || '') !== String(goalId)) continue;
+    sum += geodePurePaymentConfirmedAmountForMonth(p, opts);
+  }
+  return sum;
+}
+
+function geodePureSumConfirmedForInvestId(state, investId, opts) {
+  if (!investId) return 0;
+  state = state && typeof state === 'object' ? state : {};
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var sum = 0;
+  var pay = Array.isArray(state.payments) ? state.payments : [];
+  for (var i = 0; i < pay.length; i++) {
+    var p = pay[i];
+    if (!p || String(p.investId || '') !== String(investId)) continue;
+    sum += geodePurePaymentConfirmedAmountForMonth(p, opts);
+  }
+  return sum;
+}
+
+function geodePureSumBufferContributions(state, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var eg = geodePureFirstEmergencyGoalFromState(state);
+  var sum = 0;
+  var pay = Array.isArray(state.payments) ? state.payments : [];
+  for (var i = 0; i < pay.length; i++) {
+    var p = pay[i];
+    if (!p) continue;
+    var confirmed = geodePurePaymentConfirmedAmountForMonth(p, opts);
+    if (!(confirmed > 0)) continue;
+    if (eg && p.goalId && String(p.goalId) === String(eg.id)) sum += confirmed;
+    else if (geodePaymentNameLooksLikeBuffer(p.name)) sum += confirmed;
+  }
+  return sum;
+}
+
+function geodePureResolveInvestTargetId(step, state) {
+  step = step && typeof step === 'object' ? step : {};
+  state = state && typeof state === 'object' ? state : {};
+  if (step.targetId && (String(step.family || '') === 'invest' || String(step.targetKind || '') === 'investment')) {
+    return String(step.targetId);
+  }
+  var inv = Array.isArray(state.investments) ? state.investments : [];
+  if (inv[0] && inv[0].id != null) return String(inv[0].id);
+  return '';
+}
+
+/** Per-step progress from structured metadata (mirrors geodePlanStepProgress phase rules). */
+function geodePurePlanStepProgressCore(state, step, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  step = step && typeof step === 'object' ? step : {};
+  opts = opts && typeof opts === 'object' ? opts : {};
+
+  var reasonCodes = [];
+  var sug = toNum(step.amount);
+  var family = String(step.family || '');
+  var targetKind = String(step.targetKind || '');
+  var targetId = step.targetId != null ? String(step.targetId) : '';
+  var applied = 0;
+  var scheduledIntent = 0;
+  var hasScheduledIntent = false;
+  var debtExtra = null;
+  var sourceSignals = { family: family, targetKind: targetKind, targetId: targetId };
+
+  if (!family && step.label) {
+    family = geodePurePlanStepFamilyFromLabel(step.label);
+    reasonCodes.push('family_from_label_fallback');
+  }
+  if (!targetId && step.label && family !== 'unknown') {
+    var ident = geodePurePlanStepIdentity(step, state, opts);
+    targetId = ident.targetId || '';
+    targetKind = ident.targetKind || targetKind;
+    if (ident.matchMethod) sourceSignals.matchMethod = ident.matchMethod;
+  }
+
+  if (sug <= 0) {
+    return {
+      suggested: sug,
+      applied: 0,
+      scheduledIntent: 0,
+      hasScheduledIntent: false,
+      remaining: 0,
+      ratio: 0,
+      phase: 'none',
+      displayPhase: 'none',
+      debtExtra: null,
+      sourceSignals: sourceSignals,
+      reasonCodes: reasonCodes.concat(['no_suggested_amount'])
+    };
+  }
+
+  var pay = Array.isArray(state.payments) ? state.payments : [];
+  var pi;
+
+  if (family === 'debt' && targetId) {
+    applied = geodePureDebtPaidExtraProgress(state, targetId, opts);
+    for (pi = 0; pi < pay.length; pi++) {
+      var se = geodePureDebtScheduledExtraProgress(state, targetId, pay[pi], opts);
+      if (se > 0) {
+        hasScheduledIntent = true;
+        scheduledIntent += se;
+      }
+    }
+    debtExtra = {
+      paidExtra: applied,
+      scheduledExtraTotal: scheduledIntent,
+      minimumCoverage: geodePureDebtMinimumRepresentedAmount(state, targetId, opts)
+    };
+    sourceSignals.debtId = targetId;
+  } else if (family === 'buffer') {
+    applied = geodePureSumBufferContributions(state, opts);
+    var egBuf = geodePureFirstEmergencyGoalFromState(state);
+    for (pi = 0; pi < pay.length; pi++) {
+      var pb = pay[pi];
+      if (!pb || pb.status === 'paid') continue;
+      var stb = geodePurePaymentEffectiveStatus(pb, opts);
+      if (stb !== 'upcoming' && stb !== 'overdue') continue;
+      if (!geodePurePaymentCountsForMonth(pb, opts)) continue;
+      var bufHit = false;
+      if (geodePaymentNameLooksLikeBuffer(pb.name)) bufHit = true;
+      else if (!pb.goalId && !pb.debtId && !pb.investId && String(pb.payKind || '') === 'buffer') bufHit = true;
+      else if (String(pb.name || '').toLowerCase().indexOf('buffer') >= 0) bufHit = true;
+      else if (egBuf && pb.goalId && String(pb.goalId) === String(egBuf.id)) bufHit = true;
+      if (bufHit) {
+        hasScheduledIntent = true;
+        scheduledIntent += toNum(pb.amount);
+      }
+    }
+    sourceSignals.bufferTarget = targetId || 'buffer:emergency';
+  } else if (family === 'goal' && targetId) {
+    applied = geodePureSumConfirmedForGoalId(state, targetId, opts);
+    for (pi = 0; pi < pay.length; pi++) {
+      var pg = pay[pi];
+      if (!pg || pg.status === 'paid') continue;
+      var stg = geodePurePaymentEffectiveStatus(pg, opts);
+      if (stg !== 'upcoming' && stg !== 'overdue') continue;
+      if (!geodePurePaymentCountsForMonth(pg, opts)) continue;
+      if (String(pg.goalId || '') === String(targetId)) {
+        hasScheduledIntent = true;
+        scheduledIntent += toNum(pg.amount);
+      }
+    }
+    sourceSignals.goalId = targetId;
+  } else if (family === 'invest') {
+    var invId = geodePureResolveInvestTargetId(step, state);
+    applied = geodePureSumConfirmedForInvestId(state, invId, opts);
+    for (pi = 0; pi < pay.length; pi++) {
+      var pv = pay[pi];
+      if (!pv || pv.status === 'paid') continue;
+      var stv = geodePurePaymentEffectiveStatus(pv, opts);
+      if (stv !== 'upcoming' && stv !== 'overdue') continue;
+      if (!geodePurePaymentCountsForMonth(pv, opts)) continue;
+      if (invId && String(pv.investId || '') === String(invId)) {
+        hasScheduledIntent = true;
+        scheduledIntent += toNum(pv.amount);
+      }
+    }
+    sourceSignals.investId = invId;
+    if (!invId) reasonCodes.push('invest_target_unresolved');
+  } else {
+    reasonCodes.push('unknown_or_unsupported_family');
+  }
+
+  var remaining = Math.max(0, sug - applied);
+  var ratio = sug > 0 ? Math.min(1, applied / sug) : 0;
+  var phase = 'none';
+  if (applied <= 0) phase = hasScheduledIntent ? 'partial' : 'none';
+  else if (remaining < 1) phase = 'done';
+  else phase = 'partial';
+
+  var displayPhase = phase;
+  if (phase === 'partial' && applied <= 0) displayPhase = 'scheduled';
+
+  return {
+    suggested: sug,
+    applied: applied,
+    scheduledIntent: scheduledIntent,
+    hasScheduledIntent: hasScheduledIntent,
+    remaining: remaining,
+    ratio: ratio,
+    phase: phase,
+    displayPhase: displayPhase,
+    debtExtra: debtExtra,
+    sourceSignals: sourceSignals,
+    reasonCodes: reasonCodes
+  };
+}
+
+function geodePlanProgressSnapshot(state, planSnapshot, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  planSnapshot = planSnapshot && typeof planSnapshot === 'object' ? planSnapshot : {};
+  opts = opts && typeof opts === 'object' ? opts : {};
+
+  var reasonCodes = [];
+  var monthKey = geodePureMonthKey(opts.monthKey || planSnapshot.monthKey);
+  var todayKey = geodePureDateKey(opts.today || planSnapshot.today);
+  if (!monthKey) reasonCodes.push('missing_monthKey');
+  if (!todayKey) reasonCodes.push('missing_today');
+
+  var progressOpts = { monthKey: monthKey, today: todayKey };
+  if (opts.assumeSingleDebtMinimum === true) progressOpts.assumeSingleDebtMinimum = true;
+
+  var steps = Array.isArray(planSnapshot.steps) ? planSnapshot.steps.slice() : [];
+  steps.sort(function (a, b) {
+    var ia = a && a.sequenceIndex != null ? a.sequenceIndex : 999;
+    var ib = b && b.sequenceIndex != null ? b.sequenceIndex : 999;
+    return ia - ib;
+  });
+
+  var byStepId = {};
+  var completedSteps = [];
+  var incompleteSteps = [];
+  var partialSteps = [];
+  var scheduledSteps = [];
+  var meaningfulCount = 0;
+  var completedCount = 0;
+
+  var protectedMinimumCoverage = { byDebtId: {} };
+  var debtExtraCoverage = { byDebtId: {} };
+  var contributionCoverage = { byTargetKey: {} };
+
+  var si;
+  for (si = 0; si < steps.length; si++) {
+    var step = steps[si];
+    if (!step) continue;
+    var stepId = step.stepId != null ? String(step.stepId) : '';
+    if (!stepId) {
+      var identFallback = geodePurePlanStepIdentity(step, state, progressOpts);
+      stepId = identFallback.stepId || '';
+    }
+    if (!stepId) {
+      reasonCodes.push('step_missing_stepId');
+      continue;
+    }
+
+    var core = geodePurePlanStepProgressCore(state, step, progressOpts);
+    var sugAmt = toNum(step.amount);
+
+    if (sugAmt > 0) meaningfulCount++;
+
+    var famRow = String(step.family || '');
+    var tidRow = step.targetId != null ? String(step.targetId) : '';
+    var minProtectedAmt =
+      core.debtExtra && core.debtExtra.minimumCoverage
+        ? toNum(core.debtExtra.minimumCoverage.represented)
+        : 0;
+
+    byStepId[stepId] = {
+      stepId: stepId,
+      sequenceIndex: step.sequenceIndex != null ? step.sequenceIndex : si,
+      family: famRow,
+      kind: String(step.kind || ''),
+      targetId: tidRow,
+      targetKind: String(step.targetKind || ''),
+      suggested: core.suggested,
+      applied: core.applied,
+      scheduledIntent: core.scheduledIntent,
+      scheduledAmount: core.scheduledIntent,
+      completedAmount: core.applied,
+      minimumProtectedAmount: minProtectedAmt,
+      extraEligibleAmount: core.applied,
+      hasScheduledIntent: core.hasScheduledIntent,
+      hasCompletedIntent: core.applied > 0,
+      remaining: core.remaining,
+      ratio: core.ratio,
+      phase: core.phase,
+      displayPhase: core.displayPhase,
+      debtExtra: core.debtExtra,
+      sourceSignals: core.sourceSignals,
+      reasonCodes: core.reasonCodes
+    };
+
+    if (core.phase === 'done') {
+      completedSteps.push(stepId);
+      if (sugAmt > 0) completedCount++;
+    } else if (sugAmt > 0) {
+      incompleteSteps.push(stepId);
+    }
+    if (core.phase === 'partial') partialSteps.push(stepId);
+    if (core.displayPhase === 'scheduled' || (core.hasScheduledIntent && core.applied <= 0)) {
+      scheduledSteps.push(stepId);
+    }
+
+    var fam = famRow;
+    var tid = tidRow;
+    if (fam === 'debt' && tid) {
+      if (!protectedMinimumCoverage.byDebtId[tid]) {
+        protectedMinimumCoverage.byDebtId[tid] = geodePureDebtMinimumRepresentedAmount(state, tid, progressOpts);
+      }
+      debtExtraCoverage.byDebtId[tid] = {
+        debtId: tid,
+        paidExtra: core.applied,
+        scheduledExtraTotal: core.scheduledIntent,
+        minimumCoverage: protectedMinimumCoverage.byDebtId[tid]
+      };
+    } else if (fam === 'goal' && tid) {
+      var gKey = 'goal:' + tid;
+      contributionCoverage.byTargetKey[gKey] = {
+        targetKind: 'goal',
+        targetId: tid,
+        confirmedThisMonth: core.applied,
+        scheduledThisMonth: core.scheduledIntent
+      };
+    } else if (fam === 'invest') {
+      var invResolved = geodePureResolveInvestTargetId(step, state);
+      if (invResolved) {
+        var iKey = 'investment:' + invResolved;
+        contributionCoverage.byTargetKey[iKey] = {
+          targetKind: 'investment',
+          targetId: invResolved,
+          confirmedThisMonth: core.applied,
+          scheduledThisMonth: core.scheduledIntent
+        };
+      }
+    } else if (fam === 'buffer') {
+      contributionCoverage.byTargetKey['buffer:emergency'] = {
+        targetKind: 'buffer',
+        targetId: tid || 'buffer:emergency',
+        confirmedThisMonth: core.applied,
+        scheduledThisMonth: core.scheduledIntent
+      };
+    }
+  }
+
+  var firstIncompleteStep = null;
+  var priorityIncompleteStep = null;
+  for (si = 0; si < steps.length; si++) {
+    var stInc = steps[si];
+    if (!stInc || toNum(stInc.amount) <= 0) continue;
+    var sid = stInc.stepId != null ? String(stInc.stepId) : '';
+    if (!sid) continue;
+    var progInc = byStepId[sid];
+    if (!progInc || progInc.phase === 'done') continue;
+    var incPayload = {
+      stepId: sid,
+      sequenceIndex: progInc.sequenceIndex,
+      step: stInc,
+      progress: progInc
+    };
+    if (!firstIncompleteStep) firstIncompleteStep = incPayload;
+    if (!priorityIncompleteStep) priorityIncompleteStep = incPayload;
+    break;
+  }
+
+  var completionRate = meaningfulCount > 0 ? completedCount / meaningfulCount : 0;
+
+  return {
+    version: 1,
+    monthKey: monthKey,
+    today: todayKey,
+    planSignature: planSnapshot.planSignature != null ? String(planSnapshot.planSignature) : '',
+    byStepId: byStepId,
+    completionRate: completionRate,
+    completedSteps: completedSteps,
+    incompleteSteps: incompleteSteps,
+    partialSteps: partialSteps,
+    scheduledSteps: scheduledSteps,
+    firstIncompleteStep: firstIncompleteStep,
+    priorityIncompleteStep: priorityIncompleteStep,
+    protectedMinimumCoverage: protectedMinimumCoverage,
+    contributionCoverage: contributionCoverage,
+    debtExtraCoverage: debtExtraCoverage,
+    sourceSignals: {
+      stepCount: steps.length,
+      meaningfulStepCount: meaningfulCount,
+      usedPlanSnapshot: true,
+      usedStructuredMetadata: true
+    },
+    reasonCodes: reasonCodes,
+    audit: opts.audit === true
+      ? {
+          shadowOnly: true,
+          limitations: ['not_wired_to_production', 'invest_target_may_fallback_first_instrument'],
+          inputs: { monthKey: monthKey, today: todayKey }
+        }
+      : null
+  };
+}
+
 function calcTotals(state) {
   state = state || S;
   var debts = state.debts || [];
