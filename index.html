@@ -5559,6 +5559,246 @@ function geodeSuggestedActionSnapshot(state, planSnapshot, progressSnapshot, opt
   );
 }
 
+// ── PURE ADAPTIVE MODE SNAPSHOT (Stage 79A; mode selection only; shadow, unwired) ──
+// Contract: recommends per-family adaptive modes from follow-through history; no amounts, subtitles, persistence, or S.
+
+var GEODE_PURE_ADAPTIVE_MIN_EVIDENCE = 3;
+var GEODE_PURE_ADAPTIVE_ROLL_WINDOW = 5;
+
+function geodePureFollowthroughOutcomeIsTracked(outcome) {
+  return outcome === 'followed' || outcome === 'partial' || outcome === 'ignored';
+}
+
+function geodePureFollowthroughFamilyFromActionType(actionType) {
+  if (actionType === 'debt_payment') return 'debt';
+  if (actionType === 'goal_contribution') return 'goal';
+  if (actionType === 'investment_contribution') return 'invest';
+  if (actionType === 'buffer_contribution') return 'buffer';
+  return null;
+}
+
+function geodePureAdaptiveOutcomeRollPoints(outcome) {
+  if (outcome === 'followed') return 1;
+  if (outcome === 'partial') return 0.5;
+  return 0;
+}
+
+function geodePureAdaptiveTrailingFollowedStreak(recentOldestFirst) {
+  var c = 0;
+  var j;
+  var list = recentOldestFirst || [];
+  for (j = list.length - 1; j >= 0; j--) {
+    if (list[j].outcome === 'followed') c++;
+    else break;
+  }
+  return c;
+}
+
+function geodePureFollowthroughRecentForFamily(state, family, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var fam = String(family || '');
+  if (fam !== 'debt' && fam !== 'goal' && fam !== 'invest' && fam !== 'buffer') return [];
+  var maxN =
+    opts.maxN != null && isFinite(Number(opts.maxN))
+      ? Math.max(1, Math.floor(Number(opts.maxN)))
+      : opts.windowSize != null && isFinite(Number(opts.windowSize))
+        ? Math.max(1, Math.floor(Number(opts.windowSize)))
+        : GEODE_PURE_ADAPTIVE_ROLL_WINDOW;
+  var hist = Array.isArray(state.followthroughOutcomeHistory) ? state.followthroughOutcomeHistory : [];
+  var rows = [];
+  var i, row, f;
+  for (i = 0; i < hist.length; i++) {
+    row = hist[i];
+    if (!row || typeof row.ts !== 'number') continue;
+    if (!geodePureFollowthroughOutcomeIsTracked(row.outcome)) continue;
+    f = geodePureFollowthroughFamilyFromActionType(row.type);
+    if (f !== fam) continue;
+    rows.push({ outcome: row.outcome, ts: row.ts });
+  }
+  rows.sort(function (a, b) {
+    return a.ts - b.ts;
+  });
+  if (rows.length > maxN) rows = rows.slice(-maxN);
+  return rows;
+}
+
+function geodePureAdaptiveRollRawTier(recent, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var minEvidence =
+    opts.minEvidence != null && isFinite(Number(opts.minEvidence))
+      ? Math.max(1, Math.floor(Number(opts.minEvidence)))
+      : GEODE_PURE_ADAPTIVE_MIN_EVIDENCE;
+  var n = recent ? recent.length : 0;
+  if (n < minEvidence) return 'full';
+  if (geodePureAdaptiveTrailingFollowedStreak(recent) >= 3) return 'full';
+  var sum = 0;
+  var i;
+  for (i = 0; i < n; i++) {
+    sum += geodePureAdaptiveOutcomeRollPoints(recent[i].outcome);
+  }
+  var avg = sum / n;
+  if (avg >= 0.75) return 'full';
+  if (avg >= 0.4) return 'lighter';
+  return 'encouragement_only';
+}
+
+function geodePureAdaptiveStepwiseMode(lastMode, rawTier) {
+  lastMode = lastMode === 'lighter' || lastMode === 'encouragement_only' ? lastMode : 'full';
+  if (rawTier === 'full') return 'full';
+  if (rawTier === 'lighter') {
+    if (lastMode === 'encouragement_only') return 'lighter';
+    return 'lighter';
+  }
+  if (lastMode === 'full') return 'lighter';
+  if (lastMode === 'lighter') return 'encouragement_only';
+  return 'encouragement_only';
+}
+
+function geodePureAdaptiveNormalizeStoredMode(mode) {
+  var m = String(mode || '');
+  if (m === 'lighter' || m === 'encouragement_only') return m;
+  return 'full';
+}
+
+function geodePureAdaptiveModeForFamily(state, family, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var fam = String(family || '');
+  var reasonCodes = [];
+  var minEvidence =
+    opts.minEvidence != null && isFinite(Number(opts.minEvidence))
+      ? Math.max(1, Math.floor(Number(opts.minEvidence)))
+      : GEODE_PURE_ADAPTIVE_MIN_EVIDENCE;
+  var windowSize =
+    opts.windowSize != null && isFinite(Number(opts.windowSize))
+      ? Math.max(1, Math.floor(Number(opts.windowSize)))
+      : GEODE_PURE_ADAPTIVE_ROLL_WINDOW;
+  if (fam !== 'debt' && fam !== 'goal' && fam !== 'invest' && fam !== 'buffer') {
+    return {
+      family: fam,
+      mode: 'full',
+      previousMode: 'full',
+      rawTier: 'full',
+      evidenceCount: 0,
+      followedStreak: 0,
+      reasonCodes: ['invalid_family']
+    };
+  }
+  var storedMap =
+    opts.adaptiveDisplayModeByFamily && typeof opts.adaptiveDisplayModeByFamily === 'object'
+      ? opts.adaptiveDisplayModeByFamily
+      : {};
+  var previousMode = geodePureAdaptiveNormalizeStoredMode(storedMap[fam]);
+  var recent = geodePureFollowthroughRecentForFamily(state, fam, { maxN: windowSize });
+  var evidenceCount = recent.length;
+  var followedStreak = geodePureAdaptiveTrailingFollowedStreak(recent);
+  if (evidenceCount < minEvidence) {
+    reasonCodes.push('insufficient_evidence');
+    return {
+      family: fam,
+      mode: 'full',
+      previousMode: previousMode,
+      rawTier: 'full',
+      evidenceCount: evidenceCount,
+      followedStreak: followedStreak,
+      reasonCodes: reasonCodes
+    };
+  }
+  if (followedStreak >= minEvidence) {
+    reasonCodes.push('followed_streak_full');
+    return {
+      family: fam,
+      mode: 'full',
+      previousMode: previousMode,
+      rawTier: 'full',
+      evidenceCount: evidenceCount,
+      followedStreak: followedStreak,
+      reasonCodes: reasonCodes
+    };
+  }
+  var rawTier = geodePureAdaptiveRollRawTier(recent, { minEvidence: minEvidence });
+  var mode = geodePureAdaptiveStepwiseMode(previousMode, rawTier);
+  if (mode !== previousMode) reasonCodes.push('stepwise_mode_adjusted');
+  if (rawTier !== mode) reasonCodes.push('raw_tier_stepwise_applied');
+  return {
+    family: fam,
+    mode: mode,
+    previousMode: previousMode,
+    rawTier: rawTier,
+    evidenceCount: evidenceCount,
+    followedStreak: followedStreak,
+    reasonCodes: reasonCodes
+  };
+}
+
+/**
+ * Shadow-only adaptive mode snapshot (Stage 79A).
+ * Recommends per-family display modes; does not change amounts, subtitles, or persisted tiers.
+ */
+function geodeAdaptiveModeSnapshot(state, suggestedActionSnapshot, opts) {
+  state = state && typeof state === 'object' ? state : {};
+  suggestedActionSnapshot =
+    suggestedActionSnapshot && typeof suggestedActionSnapshot === 'object' ? suggestedActionSnapshot : {};
+  opts = opts && typeof opts === 'object' ? opts : {};
+
+  var reasonCodes = [];
+  var monthKey = geodePureMonthKey(opts.monthKey || suggestedActionSnapshot.monthKey);
+  var todayKey = geodePureDateKey(opts.today || suggestedActionSnapshot.today);
+  if (!monthKey) reasonCodes.push('missing_monthKey');
+  if (!todayKey) reasonCodes.push('missing_today');
+
+  var families = ['debt', 'goal', 'invest', 'buffer'];
+  var byFamily = {};
+  var recommendedAdaptiveDisplayModeByFamily = {};
+  var fi, row;
+  for (fi = 0; fi < families.length; fi++) {
+    row = geodePureAdaptiveModeForFamily(state, families[fi], opts);
+    byFamily[families[fi]] = row;
+    recommendedAdaptiveDisplayModeByFamily[families[fi]] = row.mode;
+  }
+
+  var familiesInSuggested = { debt: 0, buffer: 0, goal: 0, invest: 0 };
+  var cand = Array.isArray(suggestedActionSnapshot.candidates) ? suggestedActionSnapshot.candidates : [];
+  for (fi = 0; fi < cand.length; fi++) {
+    if (cand[fi] && cand[fi].family && familiesInSuggested[cand[fi].family] != null) {
+      familiesInSuggested[cand[fi].family] += 1;
+    }
+  }
+
+  return {
+    version: 1,
+    monthKey: monthKey,
+    today: todayKey,
+    byFamily: byFamily,
+    recommendedAdaptiveDisplayModeByFamily: recommendedAdaptiveDisplayModeByFamily,
+    sourceSignals: {
+      usedSuggestedActionSnapshot: !!(suggestedActionSnapshot && suggestedActionSnapshot.version),
+      suggestedCandidateFamilyCounts: familiesInSuggested,
+      minEvidence: GEODE_PURE_ADAPTIVE_MIN_EVIDENCE,
+      rollWindow: GEODE_PURE_ADAPTIVE_ROLL_WINDOW,
+      stepwiseFromOptsAdaptiveDisplayModeByFamily: !!(
+        opts.adaptiveDisplayModeByFamily && typeof opts.adaptiveDisplayModeByFamily === 'object'
+      )
+    },
+    reasonCodes: reasonCodes,
+    audit: opts.audit === true
+      ? {
+          shadowOnly: true,
+          limitations: [
+            'mode_selection_only',
+            'not_wired_to_production',
+            'no_amount_changes',
+            'no_subtitle_changes',
+            'no_persistence',
+            'does_not_write_adaptiveDisplayModeByFamily'
+          ],
+          inputs: { monthKey: monthKey, today: todayKey }
+        }
+      : null
+  };
+}
+
 function calcTotals(state) {
   state = state || S;
   var debts = state.debts || [];
