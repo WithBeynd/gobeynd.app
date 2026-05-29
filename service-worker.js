@@ -4,7 +4,7 @@
 // CACHE_VERSION: increment on every release, then commit + push.
 // CACHE_NAME is derived so old caches are deleted on activate and clients never mix versions.
 
-const CACHE_VERSION = 'v1.0.71'; // Stage 04B adaptive snapshot extraction
+const CACHE_VERSION = 'v1.0.72'; // Stage 05B presentation snapshot extraction
 const CACHE_NAME = `beynd-cache-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -14,6 +14,7 @@ const PRECACHE_URLS = [
   '/js/geode-pure/02-plan-snapshots.js',
   '/js/geode-pure/03-suggested-snapshots.js',
   '/js/geode-pure/04-adaptive-snapshots.js',
+  '/js/geode-pure/05-presentation-snapshots.js',
   '/coaching.json',
   '/service-worker.js',
   '/manifest.json',
