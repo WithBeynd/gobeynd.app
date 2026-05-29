@@ -781,6 +781,13 @@ canvas{display:block}
 .vi-register-error{border-radius:var(--radius);background:var(--vi-error);border:1px solid var(--vi-error-border);border-left:3px solid var(--vi-error-border);box-shadow:none}
 .vi-register-progress{border-radius:var(--radius);background:var(--vi-progress);border:1px solid var(--vi-progress-border);border-left:2px solid var(--vi-progress-border);box-shadow:none}
 .vi-register-recovery{border-radius:var(--radius);background:var(--vi-recovery);border:1px solid var(--vi-recovery-border);border-left:2px solid var(--vi-recovery-border);box-shadow:none}
+/* Main Action visual registers (Stage 75D v2 — presentation only) */
+.main-action-card{border-radius:14px;padding:16px;margin-bottom:0;box-shadow:none}
+.main-action-card--guidance{background:var(--vi-guidance);border:1px solid var(--vi-guidance-border);border-left:2px solid var(--vi-guidance-border)}
+.main-action-card--review{background:var(--vi-review);border:1px solid var(--vi-review-border);border-left:2px solid var(--vi-review-border)}
+.main-action-card--pressure{background:var(--vi-pressure);border:1px solid var(--vi-pressure-border);border-left:2px solid var(--vi-pressure-border)}
+.main-action-card--risk{background:var(--vi-risk);border:1px solid var(--vi-risk-border);border-left:3px solid var(--vi-risk-border);box-shadow:0 0 0 1px var(--vi-risk-border)}
+.main-action-card--progress{background:var(--vi-progress);border:1px solid var(--vi-progress-border);border-left:2px solid var(--vi-progress-border)}
 .login-logo-wrap{margin-bottom:var(--sp-4)}
 .login-wordmark{font-size:36px;font-weight:800;letter-spacing:6px;background:linear-gradient(135deg,var(--gem-l),var(--rose));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:var(--sp-1)}
 .login-tagline{font-size:10px;color:var(--tx-3);letter-spacing:3px;text-transform:uppercase;margin-bottom:var(--sp-2)}
@@ -21964,6 +21971,43 @@ function geodeApplyAdaptiveTierToMainActionDisplay(tier, title, sub, fam) {
   return { title: tit, sub: g };
 }
 
+/** Display-only: Main Action visual register from resolver action copy (Stage 75D v2). */
+function geodeMainActionVisualRegister(action) {
+  action = action || {};
+  var title = String(action.title || '').toLowerCase();
+  var sub = String(action.sub || action.subtitle || '').toLowerCase();
+
+  if (title.indexOf('clear overdue') >= 0 || title.indexOf('overdue') >= 0) return 'risk';
+
+  if (
+    title.indexOf('bring spend back') >= 0 ||
+    title.indexOf('bring spending back') >= 0 ||
+    title.indexOf('back to plan') >= 0 ||
+    sub.indexOf('above pace') >= 0 ||
+    sub.indexOf('under pressure') >= 0
+  ) {
+    return 'pressure';
+  }
+
+  if (
+    title.indexOf('review') >= 0 ||
+    sub.indexOf('worth a quick look') >= 0 ||
+    sub.indexOf('check') >= 0
+  ) {
+    return 'review';
+  }
+
+  if (
+    title.indexOf('complete') >= 0 ||
+    title.indexOf('done') >= 0 ||
+    sub.indexOf('complete') >= 0
+  ) {
+    return 'progress';
+  }
+
+  return 'guidance';
+}
+
 /** Pass true when Home renders the yellow renewal card — subscription anticipation footer is skipped so the same line does not appear twice. */
 function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   try {
@@ -22362,10 +22406,13 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     }
   }
 
+  var _maVisualReg = geodeMainActionVisualRegister(a);
   var h = '<div class="home-primary-action" data-geode-css="margin:0 0 12px">';
   h += '<div data-geode-css="font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">Main Action</div>';
   h +=
-    '<div class="card" data-geode-css="background:rgba(245,194,52,0.06);border:1px solid rgba(245,194,52,0.65);border-radius:14px;padding:16px 16px;margin-bottom:0;box-shadow:0 0 0 1px rgba(245,194,52,0.4),0 0 20px rgba(245,194,52,0.14)">';
+    '<div class="card main-action-card main-action-card--' +
+    _maVisualReg +
+    '">';
   h += '<div data-geode-css="font-size:13px;font-weight:800;color:var(--tx-1);line-height:1.25;margin-bottom:3px">' + escHtmlLite(title) + '</div>';
   if (sub) {
     h += '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.9);line-height:1.35;margin-bottom:' + (_contextLine || _showPlanSource ? '6' : '10') + 'px">' + escHtmlLite(sub) + '</div>';
