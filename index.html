@@ -11533,6 +11533,19 @@ var GEODE_BEHAVIOUR_EVENT_KINDS = {
   feeling_moved: true
 };
 
+function geodeBehaviourEventKindsSafe() {
+  return (
+    GEODE_BEHAVIOUR_EVENT_KINDS || {
+      reality_shift_approved: true,
+      reality_shift_reverted: true,
+      feeling_slow: true,
+      feeling_unsure: true,
+      feeling_still: true,
+      feeling_moved: true
+    }
+  );
+}
+
 function geodeSanitizeBehaviourEventMeta(kind, meta) {
   meta = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
   var out = {};
@@ -11577,7 +11590,7 @@ function geodeNormalizeBehaviourEvents(state) {
   state = state || S;
   if (!Array.isArray(state.behaviourEvents)) state.behaviourEvents = [];
   var ym = geodeCurrentYm();
-  var allowed = GEODE_BEHAVIOUR_EVENT_KINDS;
+  var allowed = geodeBehaviourEventKindsSafe();
   state.behaviourEvents = state.behaviourEvents.filter(function (e) {
     return (
       e &&
@@ -11594,7 +11607,7 @@ function geodeNormalizeBehaviourEvents(state) {
 
 /** Stage 64A-1: append one coaching continuity event (persisted; does not change plan math). */
 function geodeRecordBehaviourEvent(kind, meta) {
-  if (!GEODE_BEHAVIOUR_EVENT_KINDS[kind]) return;
+  if (!geodeBehaviourEventKindsSafe()[kind]) return;
   if (!Array.isArray(S.behaviourEvents)) S.behaviourEvents = [];
   S.behaviourEvents.push({
     kind: kind,
