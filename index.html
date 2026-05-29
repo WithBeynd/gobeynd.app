@@ -283,6 +283,27 @@ html[data-beynd-appearance="offwhite"] .dash-net-hero{
 html[data-beynd-appearance="offwhite"] .hero::before{
   background:radial-gradient(circle,rgba(114,84,184,0.06),transparent 70%);
 }
+html[data-beynd-appearance="offwhite"] .hero.hero--calm{
+  background:linear-gradient(155deg,#ffffff,#f4f8f7 50%,#f6faf9);
+  border-color:rgba(91,187,158,0.12);
+}
+html[data-beynd-appearance="offwhite"] .hero.hero--calm::before{
+  background:radial-gradient(circle at 68% 28%,rgba(91,187,158,0.05),rgba(114,84,184,0.03) 42%,transparent 72%);
+}
+html[data-beynd-appearance="offwhite"] .hero.hero--reflective{
+  background:linear-gradient(155deg,#ffffff,#f8f6f1 50%,#faf9f6);
+  border-color:rgba(180,134,40,0.10);
+}
+html[data-beynd-appearance="offwhite"] .hero.hero--reflective::before{
+  background:radial-gradient(circle,rgba(180,134,40,0.04),transparent 68%);
+}
+html[data-beynd-appearance="offwhite"] .hero.hero--protective{
+  background:linear-gradient(155deg,#faf9f8,#f5f4f8 52%,#f3f2f0);
+  border-color:rgba(114,84,184,0.14);
+}
+html[data-beynd-appearance="offwhite"] .hero.hero--protective::before{
+  background:radial-gradient(circle,rgba(114,84,184,0.04),transparent 70%);
+}
 html[data-beynd-appearance="offwhite"] .hero [style*="color:rgba(255,255,255"],
 html[data-beynd-appearance="offwhite"] .dash-net-hero [style*="color:rgba(255,255,255"],
 html[data-beynd-appearance="offwhite"] .hero [style*="color:#edeaff"],
@@ -315,6 +336,12 @@ body.light{
 body.light .card{background:#ffffff !important;border-color:rgba(15,23,42,0.08) !important;}
 body.light .hero{background:linear-gradient(155deg,#ffffff,#f5f4f8 48%,#fafafa) !important;border-color:rgba(124,92,191,0.16) !important;}
 body.light .hero::before{background:radial-gradient(circle,rgba(124,92,191,0.06),transparent 70%) !important;}
+body.light .hero.hero--calm{background:linear-gradient(155deg,#ffffff,#f4f8f7 48%,#f6faf9) !important;border-color:rgba(91,187,158,0.12) !important;}
+body.light .hero.hero--calm::before{background:radial-gradient(circle at 68% 28%,rgba(91,187,158,0.05),rgba(124,92,191,0.03) 42%,transparent 72%) !important;}
+body.light .hero.hero--reflective{background:linear-gradient(155deg,#ffffff,#f8f6f1 48%,#faf9f6) !important;border-color:rgba(180,134,40,0.10) !important;}
+body.light .hero.hero--reflective::before{background:radial-gradient(circle,rgba(180,134,40,0.04),transparent 68%) !important;}
+body.light .hero.hero--protective{background:linear-gradient(155deg,#faf9f8,#f5f4f8 50%,#f3f2f0) !important;border-color:rgba(124,92,191,0.14) !important;}
+body.light .hero.hero--protective::before{background:radial-gradient(circle,rgba(124,92,191,0.04),transparent 70%) !important;}
 body.light .fi{background:#ffffff !important;border-color:rgba(15,23,42,0.12) !important;color:var(--tx-1) !important;}
 body.light .fi:focus{border-color:var(--gem) !important;}
 body.light #splash{background:var(--splash-bg) !important;}
@@ -471,6 +498,13 @@ html,body{height:100%;background:var(--bg-base);overflow:hidden;font-family:var(
 /* HERO */
 .hero{background:linear-gradient(155deg,#180a32,#0c1426 50%,#091820);border-radius:var(--radius-xl);padding:var(--sp-6);margin-bottom:var(--sp-4);border:1px solid rgba(155,127,232,0.12);position:relative;overflow:hidden;box-shadow:var(--shadow-sm)}
 .hero::before{content:'';position:absolute;top:-40px;right:-40px;width:180px;height:180px;border-radius:50%;background:radial-gradient(circle,rgba(155,127,232,0.07),transparent 70%)}
+/* Hero posture atmosphere (Stage 75F-C — ambient mood only; weaker than cards) */
+.hero--calm{background:linear-gradient(155deg,#180a32,#0b1628 48%,#0a1a22);border-color:rgba(91,187,158,0.10)}
+.hero--calm::before{top:-36px;right:-36px;width:190px;height:190px;background:radial-gradient(circle at 68% 28%,rgba(91,187,158,0.055),rgba(155,127,232,0.04) 42%,transparent 72%)}
+.hero--reflective{background:linear-gradient(155deg,#18101e,#121820 50%,#141820);border-color:rgba(201,168,76,0.08)}
+.hero--reflective::before{top:-24px;right:12px;width:150px;height:150px;background:radial-gradient(circle,rgba(201,168,76,0.035),transparent 68%)}
+.hero--protective{background:linear-gradient(155deg,#1a0e24,#111820 54%,#101620);border-color:rgba(155,127,232,0.10)}
+.hero--protective::before{top:auto;bottom:-48px;left:16px;right:auto;width:155px;height:155px;background:radial-gradient(circle,rgba(155,127,232,0.045),transparent 70%)}
 
 /* Money dashboard: net worth hero (dark gradient; White mode override below) */
 .dash-net-hero{background:linear-gradient(155deg,#180a32,#0c1426 50%,#091820);border-radius:var(--radius-lg);padding:var(--sp-5);margin-bottom:var(--sp-3);border:1px solid rgba(155,127,232,0.12);box-shadow:var(--shadow-sm)}
@@ -26306,6 +26340,35 @@ function geodeHomeGoalCompletionCardHtml() {
   h += '</div>';
   return h;
 }
+
+/** Display-only: Hero atmosphere modifier from context posture (Stage 75F-C). */
+function geodeHeroAtmosphereClass(state, opts) {
+  state = state || S;
+  opts = opts || {};
+  var allowed = { 'hero--calm': 1, 'hero--reflective': 1, 'hero--protective': 1 };
+  try {
+    if (geodeIsEmptyState()) return '';
+    if (opts.suppress === true) return '';
+    if (calcMonthlyLeftover(state) < 0) return '';
+    if (geodeHomePersistentOverBudgetCardVisible(state)) return '';
+    if (geodeOverdueItems().length > 0) return '';
+    var po = null;
+    try {
+      po = geodeGetContextPosture(state);
+    } catch (_eHaPo) {
+      return '';
+    }
+    var posture = po && po.posture ? String(po.posture) : '';
+    var cls = '';
+    if (posture === 'steady_progress' || posture === 'growth_room') cls = 'hero--calm';
+    else if (posture === 'review_first') cls = 'hero--reflective';
+    else if (posture === 'protect_flexibility') cls = 'hero--protective';
+    return allowed[cls] ? cls : '';
+  } catch (_eHa) {
+    return '';
+  }
+}
+
 function rHome() {
   var isNewDay = geodeIsNewDay();
   var streak = geodeUpdateOnTrackStreak(S);
@@ -26384,7 +26447,11 @@ function rHome() {
     } catch (_eOrchCache2) {}
   }
 
-  var h = '<div class="hero" data-geode-css="padding:24px;margin-bottom:14px">';
+  var _heroAtmo = geodeHeroAtmosphereClass(S);
+  var h =
+    '<div class="hero' +
+    (_heroAtmo ? ' ' + _heroAtmo : '') +
+    '" data-geode-css="padding:24px;margin-bottom:14px">';
   h += '<div data-geode-css="font-size:11px;font-weight:600;color:var(--tx-4);margin-bottom:4px">' + nm + '</div>';
   h +=
     '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:10px">' +
