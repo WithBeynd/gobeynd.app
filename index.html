@@ -18163,6 +18163,50 @@ function getSuggestedActions(state) {
   return out.slice(0, 2);
 }
 
+/** Read-only: true when a suggested-action row still refers to a valid target in S (Stage 73B). */
+function geodeSuggestedActionTargetExists(state, action) {
+  state = state || S;
+  if (!action || !action.type) return false;
+  if (action.type === 'context_prompt' || action.type === 'buffer_contribution') return true;
+  var tid = String(action.targetId || '');
+  if (action.type === 'debt_payment') {
+    if (!tid) return true;
+    var debts = state.debts || [];
+    var di;
+    for (di = 0; di < debts.length; di++) {
+      if (debts[di] && String(debts[di].id || '') === tid) return true;
+    }
+    return false;
+  }
+  if (action.type === 'goal_contribution') {
+    if (!tid) return true;
+    var goals = state.goals || [];
+    var gi;
+    for (gi = 0; gi < goals.length; gi++) {
+      if (goals[gi] && String(goals[gi].id || '') === tid) return true;
+    }
+    return false;
+  }
+  if (action.type === 'investment_contribution') {
+    if (!tid) return true;
+    var inv = state.investments || [];
+    var ii;
+    for (ii = 0; ii < inv.length; ii++) {
+      if (inv[ii] && String(inv[ii].id || '') === tid) return true;
+    }
+    return false;
+  }
+  return true;
+}
+
+/** True when an unmatched frozen row may keep legacy follow-through fallback copy (targetless only). */
+function geodeSuggestedActionTargetlessFallbackOk(action) {
+  if (!action || !action.type) return false;
+  if (action.type === 'buffer_contribution' || action.type === 'context_prompt') return true;
+  if (String(action.targetId || '')) return false;
+  return action.type === 'debt_payment' || action.type === 'investment_contribution';
+}
+
 /**
  * While follow-through reinforcement holds the stored batch, UI amounts must match lastSuggestedActions
  * (evaluatePaymentFollowthrough compares payments to that batch), not a freshly recomputed plan slice.
@@ -18174,6 +18218,7 @@ function mergeFrozenSuggestedActionsWithPlan(frozen) {
   for (bi = 0; bi < (frozen || []).length; bi++) {
     fj = frozen[bi];
     if (!fj || !fj.type) continue;
+    if (!geodeSuggestedActionTargetExists(S, fj)) continue;
     match = null;
     for (i = 0; i < fresh.length; i++) {
       f = fresh[i];
@@ -18203,7 +18248,7 @@ function mergeFrozenSuggestedActionsWithPlan(frozen) {
               : [];
       }
       out.push(matched);
-    } else {
+    } else if (geodeSuggestedActionTargetlessFallbackOk(fj)) {
       var fallback = {
         type: fj.type,
         title:
@@ -18278,6 +18323,7 @@ function shouldRefreshSuggestedActions(state) {
   if (!batch || !batch.length) return true;
   var meta = state.lastSuggestedActionsMeta;
   if (!meta || typeof meta.ts !== 'number') return true;
+  if (!meta.ym || String(meta.ym) !== currentYM()) return true;
   if (now - meta.ts > SUGGESTED_MAX_BATCH_AGE_MS) return true;
   var leftNow = calcMonthlyLeftover(state);
   var left0 = meta.leftAtCreation;
@@ -20623,6 +20669,7 @@ function geodeHomePrepareSuggestedActionsList() {
     });
     S.lastSuggestedActionsMeta = {
       ts: tsNow,
+      ym: currentYM(),
       leftAtCreation: calcMonthlyLeftover(S),
       planSig: computeSuggestedPlanSig(raw),
       batchResolved: !!S._suggestionBatchResolved,
@@ -22983,6 +23030,15 @@ function openSuggestedAction(idx) {
   if (!a) return;
   if (a.type === 'context_prompt' && a.promptKind === 'add_expenses_for_buffer') {
     goTab('money');
+    return;
+  }
+  if (!geodeSuggestedActionTargetExists(S, a)) {
+    try {
+      geodeInvalidateDecisionCaches();
+    } catch (_eRpaInvSa) {}
+    try {
+      geodeHomePrepareSuggestedActionsList();
+    } catch (_eRpaPrepSa) {}
     return;
   }
   if (typeof a.amount !== 'number' || a.amount <= 0) return;
