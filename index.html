@@ -781,6 +781,14 @@ canvas{display:block}
 .vi-register-error{border-radius:var(--radius);background:var(--vi-error);border:1px solid var(--vi-error-border);border-left:3px solid var(--vi-error-border);box-shadow:none}
 .vi-register-progress{border-radius:var(--radius);background:var(--vi-progress);border:1px solid var(--vi-progress-border);border-left:2px solid var(--vi-progress-border);box-shadow:none}
 .vi-register-recovery{border-radius:var(--radius);background:var(--vi-recovery);border:1px solid var(--vi-recovery-border);border-left:2px solid var(--vi-recovery-border);box-shadow:none}
+/* Main Action visual registers (Stage 75D — display only; no amber glow) */
+.main-action-card{border-radius:14px;padding:16px;margin-bottom:0;box-shadow:none}
+.main-action-card--guidance{background:var(--vi-guidance);border:1px solid var(--vi-guidance-border);border-left:2px solid var(--vi-guidance-border)}
+.main-action-card--review{background:var(--vi-review);border:1px solid var(--vi-review-border);border-left:2px solid var(--vi-review-border)}
+.main-action-card--pressure{background:var(--vi-pressure);border:1px solid var(--vi-pressure-border);border-left:2px solid var(--vi-pressure-border)}
+.main-action-card--risk{background:var(--vi-risk);border:1px solid var(--vi-risk-border);border-left:3px solid var(--vi-risk-border)}
+.main-action-card--progress{background:var(--vi-progress);border:1px solid var(--vi-progress-border);border-left:2px solid var(--vi-progress-border)}
+.main-action-card--recovery{background:var(--vi-recovery);border:1px solid var(--vi-recovery-border);border-left:2px solid var(--vi-recovery-border)}
 .login-logo-wrap{margin-bottom:var(--sp-4)}
 .login-wordmark{font-size:36px;font-weight:800;letter-spacing:6px;background:linear-gradient(135deg,var(--gem-l),var(--rose));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:var(--sp-1)}
 .login-tagline{font-size:10px;color:var(--tx-3);letter-spacing:3px;text-transform:uppercase;margin-bottom:var(--sp-2)}
@@ -21951,6 +21959,49 @@ function geodeApplyAdaptiveTierToMainActionDisplay(tier, title, sub, fam) {
   return { title: tit, sub: g };
 }
 
+/** Display-only: Main Action visual register from existing action/state signals (Stage 75D). */
+function geodeMainActionVisualRegister(action, state) {
+  action = action && typeof action === 'object' ? action : {};
+  state = state || S;
+  var title = String(action.title || '').trim();
+  var sub = String(action.sub || '').trim();
+  var subLc = sub.toLowerCase();
+  var amt = action.amount;
+  var hasAmt = typeof amt === 'number' && isFinite(amt) && amt > 0;
+
+  if (geodeHasOverdue(state) || title === 'Clear overdue items first') {
+    return 'risk';
+  }
+  if (title === 'Your monthly plan is complete') {
+    return 'progress';
+  }
+  if (title === 'Bring spend back to plan' || subLc.indexOf('above pace') >= 0) {
+    return 'pressure';
+  }
+  if (title === 'Review your plan') {
+    return 'review';
+  }
+  if (sub.indexOf('Worth a quick look') >= 0 || sub.indexOf('/mo,') >= 0) {
+    return 'review';
+  }
+  try {
+    if (geodeGetRecoveryState(state) && !geodeHasOverdue(state) && !hasAmt) {
+      var cleared = false;
+      try {
+        cleared = !!window._geodeOverdueCleared;
+      } catch (_eC) {}
+      var streak = 0;
+      try {
+        streak = Number(window._geodeOnTrackStreak || 0);
+      } catch (_eS) {}
+      if (!cleared && streak < 3) {
+        return 'recovery';
+      }
+    }
+  } catch (_eR) {}
+  return 'guidance';
+}
+
 /** Pass true when Home renders the yellow renewal card — subscription anticipation footer is skipped so the same line does not appear twice. */
 function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   try {
@@ -22349,10 +22400,13 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     }
   }
 
+  var _maVisualReg = geodeMainActionVisualRegister(a, S);
   var h = '<div class="home-primary-action" data-geode-css="margin:0 0 12px">';
   h += '<div data-geode-css="font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">Main Action</div>';
   h +=
-    '<div class="card" data-geode-css="background:rgba(245,194,52,0.06);border:1px solid rgba(245,194,52,0.65);border-radius:14px;padding:16px 16px;margin-bottom:0;box-shadow:0 0 0 1px rgba(245,194,52,0.4),0 0 20px rgba(245,194,52,0.14)">';
+    '<div class="card main-action-card main-action-card--' +
+    _maVisualReg +
+    '">';
   h += '<div data-geode-css="font-size:13px;font-weight:800;color:var(--tx-1);line-height:1.25;margin-bottom:3px">' + escHtmlLite(title) + '</div>';
   if (sub) {
     h += '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.9);line-height:1.35;margin-bottom:' + (_contextLine || _showPlanSource ? '6' : '10') + 'px">' + escHtmlLite(sub) + '</div>';
