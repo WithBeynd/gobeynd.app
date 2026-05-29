@@ -1041,6 +1041,7 @@ canvas{display:block}
 .plan-detail-p--last{margin:0}
 .plan-status-title{font-size:13px;font-weight:800;color:var(--tx-1);line-height:1.35}
 .plan-status-title--danger{font-size:14px;color:var(--danger)}
+.plan-status-title--pressure{font-size:14px;color:var(--guide)}
 .plan-status-title--ok{font-size:14px;color:var(--ok)}
 .plan-status-title--warn{font-size:14px;color:var(--warn)}
 .plan-status-copy{margin-top:var(--sp-2);font-size:11px;color:var(--tx-3);line-height:1.45}
@@ -1048,17 +1049,17 @@ canvas{display:block}
 .plan-status-why summary{cursor:pointer;color:var(--gem-l);font-weight:800;list-style:none;outline:none}
 .plan-status-why__body{margin-top:var(--sp-2)}
 .plan-style-line{margin:0 0 var(--sp-3);font-size:11px;color:var(--tx-2);line-height:1.45}
-.overbudget-card{margin:0 0 14px;padding:var(--sp-4);border-radius:var(--radius);background:rgba(240,112,112,0.06);border:1px solid rgba(240,112,112,0.28);border-left:3px solid var(--danger)}
-.overbudget-kicker{font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--danger);margin-bottom:6px}
-.overbudget-amount{font-size:22px;font-weight:800;color:var(--danger);line-height:1.1;margin-bottom:6px}
+.overbudget-card{margin:0 0 14px;padding:var(--sp-4);border-radius:var(--radius);background:var(--vi-pressure);border:1px solid var(--vi-pressure-border);border-left:2px solid var(--vi-pressure-border)}
+.overbudget-kicker{font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--guide);margin-bottom:6px}
+.overbudget-amount{font-size:22px;font-weight:800;color:var(--guide);line-height:1.1;margin-bottom:6px}
 .overbudget-copy{font-size:12px;color:var(--tx-1);line-height:1.5}
 .overbudget-section{margin:0 0 14px}
 .overbudget-breakdown{background:var(--bg-surface);border:1px solid var(--bd);border-radius:var(--radius);padding:4px 14px}
 .overbudget-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0}
 .overbudget-row + .overbudget-row{border-top:1px solid var(--bd)}
 .overbudget-label{font-size:12px;font-weight:700;color:var(--tx-1)}
-.overbudget-bar{margin-top:3px;max-width:140px;height:3px;background:rgba(240,112,112,0.4);border-radius:2px}
-.overbudget-value{font-size:13px;font-weight:800;color:var(--danger)}
+.overbudget-bar{margin-top:3px;max-width:140px;height:3px;background:var(--vi-pressure-border);border-radius:2px}
+.overbudget-value{font-size:13px;font-weight:800;color:var(--guide)}
 .overbudget-hint{margin-top:var(--sp-2);font-size:11px;color:var(--tx-3);line-height:1.5;padding:10px var(--sp-3);border-radius:10px;background:rgba(255,255,255,0.025);border:1px solid var(--bd)}
 .btn--block-spaced{width:100%;margin-bottom:10px}
 .collapsed-steps{margin-top:var(--sp-1)}
@@ -19335,7 +19336,7 @@ function geodePlanPageStatusSectionHtml(optSkipNegDup) {
     if (optSkipNegDup) return '';
     return (
       '<div class="plan-panel">' +
-      '<div class="plan-status-title plan-status-title--danger">' +
+      '<div class="plan-status-title plan-status-title--pressure">' +
       escHtmlLite('Needs attention in your monthly plan') +
       '</div>' +
       '<div class="plan-status-copy">' +
@@ -25130,15 +25131,15 @@ function geodeOverdueCardHtml() {
     });
   }
   if (!items.length) return '';
-  var h = '<div data-geode-css="background:rgba(240,112,112,0.06);border:1px solid rgba(240,112,112,0.2);border-left:3px solid var(--danger);border-radius:14px;padding:13px 15px;margin-bottom:10px">';
-  h += '<div data-geode-css="font-size:10px;font-weight:700;color:var(--danger);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px">Needs attention</div>';
+  var h = '<div data-geode-css="background:var(--vi-review);border:1px solid var(--vi-review-border);border-left:2px solid var(--vi-review-border);border-radius:14px;padding:13px 15px;margin-bottom:10px">';
+  h += '<div data-geode-css="font-size:10px;font-weight:700;color:var(--notice);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:8px">Needs attention</div>';
   items.slice(0,2).forEach(function(item) {
-    h += '<div data-geode-css="display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid rgba(240,112,112,0.1)">';
+    h += '<div data-geode-css="display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--vi-review-border)">';
     h += '<div data-geode-css="font-size:12px;color:var(--tx-1);font-weight:600">' + escHtmlLite(item.name) + '</div>';
     if (item.kind === 'payment') {
-      h += '<div data-geode-css="font-size:11px;color:var(--danger)">' + item.daysLate + ' day' + (item.daysLate===1?'':'s') + ' overdue</div>';
+      h += '<div data-geode-css="font-size:11px;color:var(--notice)">' + item.daysLate + ' day' + (item.daysLate===1?'':'s') + ' overdue</div>';
     } else {
-      h += '<div data-geode-css="font-size:11px;color:var(--danger)">' + fm(item.remaining) + ' remaining — deadline passed</div>';
+      h += '<div data-geode-css="font-size:11px;color:var(--notice)">' + fm(item.remaining) + ' remaining — deadline passed</div>';
     }
     h += '</div>';
   });
@@ -26436,9 +26437,9 @@ function rHome() {
         var _qs_over = Math.abs(_qs_left);
         h +=
           '<div data-geode-css="margin-bottom:14px;padding:16px;border-radius:14px;' +
-          'background:rgba(240,112,112,0.06);border:1px solid rgba(240,112,112,0.28);border-left:3px solid #f07070">' +
-          '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--danger);margin-bottom:6px">Your plan shows you\u2019re over budget</div>' +
-          '<div data-geode-css="font-size:18px;font-weight:800;color:#f07070;margin-bottom:8px">\u2212' + escHtmlLite(fm(_qs_over)) + ' / month</div>' +
+          'background:var(--vi-pressure);border:1px solid var(--vi-pressure-border);border-left:2px solid var(--vi-pressure-border)">' +
+          '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--guide);margin-bottom:6px">Your plan shows you\u2019re over budget</div>' +
+          '<div data-geode-css="font-size:18px;font-weight:800;color:var(--guide);margin-bottom:8px">\u2212' + escHtmlLite(fm(_qs_over)) + ' / month</div>' +
           '<div data-geode-css="font-size:12px;color:rgba(237,234,255,0.88);line-height:1.55;margin-bottom:12px">' +
           escHtmlLite('Based on what you\u2019ve entered, your spending exceeds your income. ' +
           'That\u2019s exactly what Beynd is here to fix. The plan tab will show you which category to tackle first.') +
@@ -26490,12 +26491,12 @@ function rHome() {
         'onclick="geodeGoPlanFromHome()" ' +
         'onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeGoPlanFromHome();}}catch(__hkOb){}" ' +
         'data-geode-css="margin-bottom:12px;padding:14px 16px;border-radius:14px;cursor:pointer;' +
-        'background:rgba(240,112,112,0.035);border:1px solid rgba(240,112,112,0.18);' +
-        'border-left:2px solid rgba(240,112,112,0.55);-webkit-tap-highlight-color:transparent;outline:none">';
+        'background:var(--vi-pressure);border:1px solid var(--vi-pressure-border);' +
+        'border-left:2px solid var(--vi-pressure-border);-webkit-tap-highlight-color:transparent;outline:none">';
       h += '<div data-geode-css="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">';
-      h += '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:rgba(240,112,112,0.92)">Over budget</div>';
+      h += '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--guide)">Over budget</div>';
       h += '<div data-geode-css="display:flex;align-items:center;gap:8px;flex-shrink:0">';
-      h += '<div data-geode-css="font-size:16px;font-weight:800;color:rgba(240,112,112,0.95)">−' + escHtmlLite(fm(_homeOver)) + '</div>';
+      h += '<div data-geode-css="font-size:16px;font-weight:800;color:var(--guide)">−' + escHtmlLite(fm(_homeOver)) + '</div>';
       h +=
         '<span data-geode-css="font-size:16px;color:rgba(189,183,220,0.45);line-height:1;flex-shrink:0" aria-hidden="true">\u203a</span>';
       h += '</div></div>';
