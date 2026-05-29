@@ -16061,7 +16061,7 @@ function geodeHumanMomentShouldSuppress(ctx, state, opts) {
   try {
     if (opts.observeOnly) {
       if (geodePeekActiveRealityPlanAlignment(state)) return true;
-    } else if (geodeGetActiveRealityPlanAlignment(state)) {
+    } else if (geodePeekActiveRealityPlanAlignment(state)) {
       return true;
     }
   } catch (_eHmRpaSup) {}
@@ -24529,7 +24529,7 @@ function geodeApproveRealityPlanAlignmentFromPreview() {
 
 /** Stage 55C-3: lookup one approved step adjustment (display overlay only). */
 function geodeGetRealityPlanStepAdjustment(state, stepIndex, stepLabel) {
-  var a = geodeGetActiveRealityPlanAlignment(state);
+  var a = geodePeekActiveRealityPlanAlignment(state);
   if (!a || !a.stepAdjustments) return null;
   var list = a.stepAdjustments;
   var i;
@@ -24577,7 +24577,7 @@ function geodePlanStepRealityDisplay(state, step, prog, stepIndex, existingAmoun
 
 /** Stage 55C-3: slim Plan banner when following approved Reality shift. */
 function geodeRealityPlanAlignmentPlanBannerHtml() {
-  if (!geodeGetActiveRealityPlanAlignment(S)) return '';
+  if (!geodePeekActiveRealityPlanAlignment(S)) return '';
   var h = '';
   var _rpaPlanBannerHint = geodeBehaviourContinuityPlanBannerHint(S);
   h +=
@@ -24617,7 +24617,7 @@ function geodeRealityPlanAlignmentHasShiftRows(preview) {
 
 /** Stage 55C-2: compact Reality offer when alignment preview is available (read-only; no persist). */
 function geodeRealityPlanAlignmentOfferHtml() {
-  if (geodeGetActiveRealityPlanAlignment(S)) return '';
+  if (geodePeekActiveRealityPlanAlignment(S)) return '';
   var preview = null;
   try {
     preview = geodeBuildRealityPlanAlignmentPreview(S);
