@@ -3714,7 +3714,7 @@ function geodePlanSnapshot(state, opts) {
   if (!todayKey) reasonCodes.push('missing_today');
 
   var strategy = String(opts.strategy || state.planStrategy || 'balanced');
-  var stratCfg = getStrategyConfig(strategy);
+  var stratCfg = geodePureStrategyConfig(strategy);
 
   // Prefer explicit inputs from opts; fallback to pure derivations only.
   var cashflow = opts.cashflow && typeof opts.cashflow === 'object'
@@ -3775,11 +3775,11 @@ function geodePlanSnapshot(state, opts) {
   }
 
   // Step: high-interest debt extra (APR > 10)
-  var worstDebt = selectWorstHighAprDebt(debts, 10);
+  var worstDebt = geodePureSelectWorstHighAprDebt(debts, 10);
   if (worstDebt && budget > 50) {
     var overpay0 = Math.min(roundAmt(budget * stratCfg.debtRatio), 500, roundAmt(worstDebt.balance));
     overpay0 = Math.max(overpay0, 50);
-    var overpay = geodeFinancialMemorySoftenedAmount(overpay0, debtMult, 50, false);
+    var overpay = geodePureFinancialMemorySoftenedAmount(overpay0, debtMult, 50, false);
     if (overpay > 0 && budget >= overpay) {
       pushStep({
         priority: 1,
@@ -3796,7 +3796,7 @@ function geodePlanSnapshot(state, opts) {
   // Step: emergency buffer (only when no emergency goal exists)
   var hasEmergencyGoal = false;
   for (var gi = 0; gi < goals.length; gi++) {
-    if (geodeIsEmergencyBufferGoal(goals[gi])) { hasEmergencyGoal = true; break; }
+    if (geodePureIsEmergencyBufferGoal(goals[gi])) { hasEmergencyGoal = true; break; }
   }
   if (!hasEmergencyGoal && budget > 0 && steps.length < 4) {
     var emCap = stratCfg.emergencyCapRatio;
@@ -3828,11 +3828,11 @@ function geodePlanSnapshot(state, opts) {
     if (steps[si] && String(steps[si].label || '').indexOf('Reduce high') === 0) { hasHighDebtStep = true; break; }
   }
   if (strategy === 'debt' && !hasHighDebtStep && budget > 50) {
-    var moderateDebt = selectWorstDebtAboveApr(debts, 5);
+    var moderateDebt = geodePureSelectWorstDebtAboveApr(debts, 5);
     if (moderateDebt) {
       var mod0 = Math.min(roundAmt(budget * stratCfg.debtRatio), 300, roundAmt(moderateDebt.balance));
       if (mod0 > 0) mod0 = Math.max(mod0, 50);
-      var mod = geodeFinancialMemorySoftenedAmount(mod0, debtMult, 50, false);
+      var mod = geodePureFinancialMemorySoftenedAmount(mod0, debtMult, 50, false);
       if (mod > 0 && budget >= mod) {
         pushStep({
           priority: 2,
@@ -3860,7 +3860,7 @@ function geodePlanSnapshot(state, opts) {
     var gRemaining = Math.max(0, gTarget - gSaved);
     if (gRemaining > 0) {
       var goal0 = Math.min(Math.max(20, roundAmt(budget * stratCfg.goalRatio)), roundAmt(gRemaining), budget);
-      var goalAmt = geodeFinancialMemorySoftenedAmount(goal0, goalMult, 20, false);
+      var goalAmt = geodePureFinancialMemorySoftenedAmount(goal0, goalMult, 20, false);
       if (goalAmt > 0 && budget >= goalAmt) {
         pushStep({
           priority: 2,
@@ -3878,7 +3878,7 @@ function geodePlanSnapshot(state, opts) {
   // Step: invest remainder
   if (budget > 50) {
     var inv0 = roundAmt(budget * stratCfg.investRatio);
-    var invAmt = geodeFinancialMemorySoftenedAmount(inv0, invMult, 50, true);
+    var invAmt = geodePureFinancialMemorySoftenedAmount(inv0, invMult, 50, true);
     if (invAmt > 0 && budget >= invAmt) {
       pushStep({
         priority: 3,
@@ -3995,7 +3995,7 @@ function geodePureFirstEmergencyGoalFromState(state) {
   var list = Array.isArray(state.goals) ? state.goals : [];
   for (var i = 0; i < list.length; i++) {
     var g = list[i];
-    if (g && geodeIsEmergencyBufferGoal(g)) return g;
+    if (g && geodePureIsEmergencyBufferGoal(g)) return g;
   }
   return null;
 }
@@ -4040,7 +4040,7 @@ function geodePureSumBufferContributions(state, opts) {
     var confirmed = geodePurePaymentConfirmedAmountForMonth(p, opts);
     if (!(confirmed > 0)) continue;
     if (eg && p.goalId && String(p.goalId) === String(eg.id)) sum += confirmed;
-    else if (geodePaymentNameLooksLikeBuffer(p.name)) sum += confirmed;
+    else if (geodePurePaymentNameLooksLikeBuffer(p.name)) sum += confirmed;
   }
   return sum;
 }
@@ -4128,7 +4128,7 @@ function geodePurePlanStepProgressCore(state, step, opts) {
       if (stb !== 'upcoming' && stb !== 'overdue') continue;
       if (!geodePurePaymentCountsForMonth(pb, opts)) continue;
       var bufHit = false;
-      if (geodePaymentNameLooksLikeBuffer(pb.name)) bufHit = true;
+      if (geodePurePaymentNameLooksLikeBuffer(pb.name)) bufHit = true;
       else if (!pb.goalId && !pb.debtId && !pb.investId && String(pb.payKind || '') === 'buffer') bufHit = true;
       else if (String(pb.name || '').toLowerCase().indexOf('buffer') >= 0) bufHit = true;
       else if (egBuf && pb.goalId && String(pb.goalId) === String(egBuf.id)) bufHit = true;

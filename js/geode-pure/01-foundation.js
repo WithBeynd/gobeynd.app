@@ -1,5 +1,5 @@
 // Beynd — pure foundation (Stage 81B)
-// Extracted: toNum, Stage 75C, 75E, 77B. Classic global script; no S/DOM/storage.
+// Extracted: toNum, Stage 75C, 75E, 77B, 82B plan mirrors. Classic global script; no S/DOM/storage.
 
 
 // ── PURE FINANCE HELPERS ────────────────────────────
@@ -751,4 +751,124 @@ function geodePurePlanSignatureFromSteps(steps, state, opts) {
     parts.push(id.stepId + ':' + String(id.signatureAmount));
   }
   return parts.join('|');
+}
+
+// ── PURE PLAN DEPENDENCY MIRRORS (Stage 82B; shadow-only; ports production helpers) ──
+// Contract: deterministic from explicit inputs; no globals, storage/DOM/window, no mutation.
+
+function geodePureMonthlyInterest(debtOrApr, balance) {
+  if (debtOrApr && typeof debtOrApr === 'object') {
+    return (toNum(debtOrApr.apr) / 100 / 12) * toNum(debtOrApr.balance);
+  }
+  return (toNum(debtOrApr) / 100 / 12) * toNum(balance);
+}
+
+function geodePureStrategyConfig(strategy) {
+  var m = {
+    debt: { debtRatio: 0.55, goalRatio: 0.4, investRatio: 0.55, emergencyCapRatio: 0.4 },
+    balanced: { debtRatio: 0.4, goalRatio: 0.5, investRatio: 0.7, emergencyCapRatio: 0.6 },
+    growth: { debtRatio: 0.25, goalRatio: 0.55, investRatio: 0.85, emergencyCapRatio: 0.4 }
+  };
+  var k = strategy;
+  if (!m[k]) k = 'balanced';
+  return m[k];
+}
+
+/** Among debts with balance > 0 and APR above threshold, pick highest monthly interest cost (tie: larger balance). */
+function geodePureSelectWorstHighAprDebt(debts, aprThreshold) {
+  var list = debts || [];
+  var thr = aprThreshold === undefined ? 10 : aprThreshold;
+  var worst = null;
+  var i, d, apr, bal, mi, wmi;
+  for (i = 0; i < list.length; i++) {
+    d = list[i];
+    if (!d) continue;
+    apr = toNum(d.apr);
+    bal = toNum(d.balance);
+    if (bal <= 0 || apr <= thr) continue;
+    mi = geodePureMonthlyInterest(d.apr, bal);
+    if (!worst) {
+      worst = d;
+      continue;
+    }
+    wmi = geodePureMonthlyInterest(worst.apr, worst.balance);
+    if (mi > wmi || (mi === wmi && bal > toNum(worst.balance))) worst = d;
+  }
+  return worst;
+}
+
+/** Selects worst-APR debt at or above minApr (inclusive). */
+function geodePureSelectWorstDebtAboveApr(debts, minApr) {
+  var list = debts || [];
+  var thr = minApr === undefined ? 5 : minApr;
+  var worst = null;
+  var i, d, apr, bal, mi, wmi;
+  for (i = 0; i < list.length; i++) {
+    d = list[i];
+    if (!d) continue;
+    apr = toNum(d.apr);
+    bal = toNum(d.balance);
+    if (bal <= 0 || apr < thr) continue;
+    mi = geodePureMonthlyInterest(d.apr, bal);
+    if (!worst) {
+      worst = d;
+      continue;
+    }
+    wmi = geodePureMonthlyInterest(worst.apr, worst.balance);
+    if (mi > wmi || (mi === wmi && bal > toNum(worst.balance))) worst = d;
+  }
+  return worst;
+}
+
+function geodePureFinancialMemorySoftenedAmount(amount, multiplier, minUseful, allowSkip) {
+  var amt = Math.max(0, Math.round(toNum(amount)));
+  var m = Number(multiplier);
+  if (!isFinite(m) || m >= 1 || amt <= 0) return amt;
+  if (m <= 0) return allowSkip ? 0 : amt;
+  var softened = Math.floor(amt * m);
+  minUseful = Math.max(0, Number(minUseful) || 0);
+  if (minUseful > 0 && softened < minUseful) {
+    return allowSkip ? 0 : amt;
+  }
+  return Math.max(0, softened);
+}
+
+function geodePureIsEmergencyBufferGoal(goal) {
+  if (!goal) return false;
+  if (goal.cat === 'emergency') return true;
+  var nm = String(goal.name || '').toLowerCase().trim();
+  if (!nm) return false;
+  if (nm === 'emergency' || nm === 'buffer') return true;
+  if (nm.indexOf('emergency fund') >= 0) return true;
+  if (nm.indexOf('safety buffer') >= 0) return true;
+  if (nm.indexOf('rainy day') >= 0) return true;
+  return false;
+}
+
+function geodePurePaymentNameLooksLikeBuffer(paymentOrName) {
+  var s = String(
+    paymentOrName && typeof paymentOrName === 'object' && paymentOrName.name != null
+      ? paymentOrName.name
+      : paymentOrName || ''
+  )
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return false;
+  var needles = [
+    'emergency buffer',
+    'safety buffer',
+    'emergency fund',
+    'starter buffer',
+    'buffer payment',
+    'buffer contribution',
+    'emergency savings',
+    'rainy day',
+    'rainy-day'
+  ];
+  var i;
+  for (i = 0; i < needles.length; i++) {
+    if (s.indexOf(needles[i]) >= 0) return true;
+  }
+  return false;
 }

@@ -4,7 +4,7 @@
 // CACHE_VERSION: increment on every release, then commit + push.
 // CACHE_NAME is derived so old caches are deleted on activate and clients never mix versions.
 
-const CACHE_VERSION = 'v1.0.67'; // Stage 81B foundation extraction
+const CACHE_VERSION = 'v1.0.68'; // Stage 82B pure plan dependency mirrors
 const CACHE_NAME = `beynd-cache-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
