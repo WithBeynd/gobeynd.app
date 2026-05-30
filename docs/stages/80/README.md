@@ -12,9 +12,12 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 |-------|------|----------|---------|--------|
 | 80A | VI / Hidden Intelligence architecture audit | [80A-visual-hidden-intelligence-architecture-audit.md](./80A-visual-hidden-intelligence-architecture-audit.md) | NEEDS ATTENTION | — |
 | 80B-A | Alert duplication collapse audit | [80B-A-home-alert-duplication-collapse-audit.md](./80B-A-home-alert-duplication-collapse-audit.md) | NEEDS ATTENTION | — |
-| 80B-B | Build — alert dedup phase 1 | [80B-B-build-home-alert-dedup-phase-1.md](./80B-B-build-home-alert-dedup-phase-1.md) | Built (local) | *held* |
-| 80B-C | Post-build audit (80B-B) | — | Pending | — |
-| 80C | Main Action dominance audit | — | Planned | — |
+| 80B-B | Build — alert dedup phase 1 | [80B-B-build-home-alert-dedup-phase-1.md](./80B-B-build-home-alert-dedup-phase-1.md) | Built | `46ff1e1` |
+| 80B-C | Post-build audit (80B-B) | — | **PASS** | — |
+| 80C-A | Main Action route value audit | [80C-A-main-action-route-value-audit.md](./80C-A-main-action-route-value-audit.md) | NEEDS ATTENTION | — |
+| 80C-B | Build — MA route value presentation tier | [80C-B-build-main-action-route-value-tier.md](./80C-B-build-main-action-route-value-tier.md) | Built (local) | *held* |
+| 80C-C | Post-build audit (80C-B) | — | **PASS** | — |
+| 80C-D | Review Plan presentation polish (incl. D.1 inline affordance) | [80C-D-review-plan-presentation-polish.md](./80C-D-review-plan-presentation-polish.md) | Built (local) | *held* |
 | 80D | Stability Room shadow snapshot audit (no UI) | — | Planned | — |
 
 ---
@@ -26,6 +29,7 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | `geodeHomeMainActionAlertDedupContext` | Read-only MA vs alert dedup signals (80B-B) |
 | `geodeHomeOrchestrationResolve` | Sets `surfaces.overBudget.show` with dedup rules (80B-B) |
 | `geodeHomeOrchSurfaceShowResolved` | Render consumer (79B-B) |
+| `geodeMainActionRouteValue` | Read-only MA presentation tier (80C-B) |
 
 ---
 

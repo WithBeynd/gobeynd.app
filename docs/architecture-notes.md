@@ -41,6 +41,17 @@ Read-only helper: **`geodeHomeMainActionAlertDedupContext(state, action)`**. Ren
 
 **Not in phase 1:** Needs Attention suppression, muted detail lines, combined alert summary. `disclosureNeeded` entries appended on suppress for future Stability Room.
 
+## Home Main Action route value tier (Stage 80C-B)
+
+Read-only **`geodeMainActionRouteValue(action, state, opts)`** — presentation only in **`geodeHomeMainActionHtml`**.
+
+When generic **Review your plan** / **Stay on track** + **Review plan** CTA has no amount and Plan lacks actionable steps (`!geodeHasPlanContext`, no steps, no `amount > 0`, `totalS <= 0`, or no incomplete step):
+
+- Button tier **`btn-s`** instead of **`btn-p`**
+- Display-only hint line; secondary affordance **Plan view ›** inline (80C-D.1); **`geodeRunMainAction`** unchanged
+
+Enriched titles (buffer, subscription, debt sub) stay **primary**. Do **not** change **`geodeGetMainAction`** for tier logic.
+
 ## Home Insight pressure reframe (Stage 79B-I)
 
 Safety/buffer Home **Insight** (not Human Moment) uses display-only reframe when `calcMonthlyLeftover(state) < 0`:

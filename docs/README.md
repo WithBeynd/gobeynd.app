@@ -61,8 +61,9 @@ See [`docs/stages/80/README.md`](./stages/80/README.md).
 **Current state (May 2026):**
 
 - **80A / 80B-A** architecture + alert dedup audits documented
-- **80B-B** built locally — Over Budget card dedup in orchestration resolve (phase 1)
-- **80B-C** post-build audit pending
+- **80B-B** committed (`46ff1e1`); **80B-C PASS**
+- **80C-B / 80C-D** built locally — MA route value tier + Review Plan inline affordance (80C-D.1)
+- **80C-C** post-build audit **PASS** (80C-B logic)
 
 ---
 
