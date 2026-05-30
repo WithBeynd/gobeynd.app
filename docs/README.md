@@ -64,6 +64,7 @@ See [`docs/stages/80/README.md`](./stages/80/README.md).
 - **80B-B** committed (`46ff1e1`); **80B-C PASS**
 - **80C-B / 80C-D** built locally — MA route value tier + Review Plan inline affordance (80C-D.1)
 - **80C-C** post-build audit **PASS** (80C-B logic)
+- **80E-D** built locally — Reality `monthContextCarry` + Use last month affordance
 
 ---
 

@@ -97,6 +97,7 @@ Live manual Reality paths:
 - `geodeRealityPageHtml`
 - `geodeRealityStatus`
 - Reality Check modal helpers
+- **`geodeGetMonthContextCarry`** / **`monthContextCarry`** — prior-month suggest only (80E-D); active month context still via Save on Reality form
 
 Dormant or future-facing paths:
 

@@ -18,6 +18,8 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | 80C-B | Build — MA route value presentation tier | [80C-B-build-main-action-route-value-tier.md](./80C-B-build-main-action-route-value-tier.md) | Built (local) | *held* |
 | 80C-C | Post-build audit (80C-B) | — | **PASS** | — |
 | 80C-D | Review Plan presentation polish (incl. D.1 inline affordance) | [80C-D-review-plan-presentation-polish.md](./80C-D-review-plan-presentation-polish.md) | Built (local) | *held* |
+| 80E-C | Reality context continuity audit | [80E-C-reality-context-continuity-audit.md](./80E-C-reality-context-continuity-audit.md) | NEEDS ATTENTION | — |
+| 80E-D | Build — Reality context continuity | [80E-D-build-reality-context-continuity.md](./80E-D-build-reality-context-continuity.md) | Built (local) | *held* |
 | 80D | Stability Room shadow snapshot audit (no UI) | — | Planned | — |
 
 ---
@@ -30,6 +32,7 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | `geodeHomeOrchestrationResolve` | Sets `surfaces.overBudget.show` with dedup rules (80B-B) |
 | `geodeHomeOrchSurfaceShowResolved` | Render consumer (79B-B) |
 | `geodeMainActionRouteValue` | Read-only MA presentation tier (80C-B) |
+| `geodeGetMonthContextCarry` | Prior-month Reality context for carry affordance (80E-D) |
 
 ---
 
