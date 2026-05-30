@@ -51,11 +51,18 @@ See [`docs/stages/79/README.md`](./stages/79/README.md).
 
 **Current state (May 2026):**
 
-- **79B-B** committed (`8dc9855`); **79B-C PASS**
-- **79B-E / 79B-F** coaching strip parity — **PASS** (local)
-- **79B-I / 79B-J** safety Insight pressure reframe — built / **PASS** (local)
-- **79B-L** built locally — Home HM non-alert styling (`geodeHomeHumanMomentStripHtml`)
+- **79B-B through 79B-L** committed through `85fe613`
 - No service-worker bump for 79B presentation passes alone
+
+### Stage 80 — Visual Intelligence & Home alert refinement
+
+See [`docs/stages/80/README.md`](./stages/80/README.md).
+
+**Current state (May 2026):**
+
+- **80A / 80B-A** architecture + alert dedup audits documented
+- **80B-B** built locally — Over Budget card dedup in orchestration resolve (phase 1)
+- **80B-C** post-build audit pending
 
 ---
 

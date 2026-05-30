@@ -15758,6 +15758,30 @@ function geodeHomeDeferredMetaLineHtml(state) {
 }
 
 /**
+ * Read-only: Main Action vs Home alert dedup context (Stage 80B-B).
+ * Does not mutate state or render.
+ */
+function geodeHomeMainActionAlertDedupContext(state, action) {
+  state = state || S;
+  action = action && typeof action === 'object' ? action : null;
+  var maIsSpendRecovery = false;
+  try {
+    maIsSpendRecovery = geodeMainActionVisualRegister(action || {}) === 'pressure';
+  } catch (_eAdcReg) {
+    maIsSpendRecovery = false;
+  }
+  var title = action && action.title ? String(action.title).toLowerCase() : '';
+  var maIsOverduePath =
+    title.indexOf('clear overdue') >= 0 ||
+    title.indexOf('overdue items') >= 0 ||
+    (title.indexOf('overdue') >= 0 && title.indexOf('over budget') < 0);
+  return {
+    maIsOverduePath: maIsOverduePath,
+    maIsSpendRecovery: maIsSpendRecovery
+  };
+}
+
+/**
  * Read-only Home orchestration resolver (Stage 60B). Composes orchestration + deferred queue
  * snapshots into surface instructions. Instrumentation only — does not mutate state or render.
  */
@@ -15795,6 +15819,11 @@ function geodeHomeOrchestrationResolve(state) {
   function pushReason(code) {
     if (!code || resolve.reasonCodes.indexOf(code) >= 0) return;
     resolve.reasonCodes.push(code);
+  }
+
+  function pushDisclosureResolve(code, surface, copy) {
+    if (!code || !copy) return;
+    resolve.disclosureNeeded.push({ code: code, surface: surface || 'home', copy: copy });
   }
 
   if (geodeIsEmptyState()) {
@@ -15899,13 +15928,37 @@ function geodeHomeOrchestrationResolve(state) {
     }
   } catch (_eNaRes) {}
 
+  var _ma = null;
   try {
-    var _ma = geodeGetMainAction(state);
+    _ma = geodeGetMainAction(state);
     if (_ma && (_ma.title || _ma.cta)) {
       resolve.surfaces.mainAction.show = true;
       resolve.surfaces.mainAction.reason = 'main_action_available';
     }
   } catch (_eMaRes) {}
+
+  if (resolve.surfaces.overBudget.show) {
+    var _alertDedup = geodeHomeMainActionAlertDedupContext(state, _ma);
+    if (resolve.surfaces.needsAttention.show) {
+      resolve.surfaces.overBudget.show = false;
+      resolve.surfaces.overBudget.reason = 'dedup_needs_attention_priority';
+      pushReason('over_budget_dedup_needs_attention');
+      pushDisclosureResolve(
+        'dedup_over_budget_needs_attention',
+        'home_over_budget',
+        'Over-budget summary withheld while overdue items need attention first.'
+      );
+    } else if (_alertDedup.maIsSpendRecovery) {
+      resolve.surfaces.overBudget.show = false;
+      resolve.surfaces.overBudget.reason = 'dedup_main_action_spend_recovery';
+      pushReason('over_budget_dedup_spend_recovery');
+      pushDisclosureResolve(
+        'dedup_over_budget_spend_recovery',
+        'home_over_budget',
+        'Over-budget card withheld; Main Action already covers spend recovery.'
+      );
+    }
+  }
 
   var _rawMuted =
     dq && dq.activeHomeSurfaces && dq.activeHomeSurfaces.mutedLines

@@ -30,6 +30,17 @@ Home orchestration **producers** (do not change for presentation-only passes):
 
 Do not reorder Home or change orchestration producers when adding gating for additional surfaces.
 
+## Home alert dedup (Stage 80B-B phase 1)
+
+Persistent **Over Budget** card (`surfaces.overBudget`) yields in `geodeHomeOrchestrationResolve` when:
+
+1. **`needsAttention.show`** — overdue priority (`dedup_needs_attention_priority`)
+2. **Main Action spend-recovery** — `geodeHomeMainActionAlertDedupContext` → `maIsSpendRecovery` via `geodeMainActionVisualRegister === 'pressure'` (`dedup_main_action_spend_recovery`)
+
+Read-only helper: **`geodeHomeMainActionAlertDedupContext(state, action)`**. Render still via **`geodeHomeOrchSurfaceShowResolved('overBudget', ...)`** — do not add parallel gates in `rHome`.
+
+**Not in phase 1:** Needs Attention suppression, muted detail lines, combined alert summary. `disclosureNeeded` entries appended on suppress for future Stability Room.
+
 ## Home Insight pressure reframe (Stage 79B-I)
 
 Safety/buffer Home **Insight** (not Human Moment) uses display-only reframe when `calcMonthlyLeftover(state) < 0`:
