@@ -26575,6 +26575,231 @@ function geodeStabilityRoomSnapshot(state, opts) {
   }
 }
 
+/**
+ * Stage 80G-B: shadow-only Stability Room visual/reflection model.
+ * Interprets geodeStabilityRoomSnapshot output for future UI — no DOM, CSS, or routes.
+ * Uses calm VI registers only (never risk, error, or pressure).
+ */
+function geodeStabilityRoomVisualModel(snapshot, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  try {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+
+    var snapReason = snapshot.reason != null ? String(snapshot.reason) : '';
+    var snapActive = snapshot.active === true;
+    var noticed = snapshot.noticed && typeof snapshot.noticed === 'object' ? snapshot.noticed : {};
+    var heldBack =
+      snapshot.heldBack && typeof snapshot.heldBack === 'object' ? snapshot.heldBack : {};
+    var humanContext =
+      snapshot.humanContext && typeof snapshot.humanContext === 'object'
+        ? snapshot.humanContext
+        : {};
+    var reality = snapshot.reality && typeof snapshot.reality === 'object' ? snapshot.reality : {};
+    var planFocus =
+      snapshot.planFocus && typeof snapshot.planFocus === 'object' ? snapshot.planFocus : {};
+    var quiet = snapshot.quiet && typeof snapshot.quiet === 'object' ? snapshot.quiet : {};
+    var postureObj =
+      noticed.contextPosture && typeof noticed.contextPosture === 'object'
+        ? noticed.contextPosture
+        : {};
+    var posture = postureObj.posture != null ? String(postureObj.posture) : 'unknown';
+    var tone = postureObj.tone != null ? String(postureObj.tone) : 'calm';
+
+    var monthCtx =
+      humanContext.monthContext && typeof humanContext.monthContext === 'object'
+        ? humanContext.monthContext
+        : {};
+    var monthContextHasAny = !!monthCtx.hasAny;
+    var carry =
+      humanContext.carrySuggestion && typeof humanContext.carrySuggestion === 'object'
+        ? humanContext.carrySuggestion
+        : null;
+    var carryHasAny = !!(carry && carry.hasAny);
+
+    var disclosure = Array.isArray(heldBack.disclosureNeeded) ? heldBack.disclosureNeeded : [];
+    var deferred = Array.isArray(heldBack.deferredItems) ? heldBack.deferredItems : [];
+    var mutedLines = Array.isArray(heldBack.mutedLines) ? heldBack.mutedLines : [];
+    var deferredWithCopy = false;
+    var di;
+    for (di = 0; di < deferred.length; di++) {
+      if (deferred[di] && String(deferred[di].humanCopy || '').trim()) {
+        deferredWithCopy = true;
+        break;
+      }
+    }
+    var heldBackSignals =
+      disclosure.length > 0 || deferredWithCopy || mutedLines.length > 0;
+    var realityHasData = !!reality.hasData;
+    var alignmentActive = !!(
+      planFocus.alignment &&
+      planFocus.alignment.active === true
+    );
+    var planHasFocus = !!(
+      (Array.isArray(planFocus.topSteps) && planFocus.topSteps.length > 0) ||
+      String(planFocus.headlineSummary || '').trim()
+    );
+    var suppressedTopics = Array.isArray(quiet.suppressedTopics)
+      ? quiet.suppressedTopics
+      : [];
+
+    var atmosphere = 'calm';
+    if (posture === 'growth_room') {
+      atmosphere = 'room';
+    } else if (posture === 'protect_flexibility' || posture === 'review_first') {
+      atmosphere = 'protective';
+    } else if (heldBackSignals) {
+      atmosphere = 'recovering';
+    } else if (monthContextHasAny || disclosure.length > 0) {
+      atmosphere = 'reflective';
+    } else if (humanContext.hasDependants && tone === 'cautious') {
+      atmosphere = 'protective';
+    }
+
+    var viRegister = 'calm';
+    if (atmosphere === 'reflective') viRegister = disclosure.length > 0 ? 'review' : 'guidance';
+    else if (atmosphere === 'protective') viRegister = 'calm';
+    else if (atmosphere === 'recovering') viRegister = 'recovery';
+    else if (atmosphere === 'room') viRegister = 'progress';
+
+    var copyTone = 'declarative';
+    if (tone === 'cautious' || atmosphere === 'protective') copyTone = 'cautious';
+    else if (tone === 'encouraging' || atmosphere === 'room') copyTone = 'encouraging';
+
+    function section(id, visible, priority, register, headline) {
+      return {
+        id: id,
+        visible: !!visible,
+        priority: priority,
+        register: register,
+        headline: headline || ''
+      };
+    }
+
+    var sections = [];
+    sections.push(
+      section(
+        'what_matters_this_month',
+        monthContextHasAny,
+        1,
+        'guidance',
+        'What you said matters this month'
+      )
+    );
+    sections.push(
+      section(
+        'what_beynd_noticed',
+        snapActive && snapReason !== 'empty_state' && snapReason !== 'not_onboarded',
+        2,
+        viRegister,
+        'What Beynd noticed'
+      )
+    );
+    sections.push(
+      section(
+        'what_home_kept_quiet',
+        heldBackSignals,
+        2,
+        'recovery',
+        'What Home kept quiet'
+      )
+    );
+    sections.push(
+      section(
+        'what_plan_protecting',
+        planHasFocus,
+        3,
+        'guidance',
+        'What your plan is protecting'
+      )
+    );
+    sections.push(
+      section(
+        'what_reality_changed',
+        realityHasData || alignmentActive,
+        3,
+        'review',
+        'What Reality says'
+      )
+    );
+    sections.push(
+      section(
+        'ask_beynd_explain',
+        snapActive && snapReason === 'reflection_eligible',
+        4,
+        'guidance',
+        'What Ask Beynd can explain'
+      )
+    );
+    sections.push(
+      section(
+        'what_can_wait',
+        suppressedTopics.length > 0,
+        5,
+        'calm',
+        'What can wait'
+      )
+    );
+
+    var entryEligible =
+      snapActive &&
+      snapReason === 'reflection_eligible' &&
+      (monthContextHasAny || heldBackSignals || realityHasData || carryHasAny);
+    var entrySuggest = null;
+    if (entryEligible) {
+      if (monthContextHasAny) {
+        entrySuggest = 'See how this month fits together';
+      } else if (heldBackSignals) {
+        entrySuggest = 'See what Beynd kept quiet on Home';
+      } else if (realityHasData) {
+        entrySuggest = 'See how today compares with your plan';
+      } else {
+        entrySuggest = 'Open your monthly reflection';
+      }
+    }
+
+    var model = {
+      version: 1,
+      mode: 'reflection',
+      generatedAt:
+        Number(snapshot.generatedAt || opts.generatedAt || Date.now()) || Date.now(),
+      sourceSnapshotVersion: Number(snapshot.version || 1) || 1,
+      atmosphere: atmosphere,
+      viRegister: viRegister,
+      viRegisterClass: 'vi-register-' + viRegister,
+      copyTone: copyTone,
+      sections: sections,
+      entryCopy: {
+        eligible: entryEligible,
+        suggest: entrySuggest,
+        dismiss: entryEligible ? 'Not now' : null
+      },
+      motion: {
+        revealMs: 220,
+        staggerMs: 40
+      },
+      noGo: {
+        trafficLights: true,
+        autoOpen: false,
+        notificationDrawer: false
+      },
+      audit: {
+        shadowOnly: true,
+        snapshotReason: snapReason,
+        snapshotActive: snapActive,
+        forbiddenRegisters: ['pressure', 'risk', 'error']
+      }
+    };
+
+    try {
+      window._geodeStabilityRoomVisualModel = model;
+    } catch (_eSrVmWin) {}
+
+    return model;
+  } catch (_eSrVm) {
+    return null;
+  }
+}
+
 /** Truncate plan rationale lines for Ask Beynd context (export only). */
 function geodePlanRationaleTruncateLine(text, maxLen) {
   var s = String(text || '')

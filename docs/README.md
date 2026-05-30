@@ -66,7 +66,8 @@ See [`docs/stages/80/README.md`](./stages/80/README.md).
 - **80C-C** post-build audit **PASS** (80C-B logic)
 - **80E-D** built locally — Reality `monthContextCarry` + Use last month affordance
 - **80E-F / 80E-G** — first-run intro copy for Reality / Ask Beynd; **80E-G.2** trigger fix
-- **80F-B / 80F-D** — `geodeStabilityRoomSnapshot` shadow read-model + contract hardening (no UI)
+- **80F-B / 80F-D** — `geodeStabilityRoomSnapshot` shadow read-model
+- **80G-B / 80G-B.1 / 80G-B.2 / 80G-B.3** — `geodeStabilityRoomVisualModel` shadow visual interpreter (`mode: 'reflection'`, `noGo`; atmosphere `room`; no UI)
 
 ---
 

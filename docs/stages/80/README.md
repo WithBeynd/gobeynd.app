@@ -27,6 +27,11 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | 80F-A | Stability Room shadow snapshot audit | [80F-A-stability-room-shadow-snapshot-audit.md](./80F-A-stability-room-shadow-snapshot-audit.md) | NEEDS ATTENTION | — |
 | 80F-B | Build — Stability Room shadow snapshot | [80F-B-build-stability-room-shadow-snapshot.md](./80F-B-build-stability-room-shadow-snapshot.md) | Built (local) | *held* |
 | 80F-D | Shadow snapshot contract hardening | [80F-D-shadow-snapshot-contract-hardening.md](./80F-D-shadow-snapshot-contract-hardening.md) | Built (local) | *held* |
+| 80F-F | Visual reflection architecture audit | [80F-F-visual-reflection-architecture-audit.md](./80F-F-visual-reflection-architecture-audit.md) | NEEDS ATTENTION | — |
+| 80G-B | Build — Stability Room visual model shadow | [80G-B-build-stability-room-visual-model.md](./80G-B-build-stability-room-visual-model.md) | Built (local) | *held* |
+| 80G-B.1 | Atmosphere naming alignment (`room`) | [80G-B.1-atmosphere-naming-alignment.md](./80G-B.1-atmosphere-naming-alignment.md) | Built (local) | *held* |
+| 80G-B.2 | Visual model contract completion | [80G-B.2-visual-model-contract-completion.md](./80G-B.2-visual-model-contract-completion.md) | Built (local) | *held* |
+| 80G-B.3 | Visual model no-go contract | [80G-B.3-visual-model-no-go-contract.md](./80G-B.3-visual-model-no-go-contract.md) | Built (local) | *held* |
 
 ---
 
@@ -40,6 +45,7 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | `geodeMainActionRouteValue` | Read-only MA presentation tier (80C-B) |
 | `geodeGetMonthContextCarry` | Prior-month Reality context for carry affordance (80E-D) |
 | `geodeStabilityRoomSnapshot` | Shadow Stability Room reflection read-model (80F-B) |
+| `geodeStabilityRoomVisualModel` | Shadow visual/atmosphere interpreter (80G-B) |
 
 ---
 

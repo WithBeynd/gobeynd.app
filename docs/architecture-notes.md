@@ -120,6 +120,8 @@ Read-only **`geodeStabilityRoomSnapshot(state, opts)`** — assembles orchestrat
 
 **Not UI.** First consumer of dormant `disclosureNeeded[]`. Do not wire to Home until post-build audit passes.
 
+**Visual model (80G-B / 80G-B.1 / 80G-B.2 / 80G-B.3):** **`geodeStabilityRoomVisualModel(snapshot)`** — `mode: 'reflection'`, `generatedAt`, `sourceSnapshotVersion`, `noGo` (`trafficLights`, `autoOpen`, `notificationDrawer`); atmosphere tokens (`calm`/`reflective`/`protective`/`recovering`/`room`; never `opportunity`); VI register (`calm`/`guidance`/`review`/`recovery`/`progress` only); section visibility; entry copy hints. Hook: **`window._geodeStabilityRoomVisualModel`**. Never `pressure`/`risk`/`error`.
+
 Dormant or future-facing paths:
 
 - `geodeRealityCheckCardHtml`
