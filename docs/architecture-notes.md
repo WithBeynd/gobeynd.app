@@ -24,7 +24,9 @@ Home orchestration **producers** (do not change for presentation-only passes):
 
 **Wired in 79B-B:** `overBudget`, `needsAttention`.
 
-**Not yet wired:** `focusGoal`, `sinceLastVisit`, full `askBeynd.emphasis`, coaching strip legacy fallback removal, `disclosureNeeded[]` (future hidden intelligence).
+**Wired in 79B-E:** `coachingStrip` — when `surfaces.coachingStrip.show === false`, `geodeHomeCoachingStripHtml()` returns blank (no legacy HM/Insight override). Legacy path remains only when resolve is missing.
+
+**Not yet wired:** `focusGoal`, `sinceLastVisit`, full `askBeynd.emphasis`, `disclosureNeeded[]` (future hidden intelligence).
 
 Do not reorder Home or change orchestration producers when adding gating for additional surfaces.
 

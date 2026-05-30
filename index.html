@@ -16386,10 +16386,7 @@ function geodeHomeCoachingStripHtml() {
   }
 
   if (_orchStrip.show === false) {
-    if (geodeHomeCoachingStripCanSafelySkip(_orchStrip)) {
-      return geodeHomeCoachingStripSafeBlankHtml();
-    }
-    return geodeHomeCoachingStripLegacyHtml();
+    return geodeHomeCoachingStripSafeBlankHtml();
   }
 
   if (_orchStrip.show === true && _orchStrip.type === 'human_moment') {
