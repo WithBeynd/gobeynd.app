@@ -25514,6 +25514,235 @@ function geodeFormatAskBeyndOrchestrationBlock(state) {
   return out.join('\n');
 }
 
+/** Plain text from plan step note HTML (shadow rationale export only). */
+function geodePlanRationalePlainTextFromHtml(html) {
+  return String(html || '')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Mirrors Ask Beynd balance sense labels; shadow export only. */
+function geodePlanRationaleSenseLabel(rs) {
+  if (!rs || !rs.hasData) return '';
+  var senseLabel = 'Go gently here';
+  if (rs.confidence === 'high' && !rs.activitySinceCheck) {
+    senseLabel = 'Looks steady';
+  } else if (rs.confidence === 'moderate' || (typeof rs.daysOld === 'number' && rs.daysOld > 3)) {
+    senseLabel = 'Worth another look';
+  }
+  return senseLabel;
+}
+
+/**
+ * Stage 76C-B: shadow-only plan rationale read-model (not wired to UI or Ask Beynd).
+ * Assembles existing plan reasoning from getMonthPlan outputs and progress helpers.
+ */
+function geodePlanRationaleSnapshot(state, opts) {
+  state = state || S;
+  opts = opts && typeof opts === 'object' ? opts : {};
+  try {
+    var plan = opts.plan || getMonthPlan();
+    var monthKey = geodePureMonthKey(opts.monthKey) || currentYM();
+    var progressOpts = {
+      monthKey: monthKey,
+      today: geodePureDateKey(opts.today) || geodePureDateKey(opts.generatedAt)
+    };
+
+    var strategyKey = String(state.planStrategy || 'balanced');
+    if (strategyKey !== 'debt' && strategyKey !== 'balanced' && strategyKey !== 'growth') {
+      strategyKey = 'balanced';
+    }
+
+    var aff = plan && plan.affordability && typeof plan.affordability === 'object' ? plan.affordability : {};
+    var affCopy = {
+      planRoom: toNum(aff.planRoom),
+      confirmedRoom: toNum(aff.confirmedRoom),
+      breathingRoomFloor: toNum(aff.breathingRoomFloor),
+      unresolvedRequired: toNum(aff.unresolvedRequired),
+      scheduledCommitments: toNum(aff.scheduledCommitments),
+      completedCommitments: toNum(aff.completedCommitments),
+      overdueCommitments: toNum(aff.overdueCommitments),
+      requiredMinimumScheduled: toNum(aff.requiredMinimumScheduled),
+      protectedSpendingMonthly: toNum(aff.protectedSpendingMonthly),
+      protectedSpendingRows: toNum(aff.protectedSpendingRows),
+      suggestableBeforeReality: toNum(aff.suggestableBeforeReality),
+      suggestableRoom: toNum(aff.suggestableRoom),
+      confidence: typeof aff.confidence === 'string' ? aff.confidence : 'low',
+      reasonCodes: Array.isArray(aff.reasonCodes) ? aff.reasonCodes.slice() : []
+    };
+    if (aff.realityAdjustment && typeof aff.realityAdjustment === 'object') {
+      affCopy.realityAdjustment = {
+        suggestableBeforeReality: toNum(aff.realityAdjustment.suggestableBeforeReality),
+        suggestableAfterReality: toNum(aff.realityAdjustment.suggestableAfterReality),
+        realityGapAdjustment: toNum(aff.realityAdjustment.realityGapAdjustment),
+        postureMultiplier: toNum(aff.realityAdjustment.postureMultiplier, 1),
+        reasonCodes: Array.isArray(aff.realityAdjustment.reasonCodes)
+          ? aff.realityAdjustment.reasonCodes.slice()
+          : []
+      };
+    } else {
+      affCopy.realityAdjustment = null;
+    }
+
+    var stepsOut = [];
+    var rawSteps = plan && Array.isArray(plan.steps) ? plan.steps : [];
+    var si;
+    for (si = 0; si < rawSteps.length; si++) {
+      var step = rawSteps[si];
+      if (!step) continue;
+      var ident = geodePurePlanStepIdentity(step, state, progressOpts);
+      var family = ident.family || 'unknown';
+      var type = typeof geodePureSuggestedActionTypeFromFamily === 'function'
+        ? geodePureSuggestedActionTypeFromFamily(family)
+        : '';
+      var prog = geodePlanStepProgress(state, step);
+      stepsOut.push({
+        index: si,
+        stepId: ident.stepId || '',
+        type: type,
+        kind: ident.kind || '',
+        label: String(step.label || ''),
+        amount: toNum(step.amount),
+        priority: step.priority != null ? step.priority : si + 1,
+        urgency: step.urgency != null ? String(step.urgency) : '',
+        reasonHeadline: geodePlanPageOneLineExplain(step),
+        reasonDetail: String(step.why || '').trim(),
+        amountRationale: String(step.explain || '').trim(),
+        notePlain: geodePlanRationalePlainTextFromHtml(step.note),
+        goalStatusWhy: step.goalStatusWhy ? String(step.goalStatusWhy).trim() : '',
+        debtProjectionNote: step.debtProjectionNote ? String(step.debtProjectionNote).trim() : '',
+        memorySoftened: !!step.memorySoftened,
+        memoryReasonCodes: Array.isArray(step.memoryReasonCodes) ? step.memoryReasonCodes.slice() : [],
+        target: {
+          kind: ident.targetKind || '',
+          id: ident.targetId != null ? String(ident.targetId) : '',
+          name: ident.targetName != null ? String(ident.targetName) : ''
+        },
+        progress: {
+          suggested: toNum(prog.suggested),
+          applied: toNum(prog.applied),
+          remaining: toNum(prog.remaining),
+          phase: prog.phase != null ? String(prog.phase) : 'none'
+        }
+      });
+    }
+
+    var firstInc = geodeFirstIncompletePlanStep(plan, state);
+    var firstIncomplete = null;
+    if (firstInc && firstInc.step) {
+      var fiIdent = geodePurePlanStepIdentity(firstInc.step, state, progressOpts);
+      firstIncomplete = {
+        index: firstInc.index,
+        stepId: fiIdent.stepId || '',
+        label: String(firstInc.step.label || '')
+      };
+    }
+
+    var rs = null;
+    try {
+      rs = geodeRealityStatus();
+    } catch (_eRsSnap) {
+      rs = { hasData: false };
+    }
+    if (!rs) rs = { hasData: false };
+
+    var balance = null;
+    if (
+      state.realityCheck &&
+      state.realityCheck.amount != null &&
+      !isNaN(Number(state.realityCheck.amount))
+    ) {
+      balance = Number(state.realityCheck.amount);
+    }
+
+    var reality = {
+      hasData: !!rs.hasData,
+      balance: balance,
+      gap: rs.hasData && typeof rs.gap === 'number' && isFinite(rs.gap) ? rs.gap : null,
+      status: rs.hasData && rs.status ? String(rs.status) : '',
+      confidence: rs.hasData && rs.confidence ? String(rs.confidence) : 'estimated',
+      daysOld: typeof rs.daysOld === 'number' ? rs.daysOld : 0,
+      activitySinceCheck: !!rs.activitySinceCheck,
+      senseLabel: rs.hasData ? geodePlanRationaleSenseLabel(rs) : ''
+    };
+
+    var cautionSeen = {};
+    var cautionsOut = [];
+    var ci;
+    var affCodes = affCopy.reasonCodes;
+    for (ci = 0; ci < affCodes.length; ci++) {
+      if (!affCodes[ci] || cautionSeen[affCodes[ci]]) continue;
+      cautionSeen[affCodes[ci]] = true;
+      cautionsOut.push(affCodes[ci]);
+    }
+    if (!geodeHasPositiveIncome() && !cautionSeen.no_income) {
+      cautionsOut.push('no_income');
+    }
+    if (affCopy.planRoom <= 0 && !cautionSeen.plan_room_negative) {
+      cautionsOut.push('plan_room_negative');
+    }
+    if (rs.hasData && rs.activitySinceCheck && !cautionSeen.activity_since_reality_check) {
+      cautionsOut.push('activity_since_reality_check');
+    }
+    if (
+      rs.hasData &&
+      typeof rs.daysOld === 'number' &&
+      rs.daysOld > 7 &&
+      !cautionSeen.reality_check_older_than_week
+    ) {
+      cautionsOut.push('reality_check_older_than_week');
+    }
+
+    var askBeyndGuidance = [
+      'Use only amounts and rationale fields from this snapshot and existing user context.',
+      'Describe plan steps as suggestions, not obligations.',
+      'Do not invent skip outcomes; debt impact is limited to debtProjectionNote when present.',
+      'If cautions include no_income or plan_room_negative, avoid affordability certainty.'
+    ];
+
+    var snapshot = {
+      version: 1,
+      monthKey: monthKey,
+      generatedAt:
+        opts.generatedAt != null && isFinite(Number(opts.generatedAt))
+          ? Number(opts.generatedAt)
+          : Date.now(),
+      strategy: {
+        key: strategyKey,
+        displayName: planStrategyDisplayName(strategyKey)
+      },
+      headline: {
+        summary: String((plan && plan.summary) || ''),
+        projection: String((plan && plan.projection) || ''),
+        noInvestNote: String((plan && plan.noInvestNote) || ''),
+        strategyLine: String((plan && plan.strategyLine) || ''),
+        focusLine: String((plan && plan.focusLine) || '')
+      },
+      affordability: affCopy,
+      steps: stepsOut,
+      firstIncomplete: firstIncomplete,
+      reality: reality,
+      cautions: cautionsOut,
+      askBeyndGuidance: askBeyndGuidance,
+      audit: {
+        shadowOnly: true,
+        planCallCount: opts.plan ? 0 : 1,
+        sideEffectsAcknowledged: opts.plan ? [] : ['getMonthPlan_maintenance_sync']
+      }
+    };
+
+    try {
+      window._geodePlanRationaleSnapshot = snapshot;
+    } catch (_eSnapWin) {}
+
+    return snapshot;
+  } catch (_ePlanRatSnap) {
+    return null;
+  }
+}
+
 /** Build a financial summary string for the AI system prompt. No raw transaction names. */
 function geodeBuildCoachingContext() {
   try {
