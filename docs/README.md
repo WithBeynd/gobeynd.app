@@ -51,10 +51,10 @@ See [`docs/stages/79/README.md`](./stages/79/README.md).
 
 **Current state (May 2026):**
 
-- **79B-B** committed (`8dc9855`) — over-budget + needs-attention gating; **79B-C PASS**
-- **79B-D** audit on disk; **79B-E** built locally — coaching strip obeys `show === false`
-- Post-build audit for 79B-E pending
-- No service-worker bump for 79B-E alone
+- **79B-B** committed (`8dc9855`); **79B-C PASS**
+- **79B-E / 79B-F** coaching strip parity built and audited **PASS** (local)
+- **79B-I** built locally — pressure-aware safety Insight reframe when `left < 0`
+- No service-worker bump for 79B-I alone
 
 ---
 

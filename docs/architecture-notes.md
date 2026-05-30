@@ -30,6 +30,16 @@ Home orchestration **producers** (do not change for presentation-only passes):
 
 Do not reorder Home or change orchestration producers when adding gating for additional surfaces.
 
+## Home Insight pressure reframe (Stage 79B-I)
+
+Safety/buffer Home **Insight** (not Human Moment) uses display-only reframe when `calcMonthlyLeftover(state) < 0`:
+
+- **`geodeHomeSafetyInsightUnderPressure(state, topic)`** — gate for topics `safety` / `irregular_safety`.
+- **`geodeHomeSafetyInsightPressureCopy(state, topic, rawBody, vIx)`** — steady-plan-first copy; does **not** change `getCoreNudges`.
+- **`geodeInsightPolishBody`** consumes pressure copy; **`renderInsights`** forces `type: 'neutral'` when reframed.
+
+Calm-month forward-building copy in `getCoreNudges` remains unchanged. Do not imply Savings Release or buffer withdrawal in reframe copy.
+
 ## Suggested Actions And Insights
 
 `geodeHomePrepareSuggestedActionsList` populates `_geodeSuggestedActions`.

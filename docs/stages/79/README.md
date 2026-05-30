@@ -16,6 +16,10 @@ Ordered documentation for Visual Intelligence Home hierarchy work after Stage 78
 | 79B-C | Post-build audit (79B-B) | — | **PASS** | — |
 | 79B-D | Alert duplication / MA dominance audit | [79B-D-home-alert-main-action-dominance-audit.md](./79B-D-home-alert-main-action-dominance-audit.md) | NEEDS ATTENTION | — |
 | 79B-E | Build — coaching strip orchestration parity | [79B-E-build-coaching-strip-parity.md](./79B-E-build-coaching-strip-parity.md) | Built (local) | *held* |
+| 79B-F | Post-build audit (79B-E) | — | **PASS** | — |
+| 79B-G | Insight/HM contextual relevance audit | *(chat — superseded by 79B-H)* | NEEDS ATTENTION | — |
+| 79B-H | Insight pressure reframe audit | [79B-H-insight-pressure-reframe-audit.md](./79B-H-insight-pressure-reframe-audit.md) | NEEDS ATTENTION | — |
+| 79B-I | Build — pressure-aware safety Insight reframe | [79B-I-build-pressure-aware-safety-insight.md](./79B-I-build-pressure-aware-safety-insight.md) | Built (local) | *held* |
 
 ---
 
@@ -23,16 +27,11 @@ Ordered documentation for Visual Intelligence Home hierarchy work after Stage 78
 
 | Function | Role |
 |----------|------|
-| `geodeHomeOrchestrationResolve(state)` | Computes `surfaces.*.show` (producer — do not change in consumer passes) |
-| `geodeHomeOrchSurfaceShowResolved(key, fallbackFn)` | Read resolve flag with fallback (79B-B) |
-| `geodeHomeCoachingStripHtml()` | Coaching strip render; obeys `coachingStrip.show` (79B-E) |
-| `rHome()` | Caches `window._geodeHomeOrchestrationResolve` before HTML |
-
----
-
-## Scope boundary
-
-79B-E completes coaching strip consumer parity. Alert dedup, Main Action reorder, focus goal wiring, and hidden intelligence remain **future** stages.
+| `geodeHomeOrchSurfaceShowResolved` | Alert gating (79B-B) |
+| `geodeHomeCoachingStripHtml` | Coaching strip parity (79B-E) |
+| `geodeHomeSafetyInsightUnderPressure` | Pressure reframe gate (79B-I) |
+| `geodeHomeSafetyInsightPressureCopy` | Pressure-aware safety Insight copy (79B-I) |
+| `geodeInsightPolishBody` / `renderInsights` | Home Insight display |
 
 ---
 

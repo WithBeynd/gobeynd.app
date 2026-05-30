@@ -13064,6 +13064,33 @@ function geodeInsightVariantSeed(topic) {
   return Math.abs(h) % 3;
 }
 
+/** True when safety/buffer Home Insight should use pressure reframe copy (Stage 79B-I). */
+function geodeHomeSafetyInsightUnderPressure(state, topic) {
+  state = state || S;
+  topic = String(topic || '');
+  if (topic !== 'safety' && topic !== 'irregular_safety') return false;
+  try {
+    return calcMonthlyLeftover(state) < 0;
+  } catch (_eSip) {
+    return false;
+  }
+}
+
+/**
+ * Display-only: reframe safety/buffer Insight body when the month is over-budget.
+ * Returns null when calm-month polish should proceed. Does not change getCoreNudges.
+ */
+function geodeHomeSafetyInsightPressureCopy(state, topic, rawBody, vIx) {
+  if (!geodeHomeSafetyInsightUnderPressure(state, topic)) return null;
+  vIx = ((vIx == null ? 0 : vIx) % 3 + 3) % 3;
+  var lines = [
+    'Your buffer is still part of your safety plan. This month, focus on keeping the plan steady first.',
+    'Your buffer still matters. For now, getting this month back to balance comes first.',
+    'Your safety plan includes a buffer — steady this month first, then build when room returns.'
+  ];
+  return geodeHomeInsightShortLine(lines[vIx], 155);
+}
+
 /**
  * Second line of Insight card: calm, human tone; 2–3 variants by topic (display-only).
  */
@@ -13095,6 +13122,11 @@ function geodeInsightPolishBody(topic, msg, vIx) {
       msg.replace(/worth chipping at\.?$/i, 'worth a calm, steady chip.')
     ];
     return geodeHomeInsightShortLine(softD[vIx], 155);
+  }
+
+  if (t === 'safety' || t === 'irregular_safety') {
+    var _pressureSafetyCopy = geodeHomeSafetyInsightPressureCopy(S, t, msg, vIx);
+    if (_pressureSafetyCopy) return _pressureSafetyCopy;
   }
 
   if (t === 'safety') {
@@ -16567,10 +16599,14 @@ function renderInsights() {
   var nudges = [];
   if (primary) {
     var insightBody = geodeInsightPolishBody(primary.topic, pMsg, geodeInsightVariantSeed(primary.topic));
+    var insightType = primary.type;
+    if (geodeHomeSafetyInsightUnderPressure(S, primary.topic)) {
+      insightType = 'neutral';
+    }
     nudges.push({
       title: primary.title,
       message: insightBody,
-      type: primary.type,
+      type: insightType,
       topic: primary.topic,
       action: primary.action,
       goalStatusWhy: geodeWhySkipsGoalRepeat(insightBody, primary.goalStatusWhy),
