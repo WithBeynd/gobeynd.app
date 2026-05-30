@@ -65,7 +65,8 @@ See [`docs/stages/80/README.md`](./stages/80/README.md).
 - **80C-B / 80C-D** built locally — MA route value tier + Review Plan inline affordance (80C-D.1)
 - **80C-C** post-build audit **PASS** (80C-B logic)
 - **80E-D** built locally — Reality `monthContextCarry` + Use last month affordance
-- **80E-F / 80E-G** — first-run intro copy for Reality / Ask Beynd; **80E-G.2** trigger fix (show after onboarding when `FR_KEY` unset)
+- **80E-F / 80E-G** — first-run intro copy for Reality / Ask Beynd; **80E-G.2** trigger fix
+- **80F-B / 80F-D** — `geodeStabilityRoomSnapshot` shadow read-model + contract hardening (no UI)
 
 ---
 

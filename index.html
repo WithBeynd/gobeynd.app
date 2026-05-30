@@ -26208,6 +26208,373 @@ function geodePlanRationaleSnapshot(state, opts) {
   }
 }
 
+/**
+ * Stage 80F-B / 80F-D: shadow-only Stability Room reflection read-model.
+ * Assembles existing orchestration, posture, plan rationale, and human context.
+ * Not wired to UI. Does not mutate state or create new recommendations.
+ */
+function geodeStabilityRoomSnapshot(state, opts) {
+  state = state || S;
+  opts = opts && typeof opts === 'object' ? opts : {};
+  try {
+    var monthKey = geodePureMonthKey(opts.monthKey) || currentYM();
+    var generatedAt =
+      opts.generatedAt != null && isFinite(Number(opts.generatedAt))
+        ? Number(opts.generatedAt)
+        : Date.now();
+    var sideEffects = [];
+    var sources = [];
+    var ri;
+
+    var empty = false;
+    try {
+      empty = geodeIsEmptyState();
+    } catch (_eEmpSr) {}
+
+    var resolve = null;
+    try {
+      resolve = geodeHomeOrchestrationResolve(state);
+      sources.push('geodeHomeOrchestrationResolve');
+    } catch (_eSrRes) {
+      resolve = null;
+    }
+
+    var postureObj = null;
+    try {
+      postureObj = geodeGetContextPosture(state);
+      sources.push('geodeGetContextPosture');
+    } catch (_eSrPo) {}
+
+    var pao = null;
+    try {
+      pao = assessPressure(state);
+      sources.push('assessPressure');
+    } catch (_eSrPao) {}
+
+    var monthCtx = null;
+    try {
+      monthCtx = geodeGetMonthContext(state);
+      sources.push('geodeGetMonthContext');
+      sideEffects.push('geodeGetMonthContext_may_normalize_monthContext');
+    } catch (_eSrMc) {}
+
+    var carry = null;
+    try {
+      var rawCarry = geodeGetMonthContextCarry(state);
+      carry = {
+        ym: rawCarry.ym,
+        protect: rawCarry.protect,
+        worried: rawCarry.worried,
+        success: rawCarry.success,
+        savedAt: rawCarry.savedAt,
+        hasAny: rawCarry.hasAny,
+        suggestionOnly: true
+      };
+      sources.push('geodeGetMonthContextCarry');
+      sideEffects.push('geodeGetMonthContextCarry_may_normalize_carry');
+    } catch (_eSrCar) {}
+
+    var behProfile = null;
+    try {
+      behProfile = geodeBehaviourContinuityProfile(state);
+      sources.push('geodeBehaviourContinuityProfile');
+      sideEffects.push('geodeBehaviourContinuityProfile_may_normalize_behaviourEvents');
+    } catch (_eSrBeh) {}
+
+    var feeling = '';
+    try {
+      feeling = geodeGetRealityFeeling() || '';
+    } catch (_eSrFe) {}
+
+    var planSnap = null;
+    try {
+      planSnap = geodePlanRationaleSnapshot(state, {
+        plan: opts.plan,
+        monthKey: monthKey,
+        generatedAt: generatedAt
+      });
+      sources.push('geodePlanRationaleSnapshot');
+      if (planSnap && planSnap.audit && planSnap.audit.sideEffectsAcknowledged) {
+        for (ri = 0; ri < planSnap.audit.sideEffectsAcknowledged.length; ri++) {
+          sideEffects.push(planSnap.audit.sideEffectsAcknowledged[ri]);
+        }
+      }
+    } catch (_eSrPlan) {}
+
+    var orch = resolve && resolve.orchestration ? resolve.orchestration : {};
+    var reasonSeen = {};
+    var reasonCodes = [];
+    function pushReason(code) {
+      if (!code || reasonSeen[code]) return;
+      reasonSeen[code] = true;
+      reasonCodes.push(code);
+    }
+    if (resolve && resolve.reasonCodes) {
+      for (ri = 0; ri < resolve.reasonCodes.length; ri++) {
+        pushReason(resolve.reasonCodes[ri]);
+      }
+    }
+    if (pao && pao.reasonCodes) {
+      for (ri = 0; ri < pao.reasonCodes.length; ri++) {
+        pushReason(pao.reasonCodes[ri]);
+      }
+    }
+    if (postureObj && postureObj.reasonCodes) {
+      for (ri = 0; ri < postureObj.reasonCodes.length; ri++) {
+        pushReason(postureObj.reasonCodes[ri]);
+      }
+    }
+
+    var disclosureNeeded =
+      resolve && resolve.disclosureNeeded ? resolve.disclosureNeeded.slice() : [];
+    var deferredItems = [];
+    if (resolve && resolve.deferredItems) {
+      var di;
+      for (di = 0; di < resolve.deferredItems.length; di++) {
+        var dit = resolve.deferredItems[di];
+        if (!dit) continue;
+        deferredItems.push({
+          kind: dit.kind || '',
+          reason: dit.reason || '',
+          humanCopy: dit.humanCopy || '',
+          visibilityPolicy: dit.visibilityPolicy || '',
+          targetSurface: dit.targetSurface || '',
+          sourceSurface: dit.sourceSurface || ''
+        });
+      }
+    }
+
+    function surfaceEntry(key) {
+      if (!resolve || !resolve.surfaces || !resolve.surfaces[key]) {
+        return { show: false, reason: null };
+      }
+      var s = resolve.surfaces[key];
+      var out = { show: !!s.show, reason: s.reason != null ? s.reason : null };
+      if (s.type != null) out.type = s.type;
+      if (s.mode != null) out.mode = s.mode;
+      if (s.text != null) out.text = s.text;
+      if (s.emphasis != null) out.emphasis = s.emphasis;
+      return out;
+    }
+
+    var surfaces = {
+      overBudget: surfaceEntry('overBudget'),
+      needsAttention: surfaceEntry('needsAttention'),
+      mainAction: surfaceEntry('mainAction'),
+      coachingStrip: surfaceEntry('coachingStrip'),
+      subscriptionCard: surfaceEntry('subscriptionCard'),
+      focusGoal: surfaceEntry('focusGoal'),
+      sinceLastVisit: surfaceEntry('sinceLastVisit'),
+      decorativeFooters: surfaceEntry('decorativeFooters'),
+      askBeynd: surfaceEntry('askBeynd')
+    };
+
+    var mutedLines = [];
+    if (resolve && resolve.surfaces && Array.isArray(resolve.surfaces.mutedLines)) {
+      var mi;
+      for (mi = 0; mi < resolve.surfaces.mutedLines.length; mi++) {
+        var ml = resolve.surfaces.mutedLines[mi];
+        if (!ml) continue;
+        mutedLines.push({
+          text: String(ml.text || ''),
+          kind: ml.kind != null ? String(ml.kind) : '',
+          reason: ml.reason != null ? String(ml.reason) : ''
+        });
+      }
+    }
+
+    var incomeType =
+      state.incomeType === 'irregular' || state.incomeType === 'none'
+        ? state.incomeType
+        : 'stable';
+
+    var reality =
+      planSnap && planSnap.reality
+        ? {
+            hasData: !!planSnap.reality.hasData,
+            gap: planSnap.reality.gap,
+            status: planSnap.reality.status || '',
+            confidence: planSnap.reality.confidence || 'estimated',
+            daysOld: typeof planSnap.reality.daysOld === 'number' ? planSnap.reality.daysOld : 0,
+            activitySinceCheck: !!planSnap.reality.activitySinceCheck,
+            balanceEntered: planSnap.reality.balance
+          }
+        : { hasData: false, confidence: 'estimated' };
+
+    var planFocus = {
+      strategyKey:
+        planSnap && planSnap.strategy
+          ? planSnap.strategy.key
+          : state.planStrategy || 'balanced',
+      strategyDisplayName:
+        planSnap && planSnap.strategy ? planSnap.strategy.displayName : '',
+      headlineSummary:
+        planSnap && planSnap.headline ? String(planSnap.headline.summary || '') : '',
+      firstIncomplete:
+        planSnap && planSnap.firstIncomplete ? planSnap.firstIncomplete : null,
+      topSteps: [],
+      alignment:
+        planSnap && planSnap.alignment
+          ? {
+              active: !!planSnap.alignment.active,
+              summary: String(planSnap.alignment.summary || '')
+            }
+          : { active: false, summary: '' },
+      cautions:
+        planSnap && Array.isArray(planSnap.cautions) ? planSnap.cautions.slice() : []
+    };
+    if (planSnap && Array.isArray(planSnap.steps)) {
+      var tlim = Math.min(3, planSnap.steps.length);
+      var ti;
+      for (ti = 0; ti < tlim; ti++) {
+        var stp = planSnap.steps[ti];
+        if (!stp) continue;
+        planFocus.topSteps.push({
+          label: String(stp.label || ''),
+          amount: toNum(stp.amount),
+          reasonHeadline: String(stp.reasonHeadline || '')
+        });
+      }
+    }
+
+    var askSurf = surfaces.askBeynd || {};
+    var askBeynd = {
+      emphasis: askSurf.emphasis || 'normal',
+      mode: orch.askBeyndMode || 'neutral',
+      modifiers: orch.askBeyndModifiers ? orch.askBeyndModifiers.slice() : [],
+      canExplain: [
+        'plan priorities',
+        'reality sense-check',
+        'month context',
+        'items held back from Home'
+      ],
+      guidanceNote:
+        planSnap &&
+        Array.isArray(planSnap.askBeyndGuidance) &&
+        planSnap.askBeyndGuidance.length
+          ? String(planSnap.askBeyndGuidance[0])
+          : 'Ask Beynd can explain plan reasoning conversationally — optional.'
+    };
+
+    var suppressTopics =
+      pao && pao.outputs && Array.isArray(pao.outputs.suppressTopics)
+        ? pao.outputs.suppressTopics.slice()
+        : [];
+    var userLoad = orch.userLoad || 'low';
+    var quietCodes = [];
+    if (empty) quietCodes.push('empty_state');
+    if (userLoad === 'critical' || userLoad === 'high') {
+      quietCodes.push('user_load_' + userLoad);
+    }
+    if (suppressTopics.length) quietCodes.push('topics_suppressed');
+    var shouldStayQuiet =
+      empty ||
+      userLoad === 'critical' ||
+      userLoad === 'high' ||
+      orch.homeBand === 'critical';
+
+    var snapshotActive = !empty && state.hasOnboarded === true;
+    var snapshotReason = null;
+    if (empty) snapshotReason = 'empty_state';
+    else if (state.hasOnboarded !== true) snapshotReason = 'not_onboarded';
+    else if (shouldStayQuiet) snapshotReason = 'quiet_period';
+    else snapshotReason = 'reflection_eligible';
+
+    var snapshot = {
+      version: 1,
+      monthKey: monthKey,
+      generatedAt: generatedAt,
+      snapshotIntent: {
+        mode: 'reflection',
+        generatedFrom: ['home', 'plan', 'reality', 'monthContext']
+      },
+      active: snapshotActive,
+      reason: snapshotReason,
+      emptyState: empty,
+      noticed: {
+        homeBand: orch.homeBand || 'open',
+        userLoad: userLoad,
+        decisionMode: orch.decisionMode || 'none',
+        primaryFocus: orch.primaryFocus || { type: 'none', label: '' },
+        contextPosture: postureObj
+          ? {
+              posture: postureObj.posture || 'unknown',
+              tone: postureObj.tone || 'calm',
+              reasonCodes: Array.isArray(postureObj.reasonCodes)
+                ? postureObj.reasonCodes.slice()
+                : []
+            }
+          : { posture: 'unknown', tone: 'calm', reasonCodes: [] },
+        pressureBand: pao && pao.band ? String(pao.band) : null,
+        reasonCodes: reasonCodes
+      },
+      heldBack: {
+        disclosureNeeded: disclosureNeeded,
+        deferredItems: deferredItems,
+        mutedLines: mutedLines,
+        surfaces: surfaces
+      },
+      humanContext: {
+        monthContext: monthCtx
+          ? {
+              ym: monthCtx.ym,
+              protect: monthCtx.protect,
+              worried: monthCtx.worried,
+              success: monthCtx.success,
+              hasAny: !!monthCtx.hasAny,
+              dismissedThisMonth: !!monthCtx.dismissedThisMonth
+            }
+          : {
+              ym: '',
+              protect: '',
+              worried: '',
+              success: '',
+              hasAny: false,
+              dismissedThisMonth: false
+            },
+        carrySuggestion: carry,
+        incomeType: incomeType,
+        hasDependants: !!state.hasDependants,
+        realityFeeling: feeling || null,
+        behaviourProfile: behProfile
+          ? {
+              shiftApprovalsThisMonth: behProfile.shiftApprovalsThisMonth,
+              shiftRevertsThisMonth: behProfile.shiftRevertsThisMonth,
+              slowOrUnsureThisMonth: behProfile.slowOrUnsureThisMonth,
+              movedFeelingThisMonth: behProfile.movedFeelingThisMonth
+            }
+          : null
+      },
+      reality: reality,
+      planFocus: planFocus,
+      askBeynd: askBeynd,
+      quiet: {
+        shouldStayQuiet: shouldStayQuiet,
+        reasonCodes: quietCodes,
+        suppressedTopics: suppressTopics
+      },
+      visualIntent: {
+        computed: false,
+        status: 'deferred',
+        note: 'Visual register and Stability Room UI are not implemented; this export is data-only.'
+      },
+      audit: {
+        shadowOnly: true,
+        sources: sources,
+        sideEffects: sideEffects
+      }
+    };
+
+    try {
+      window._geodeStabilityRoomSnapshot = snapshot;
+    } catch (_eSrWin) {}
+
+    return snapshot;
+  } catch (_eStabSnap) {
+    return null;
+  }
+}
+
 /** Truncate plan rationale lines for Ask Beynd context (export only). */
 function geodePlanRationaleTruncateLine(text, maxLen) {
   var s = String(text || '')

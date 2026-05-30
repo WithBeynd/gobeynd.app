@@ -24,7 +24,9 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | 80E-G | Build — first-run intro copy refinement | [80E-G-build-first-run-intro-copy.md](./80E-G-build-first-run-intro-copy.md) | Built (local) | *held* |
 | 80E-G.1 | First-run intro trigger audit | [80E-G.1-first-run-intro-trigger-audit.md](./80E-G.1-first-run-intro-trigger-audit.md) | NEEDS ATTENTION | — |
 | 80E-G.2 | Build — first-run intro trigger fix | [80E-G.2-build-first-run-intro-trigger-fix.md](./80E-G.2-build-first-run-intro-trigger-fix.md) | Built (local) | *held* |
-| 80D | Stability Room shadow snapshot audit (no UI) | — | Planned | — |
+| 80F-A | Stability Room shadow snapshot audit | [80F-A-stability-room-shadow-snapshot-audit.md](./80F-A-stability-room-shadow-snapshot-audit.md) | NEEDS ATTENTION | — |
+| 80F-B | Build — Stability Room shadow snapshot | [80F-B-build-stability-room-shadow-snapshot.md](./80F-B-build-stability-room-shadow-snapshot.md) | Built (local) | *held* |
+| 80F-D | Shadow snapshot contract hardening | [80F-D-shadow-snapshot-contract-hardening.md](./80F-D-shadow-snapshot-contract-hardening.md) | Built (local) | *held* |
 
 ---
 
@@ -37,6 +39,7 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | `geodeHomeOrchSurfaceShowResolved` | Render consumer (79B-B) |
 | `geodeMainActionRouteValue` | Read-only MA presentation tier (80C-B) |
 | `geodeGetMonthContextCarry` | Prior-month Reality context for carry affordance (80E-D) |
+| `geodeStabilityRoomSnapshot` | Shadow Stability Room reflection read-model (80F-B) |
 
 ---
 

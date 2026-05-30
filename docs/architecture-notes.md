@@ -112,6 +112,14 @@ One-time **`pg-fr`** screens (`fr1`–`fr3`) after onboarding; keyed **`geode_fr
 
 Do not add fields, onboarding steps, or API-key setup to first-run intro. Quick Setup step 2 and post-QS Home nudge remain separate balance-focused hints.
 
+## Stability Room shadow snapshot (Stage 80F-B / 80F-D)
+
+Read-only **`geodeStabilityRoomSnapshot(state, opts)`** — assembles orchestration resolve, plan rationale slice, posture, month context, and held-back Home signals. Hook: **`window._geodeStabilityRoomSnapshot`**.
+
+**Contract (80F-D):** `snapshotIntent.mode === 'reflection'`; top-level `active` / `reason`; `visualIntent.computed === false` (UI deferred); `heldBack.mutedLines` without routes; `audit.sideEffects` lists normalize delegates.
+
+**Not UI.** First consumer of dormant `disclosureNeeded[]`. Do not wire to Home until post-build audit passes.
+
 Dormant or future-facing paths:
 
 - `geodeRealityCheckCardHtml`
