@@ -122,6 +122,8 @@ Read-only **`geodeStabilityRoomSnapshot(state, opts)`** — assembles orchestrat
 
 **Visual model (80G-B / 80G-B.1 / 80G-B.2 / 80G-B.3):** **`geodeStabilityRoomVisualModel(snapshot)`** — `mode: 'reflection'`, `generatedAt`, `sourceSnapshotVersion`, `noGo` (`trafficLights`, `autoOpen`, `notificationDrawer`); atmosphere tokens (`calm`/`reflective`/`protective`/`recovering`/`room`; never `opportunity`); VI register (`calm`/`guidance`/`review`/`recovery`/`progress` only); section visibility; entry copy hints. Hook: **`window._geodeStabilityRoomVisualModel`**. Never `pressure`/`risk`/`error`.
 
+**Entry gate (80H-B / 80H-B.1):** **`geodeStabilityRoomEntryGate(snapshot, visualModel, opts)`** — `visibility` (`hidden`/`available`/`suggested`); `label`/`dismissLabel`; `suggested` only when `trigger === 'reality_month_context_save'` **and** `justSavedMonthContext === true` **and** `dismissedThisMonth !== true`. Hook: **`window._geodeStabilityRoomEntryGate`**. `audit.noHomeEntry` / `noAutoOpen` / `noRoutes` / `noStorage` all `true`. No UI, routes, or dismiss storage yet.
+
 Dormant or future-facing paths:
 
 - `geodeRealityCheckCardHtml`

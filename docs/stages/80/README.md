@@ -32,6 +32,9 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | 80G-B.1 | Atmosphere naming alignment (`room`) | [80G-B.1-atmosphere-naming-alignment.md](./80G-B.1-atmosphere-naming-alignment.md) | Built (local) | *held* |
 | 80G-B.2 | Visual model contract completion | [80G-B.2-visual-model-contract-completion.md](./80G-B.2-visual-model-contract-completion.md) | Built (local) | *held* |
 | 80G-B.3 | Visual model no-go contract | [80G-B.3-visual-model-no-go-contract.md](./80G-B.3-visual-model-no-go-contract.md) | Built (local) | *held* |
+| 80H-A | Reflection entry gate architecture audit | [80H-A-reflection-entry-gate-architecture-audit.md](./80H-A-reflection-entry-gate-architecture-audit.md) | NEEDS ATTENTION | — |
+| 80H-B | Build — reflection entry gate shadow | [80H-B-build-reflection-entry-gate-shadow.md](./80H-B-build-reflection-entry-gate-shadow.md) | Built (local) | *held* |
+| 80H-B.1 | Entry gate contract alignment | [80H-B.1-reflection-entry-gate-contract-alignment.md](./80H-B.1-reflection-entry-gate-contract-alignment.md) | Built (local) | *held* |
 
 ---
 
@@ -46,6 +49,7 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | `geodeGetMonthContextCarry` | Prior-month Reality context for carry affordance (80E-D) |
 | `geodeStabilityRoomSnapshot` | Shadow Stability Room reflection read-model (80F-B) |
 | `geodeStabilityRoomVisualModel` | Shadow visual/atmosphere interpreter (80G-B) |
+| `geodeStabilityRoomEntryGate` | Shadow entry visibility gate (80H-B) |
 
 ---
 

@@ -26800,6 +26800,236 @@ function geodeStabilityRoomVisualModel(snapshot, opts) {
   }
 }
 
+/**
+ * Stage 80H-B / 80H-B.1: shadow-only Reflection entry gate.
+ * Decides hidden / available / suggested from snapshot + visual model — no DOM, routes, or storage.
+ * Suggested only on reality_month_context_save + justSavedMonthContext when month context has content.
+ */
+function geodeStabilityRoomEntryGate(snapshot, visualModel, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  try {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    if (!visualModel || typeof visualModel !== 'object') return null;
+
+    var trigger = opts.trigger != null ? String(opts.trigger) : 'none';
+    var justSavedMonthContext = opts.justSavedMonthContext === true;
+    var dismissedThisMonth = opts.dismissedThisMonth === true;
+    var snapReason = snapshot.reason != null ? String(snapshot.reason) : '';
+    var snapActive = snapshot.active === true;
+    var quiet =
+      snapshot.quiet && typeof snapshot.quiet === 'object' ? snapshot.quiet : {};
+    var shouldStayQuiet = quiet.shouldStayQuiet === true;
+    var humanContext =
+      snapshot.humanContext && typeof snapshot.humanContext === 'object'
+        ? snapshot.humanContext
+        : {};
+    var monthCtx =
+      humanContext.monthContext && typeof humanContext.monthContext === 'object'
+        ? humanContext.monthContext
+        : {};
+    var monthContextHasAny = !!monthCtx.hasAny;
+    var heldBack =
+      snapshot.heldBack && typeof snapshot.heldBack === 'object' ? snapshot.heldBack : {};
+    var reality =
+      snapshot.reality && typeof snapshot.reality === 'object' ? snapshot.reality : {};
+    var planFocus =
+      snapshot.planFocus && typeof snapshot.planFocus === 'object' ? snapshot.planFocus : {};
+    var noGo =
+      visualModel.noGo && typeof visualModel.noGo === 'object' ? visualModel.noGo : {};
+    var entryCopy =
+      visualModel.entryCopy && typeof visualModel.entryCopy === 'object'
+        ? visualModel.entryCopy
+        : {};
+
+    var disclosure = Array.isArray(heldBack.disclosureNeeded) ? heldBack.disclosureNeeded : [];
+    var deferred = Array.isArray(heldBack.deferredItems) ? heldBack.deferredItems : [];
+    var mutedLines = Array.isArray(heldBack.mutedLines) ? heldBack.mutedLines : [];
+    var deferredWithCopy = false;
+    var di;
+    for (di = 0; di < deferred.length; di++) {
+      if (deferred[di] && String(deferred[di].humanCopy || '').trim()) {
+        deferredWithCopy = true;
+        break;
+      }
+    }
+    var alignmentActive = !!(
+      planFocus.alignment && planFocus.alignment.active === true
+    );
+    var planHasFocus = !!(
+      (Array.isArray(planFocus.topSteps) && planFocus.topSteps.length > 0) ||
+      String(planFocus.headlineSummary || '').trim()
+    );
+    var contentThresholdMet =
+      monthContextHasAny ||
+      disclosure.length > 0 ||
+      deferredWithCopy ||
+      mutedLines.length > 0 ||
+      (!!reality.hasData && alignmentActive) ||
+      planHasFocus;
+
+    var visibleSectionCount = 0;
+    var sections = Array.isArray(visualModel.sections) ? visualModel.sections : [];
+    var si;
+    for (si = 0; si < sections.length; si++) {
+      if (sections[si] && sections[si].visible) visibleSectionCount++;
+    }
+
+    function buildGate(
+      visibility,
+      entrySurface,
+      entryStyle,
+      label,
+      dismissLabel,
+      reason,
+      reasonCodes,
+      suppressReason,
+      frequency
+    ) {
+      return {
+        version: 1,
+        visibility: visibility,
+        entrySurface: entrySurface,
+        entryStyle: entryStyle,
+        label: label,
+        dismissLabel: dismissLabel,
+        reason: reason,
+        reasonCodes: reasonCodes,
+        suppressReason: suppressReason,
+        trigger: trigger,
+        frequency: frequency,
+        audit: {
+          shadowOnly: true,
+          noHomeEntry: true,
+          noAutoOpen: true,
+          noRoutes: true,
+          noStorage: true,
+          snapshotReason: snapReason,
+          snapshotActive: snapActive,
+          contentThresholdMet: contentThresholdMet,
+          visibleSectionCount: visibleSectionCount,
+          monthContextHasAny: monthContextHasAny,
+          shouldStayQuiet: shouldStayQuiet,
+          justSavedMonthContext: justSavedMonthContext,
+          dismissedThisMonthOpt: dismissedThisMonth
+        }
+      };
+    }
+
+    if (!snapActive || snapReason === 'empty_state' || snapReason === 'not_onboarded') {
+      var inactiveReason =
+        snapReason === 'empty_state'
+          ? 'empty_state'
+          : snapReason === 'not_onboarded'
+            ? 'not_onboarded'
+            : 'inactive';
+      var hiddenGate = buildGate(
+        'hidden',
+        null,
+        null,
+        null,
+        null,
+        inactiveReason,
+        [inactiveReason],
+        null,
+        null
+      );
+      try {
+        window._geodeStabilityRoomEntryGate = hiddenGate;
+      } catch (_eSrEgWin) {}
+      return hiddenGate;
+    }
+
+    if (!contentThresholdMet || visibleSectionCount < 1) {
+      var noContentGate = buildGate(
+        'hidden',
+        null,
+        null,
+        null,
+        null,
+        'no_content',
+        ['no_content'],
+        null,
+        null
+      );
+      try {
+        window._geodeStabilityRoomEntryGate = noContentGate;
+      } catch (_eSrEgWin2) {}
+      return noContentGate;
+    }
+
+    var visibility = 'available';
+    var gateReason = 'reflection_available';
+    var reasonCodes = ['reflection_available'];
+    var suppressReason = null;
+    if (trigger === 'manual') {
+      gateReason = 'manual_access';
+      reasonCodes = ['manual_access'];
+    } else if (trigger === 'settings') {
+      gateReason = 'settings_access';
+      reasonCodes = ['settings_access'];
+    } else if (shouldStayQuiet || snapReason === 'quiet_period') {
+      gateReason = 'quiet_period';
+      reasonCodes = ['quiet_period'];
+    }
+
+    var entrySurface = null;
+    var entryStyle = null;
+    var label = null;
+    var dismissLabel = null;
+    var frequency = 'on_demand';
+
+    if (
+      trigger === 'reality_month_context_save' &&
+      justSavedMonthContext &&
+      !dismissedThisMonth &&
+      snapReason === 'reflection_eligible' &&
+      !shouldStayQuiet &&
+      monthContextHasAny &&
+      noGo.autoOpen === false &&
+      noGo.notificationDrawer !== true
+    ) {
+      visibility = 'suggested';
+      gateReason = 'month_context_saved';
+      reasonCodes = ['month_context_saved', 'reflection_eligible'];
+      entrySurface = 'reality';
+      entryStyle = 'inline_arrow';
+      frequency = 'once_per_save_event';
+      label =
+        String(entryCopy.suggest || '').trim() ||
+        'See how this month fits together';
+      dismissLabel = String(entryCopy.dismiss || '').trim() || 'Not now';
+    } else if (trigger === 'reality_month_context_save') {
+      if (dismissedThisMonth) {
+        suppressReason = 'dismissed_this_month';
+        reasonCodes = ['reflection_available', 'dismissed_this_month'];
+      } else if (!justSavedMonthContext) {
+        suppressReason = 'missing_just_saved_flag';
+        reasonCodes = ['reflection_available', 'missing_just_saved_flag'];
+      }
+    }
+
+    var gate = buildGate(
+      visibility,
+      entrySurface,
+      entryStyle,
+      label,
+      dismissLabel,
+      gateReason,
+      reasonCodes,
+      suppressReason,
+      frequency
+    );
+
+    try {
+      window._geodeStabilityRoomEntryGate = gate;
+    } catch (_eSrEgWin3) {}
+
+    return gate;
+  } catch (_eSrEg) {
+    return null;
+  }
+}
+
 /** Truncate plan rationale lines for Ask Beynd context (export only). */
 function geodePlanRationaleTruncateLine(text, maxLen) {
   var s = String(text || '')
