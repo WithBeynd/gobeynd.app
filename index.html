@@ -25535,6 +25535,56 @@ function geodePlanRationaleSenseLabel(rs) {
   return senseLabel;
 }
 
+/** Shadow export only: approved Reality plan alignment (peek read; no normalize/preview/approve). */
+function geodePlanRationaleAlignmentBlock(state, stepsOut, monthKey) {
+  state = state || S;
+  monthKey = monthKey || currentYM();
+  var out = {
+    active: false,
+    status: 'none',
+    ym: monthKey,
+    summary: '',
+    stepAdjustments: []
+  };
+  var a = null;
+  try {
+    a = geodePeekActiveRealityPlanAlignment(state);
+  } catch (_ePrAlPeek) {
+    a = null;
+  }
+  if (!a || !Array.isArray(a.stepAdjustments) || !a.stepAdjustments.length) {
+    return out;
+  }
+  out.active = true;
+  out.status = 'approved';
+  out.ym = String(a.ym || monthKey);
+  out.summary = 'Following your Reality shift';
+  var stepIdByIndex = {};
+  var i;
+  for (i = 0; i < (stepsOut || []).length; i++) {
+    if (stepsOut[i] && stepsOut[i].index != null) {
+      stepIdByIndex[stepsOut[i].index] = stepsOut[i].stepId || '';
+    }
+  }
+  var adjOut = [];
+  for (i = 0; i < a.stepAdjustments.length; i++) {
+    var adj = a.stepAdjustments[i];
+    if (!adj) continue;
+    var ix = adj.stepIndex;
+    adjOut.push({
+      stepIndex: typeof ix === 'number' ? ix : -1,
+      stepId: typeof ix === 'number' && stepIdByIndex[ix] ? stepIdByIndex[ix] : '',
+      stepLabel: String(adj.stepLabel || ''),
+      action: String(adj.action || ''),
+      baselineAmount: toNum(adj.baselineAmount),
+      displayAmount: toNum(adj.displayAmount),
+      appliedAmountAtApproval: toNum(adj.appliedAmountAtApproval)
+    });
+  }
+  out.stepAdjustments = adjOut;
+  return out;
+}
+
 /**
  * Stage 76C-B: shadow-only plan rationale read-model (not wired to UI or Ask Beynd).
  * Assembles existing plan reasoning from getMonthPlan outputs and progress helpers.
@@ -25702,6 +25752,8 @@ function geodePlanRationaleSnapshot(state, opts) {
       'If cautions include no_income or plan_room_negative, avoid affordability certainty.'
     ];
 
+    var alignment = geodePlanRationaleAlignmentBlock(state, stepsOut, monthKey);
+
     var snapshot = {
       version: 1,
       monthKey: monthKey,
@@ -25724,12 +25776,16 @@ function geodePlanRationaleSnapshot(state, opts) {
       steps: stepsOut,
       firstIncomplete: firstIncomplete,
       reality: reality,
+      alignment: alignment,
       cautions: cautionsOut,
       askBeyndGuidance: askBeyndGuidance,
       audit: {
         shadowOnly: true,
         planCallCount: opts.plan ? 0 : 1,
-        sideEffectsAcknowledged: opts.plan ? [] : ['getMonthPlan_maintenance_sync']
+        alignmentPeekUsed: true,
+        sideEffectsAcknowledged: opts.plan
+          ? ['geodePeekActiveRealityPlanAlignment_stale_check_may_recall_plan']
+          : ['getMonthPlan_maintenance_sync', 'geodePeekActiveRealityPlanAlignment_stale_check_may_recall_plan']
       }
     };
 

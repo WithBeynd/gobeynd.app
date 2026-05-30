@@ -54,6 +54,16 @@ Current Ask Beynd is a user-provided API key model.
 
 Future backlog work may move to a Beynd-managed API backend. Never put a Beynd Ltd provider key in frontend code. Before changing Ask Beynd architecture, audit all context sent off-device.
 
+### Plan rationale snapshot (Stage 76 — shadow)
+
+- **`geodePlanRationaleSnapshot(state, opts)`** — shadow-only export of plan reasoning (not wired to Ask Beynd as of 76D-A.7).
+- **`geodePlanRationaleAlignmentBlock()`** — reads active Month Shift via `geodePeekActiveRealityPlanAlignment` only.
+- **Allocation SSOT:** `getMonthPlan()`. **Explanation export SSOT (future):** snapshot. **Current Ask Beynd context:** `geodeBuildCoachingContext()` (lossy plan strip).
+- **Amount rule for integration:** baseline in `steps[].amount`; display in `alignment.stepAdjustments` when `alignment.active` (Rule C).
+- **Docs:** [`docs/stages/76/README.md`](./stages/76/README.md), [`docs/handover-stage-76-ask-beynd-reasoning.md`](./handover-stage-76-ask-beynd-reasoning.md).
+
+Do not wire snapshot into Ask Beynd without alignment block and 76D-A.5 parity review.
+
 ## Cleanup Rule
 
 Do not delete dormant functions without a dedicated cleanup audit.
