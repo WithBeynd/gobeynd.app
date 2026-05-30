@@ -12,6 +12,22 @@ The live primary Home action path is:
 
 This is the canonical Home Main Action system. Edit this path for current Home primary-action behaviour.
 
+## Home Orchestration Render Gating (Stage 79B-B)
+
+Home orchestration **producers** (do not change for presentation-only passes):
+
+- `geodeOrchestrationSnapshot`
+- `geodeDeferredQueueSnapshot`
+- `geodeHomeOrchestrationResolve`
+
+**Consumer pattern:** `rHome()` caches `window._geodeHomeOrchestrationResolve = geodeHomeOrchestrationResolve(S)` before building HTML. Surfaces should read `resolve.surfaces.<key>.show` via `geodeHomeOrchSurfaceShowResolved(surfaceKey, fallbackFn)` with a null-safe fallback to the legacy direct helper.
+
+**Wired in 79B-B:** `overBudget`, `needsAttention`.
+
+**Not yet wired:** `focusGoal`, `sinceLastVisit`, full `askBeynd.emphasis`, coaching strip legacy fallback removal, `disclosureNeeded[]` (future hidden intelligence).
+
+Do not reorder Home or change orchestration producers when adding gating for additional surfaces.
+
 ## Suggested Actions And Insights
 
 `geodeHomePrepareSuggestedActionsList` populates `_geodeSuggestedActions`.

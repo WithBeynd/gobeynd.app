@@ -43,12 +43,18 @@ See [`docs/stages/76/README.md`](./stages/76/README.md) for ordered audits, buil
 
 See [`docs/stages/77/README.md`](./stages/77/README.md) and **[`docs/handovers/handover-stage-76-77-ask-beynd-evolution.md`](./handovers/handover-stage-76-77-ask-beynd-evolution.md)** (primary handover).
 
+**State:** Complete (`c1a0aab` — skip guardrails + over-budget Ask context). Capability score (77D-A): **7.5 / 10**.
+
+### Stage 79 — Home hierarchy & orchestration wiring
+
+See [`docs/stages/79/README.md`](./stages/79/README.md).
+
 **Current state (May 2026):**
 
-- 77B-B + 77C-B built locally; **77B-C / 77C-C / 77D-A / 77D-B** audit docs on disk (77D-B.1 closure)
-- **77D-B verdict:** **PASS** (77D-B.2 console QA recorded); **user commit approval still required**
-- Capability score (77D-A): **7.5 / 10**
-- Next: user approves commit → bundled `feat(ask): add skip guardrails and over-budget context for Ask Beynd`
+- **79A / 79B-A** audits on disk
+- **79B-B** built locally — over-budget + needs-attention orchestration gating in `rHome()`
+- **79B-C** post-build audit pending
+- No service-worker bump for 79B-B alone
 
 ---
 

@@ -16031,6 +16031,26 @@ function geodeHomeOrchestrationResolve(state) {
   return resolve;
 }
 
+/** Read orchestration resolve surface show flag; fallback when resolve missing or unset (Stage 79B-B). */
+function geodeHomeOrchSurfaceShowResolved(surfaceKey, fallbackFn) {
+  try {
+    var resolve = window._geodeHomeOrchestrationResolve;
+    if (
+      resolve &&
+      resolve.surfaces &&
+      resolve.surfaces[surfaceKey] &&
+      typeof resolve.surfaces[surfaceKey].show === 'boolean'
+    ) {
+      return resolve.surfaces[surfaceKey].show;
+    }
+  } catch (_eOrchSurf) {}
+  try {
+    return fallbackFn ? !!fallbackFn() : true;
+  } catch (_eOrchFb) {
+    return false;
+  }
+}
+
 function geodeHumanMomentActivityDay(ts) {
   try {
     if (typeof ts !== 'number' || !isFinite(ts) || ts <= 0) return '';
@@ -27158,9 +27178,13 @@ function rHome() {
     }
   } catch (_eIrr) {}
   // Overdue items
-  // Persistent over-budget card — returning users (see geodeHomePersistentOverBudgetCardVisible)
+  // Persistent over-budget card — returning users (orchestration-gated; Stage 79B-B)
   try {
-    if (geodeHomePersistentOverBudgetCardVisible(S)) {
+    if (
+      geodeHomeOrchSurfaceShowResolved('overBudget', function () {
+        return geodeHomePersistentOverBudgetCardVisible(S);
+      })
+    ) {
       var _homeOver = Math.abs(calcMonthlyLeftover(S));
       h +=
         '<div class="geode-soft-enter" role="button" tabindex="0" aria-label="Review this month in Plan" ' +
@@ -27182,7 +27206,13 @@ function rHome() {
       h += '</div>';
     }
   } catch (_eOb) {}
-  h += geodeOverdueCardHtml();
+  if (
+    geodeHomeOrchSurfaceShowResolved('needsAttention', function () {
+      return geodeOverdueCardHtml() !== '';
+    })
+  ) {
+    h += geodeOverdueCardHtml();
+  }
   var _homeSoftPri = null;
   try {
     _homeSoftPri = geodeHomeSoftPriorityContext(S);
