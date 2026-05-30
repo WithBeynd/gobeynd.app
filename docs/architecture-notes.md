@@ -40,6 +40,15 @@ Safety/buffer Home **Insight** (not Human Moment) uses display-only reframe when
 
 Calm-month forward-building copy in `getCoreNudges` remains unchanged. Do not imply Savings Release or buffer withdrawal in reframe copy.
 
+## Home Human Moment non-alert styling (Stage 79B-L)
+
+Home **Human Moment** strip (`geodeHomeHumanMomentStripHtml`) must not use `insight-card--warning`:
+
+- **`supportive`** tone → `insight-card--positive` (unchanged).
+- **`cautious`** and other non-supportive tones → default `.insight-card` + `nudgeStyle('neutral')` — no amber warn tier.
+
+Do not change HM selection, copy, or orchestration when adjusting styling. Reality-page HM (`geodeRealityHumanMoment`) is a separate surface.
+
 ## Suggested Actions And Insights
 
 `geodeHomePrepareSuggestedActionsList` populates `_geodeSuggestedActions`.

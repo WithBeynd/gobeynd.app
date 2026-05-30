@@ -16339,8 +16339,8 @@ function geodeHomeHumanMomentStripHtml(hm) {
   if (!hm || !hm.body) return '';
   var isTransient = hm.transient === true && hm.source === 'consistency';
   if (isTransient) geodeMarkHumanMomentConsistencyShown(S);
-  var st = nudgeStyle(hm.tone === 'supportive' ? 'positive' : 'warning', hm.topic);
-  var toneCls = hm.tone === 'supportive' ? ' insight-card--positive' : ' insight-card--warning';
+  var st = nudgeStyle(hm.tone === 'supportive' ? 'positive' : 'neutral', hm.topic);
+  var toneCls = hm.tone === 'supportive' ? ' insight-card--positive' : '';
   var shortMsg = geodeHomeInsightShortLine(hm.body, 160);
   var h =
     '<div class="geode-soft-enter insight-wrap' +

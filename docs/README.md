@@ -52,9 +52,10 @@ See [`docs/stages/79/README.md`](./stages/79/README.md).
 **Current state (May 2026):**
 
 - **79B-B** committed (`8dc9855`); **79B-C PASS**
-- **79B-E / 79B-F** coaching strip parity built and audited **PASS** (local)
-- **79B-I** built locally — pressure-aware safety Insight reframe when `left < 0`
-- No service-worker bump for 79B-I alone
+- **79B-E / 79B-F** coaching strip parity — **PASS** (local)
+- **79B-I / 79B-J** safety Insight pressure reframe — built / **PASS** (local)
+- **79B-L** built locally — Home HM non-alert styling (`geodeHomeHumanMomentStripHtml`)
+- No service-worker bump for 79B presentation passes alone
 
 ---
 

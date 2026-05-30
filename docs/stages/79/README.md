@@ -17,9 +17,11 @@ Ordered documentation for Visual Intelligence Home hierarchy work after Stage 78
 | 79B-D | Alert duplication / MA dominance audit | [79B-D-home-alert-main-action-dominance-audit.md](./79B-D-home-alert-main-action-dominance-audit.md) | NEEDS ATTENTION | — |
 | 79B-E | Build — coaching strip orchestration parity | [79B-E-build-coaching-strip-parity.md](./79B-E-build-coaching-strip-parity.md) | Built (local) | *held* |
 | 79B-F | Post-build audit (79B-E) | — | **PASS** | — |
-| 79B-G | Insight/HM contextual relevance audit | *(chat — superseded by 79B-H)* | NEEDS ATTENTION | — |
 | 79B-H | Insight pressure reframe audit | [79B-H-insight-pressure-reframe-audit.md](./79B-H-insight-pressure-reframe-audit.md) | NEEDS ATTENTION | — |
 | 79B-I | Build — pressure-aware safety Insight reframe | [79B-I-build-pressure-aware-safety-insight.md](./79B-I-build-pressure-aware-safety-insight.md) | Built (local) | *held* |
+| 79B-J | Post-build audit (79B-I) | — | **PASS** | — |
+| 79B-K | Human Moment non-alert styling audit | [79B-K-human-moment-non-alert-styling-audit.md](./79B-K-human-moment-non-alert-styling-audit.md) | NEEDS ATTENTION | — |
+| 79B-L | Build — Home HM non-alert styling | [79B-L-build-human-moment-non-alert-styling.md](./79B-L-build-human-moment-non-alert-styling.md) | Built (local) | *held* |
 
 ---
 
@@ -29,9 +31,8 @@ Ordered documentation for Visual Intelligence Home hierarchy work after Stage 78
 |----------|------|
 | `geodeHomeOrchSurfaceShowResolved` | Alert gating (79B-B) |
 | `geodeHomeCoachingStripHtml` | Coaching strip parity (79B-E) |
-| `geodeHomeSafetyInsightUnderPressure` | Pressure reframe gate (79B-I) |
-| `geodeHomeSafetyInsightPressureCopy` | Pressure-aware safety Insight copy (79B-I) |
-| `geodeInsightPolishBody` / `renderInsights` | Home Insight display |
+| `geodeHomeSafetyInsightUnderPressure` / `geodeHomeSafetyInsightPressureCopy` | Safety Insight reframe (79B-I) |
+| `geodeHomeHumanMomentStripHtml` | Home HM render; non-warning styling (79B-L) |
 
 ---
 
