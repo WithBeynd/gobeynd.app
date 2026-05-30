@@ -15,8 +15,10 @@ Ordered documentation for the Ask Beynd intelligence and plan rationale export w
 | 76C-C | Post-build audit | [76C-C-post-build-audit.md](./76C-C-post-build-audit.md) | PASS | — |
 | 76D-A | Verification audit | [76D-A-snapshot-verification-audit.md](./76D-A-snapshot-verification-audit.md) | NEEDS ATTENTION | — |
 | 76D-A.5 | Parity audit | [76D-A-5-reality-plan-parity-audit.md](./76D-A-5-reality-plan-parity-audit.md) | NEEDS ATTENTION | — |
-| 76D-A.6 | Build | [76D-A-6-reality-alignment-export-build.md](./76D-A-6-reality-alignment-export-build.md) | Built | *uncommitted* |
+| 76D-A.6 | Build | [76D-A-6-reality-alignment-export-build.md](./76D-A-6-reality-alignment-export-build.md) | Built | `c4c9552` |
 | 76D-A.7 | Post-build audit | [76D-A-7-post-build-audit.md](./76D-A-7-post-build-audit.md) | PASS | — |
+| 76D-B | Integration audit | [76D-B-ask-beynd-context-integration-audit.md](./76D-B-ask-beynd-context-integration-audit.md) | NEEDS ATTENTION | — |
+| 76D-B | Build | [76D-B-build-ask-beynd-rationale-context.md](./76D-B-build-ask-beynd-rationale-context.md) | Built | *pending* |
 | — | Handover | [../handover-stage-76-ask-beynd-reasoning.md](../handover-stage-76-ask-beynd-reasoning.md) | In progress | — |
 
 ---
@@ -25,8 +27,9 @@ Ordered documentation for the Ask Beynd intelligence and plan rationale export w
 
 | Function | Role |
 |----------|------|
-| `geodeBuildCoachingContext()` | Current Ask Beynd context (lossy plan strip) |
-| `geodePlanRationaleSnapshot(state, opts)` | Shadow plan rationale export |
+| `geodeBuildCoachingContext()` | Ask Beynd context; includes plan rationale block when snapshot succeeds |
+| `geodeFormatPlanRationaleContextBlock(snap, sym)` | Bounded text formatter for Ask Beynd (76D-B) |
+| `geodePlanRationaleSnapshot(state, opts)` | Plan rationale read-model |
 | `geodePlanRationaleAlignmentBlock()` | Alignment slice for snapshot (76D-A.6) |
 | `getMonthPlan()` | Allocation SSOT |
 | `geodePeekActiveRealityPlanAlignment()` | Read-only active Month Shift overlay |
@@ -35,4 +38,4 @@ Ordered documentation for the Ask Beynd intelligence and plan rationale export w
 
 ## Next stage (recommended)
 
-**76D-B** — Wire snapshot serialization into Ask Beynd context only (not UI). Use rule **C**: when `alignment.active`, expose both baseline (`steps[].amount`) and display (`alignment.stepAdjustments[].displayAmount`).
+**76D-B post-build audit** — then optional prompt tuning if alignment answers need reinforcement.

@@ -54,15 +54,16 @@ Current Ask Beynd is a user-provided API key model.
 
 Future backlog work may move to a Beynd-managed API backend. Never put a Beynd Ltd provider key in frontend code. Before changing Ask Beynd architecture, audit all context sent off-device.
 
-### Plan rationale snapshot (Stage 76 — shadow)
+### Plan rationale snapshot (Stage 76)
 
-- **`geodePlanRationaleSnapshot(state, opts)`** — shadow-only export of plan reasoning (not wired to Ask Beynd as of 76D-A.7).
-- **`geodePlanRationaleAlignmentBlock()`** — reads active Month Shift via `geodePeekActiveRealityPlanAlignment` only.
-- **Allocation SSOT:** `getMonthPlan()`. **Explanation export SSOT (future):** snapshot. **Current Ask Beynd context:** `geodeBuildCoachingContext()` (lossy plan strip).
-- **Amount rule for integration:** baseline in `steps[].amount`; display in `alignment.stepAdjustments` when `alignment.active` (Rule C).
+- **`geodePlanRationaleSnapshot(state, opts)`** — plan reasoning export; also updates `window._geodePlanRationaleSnapshot`.
+- **`geodeFormatPlanRationaleContextBlock(snap, sym)`** — bounded Ask Beynd text block (76D-B).
+- **`geodeBuildCoachingContext()`** — includes plan rationale block when snapshot succeeds; legacy plan strip as fallback.
+- **Allocation SSOT:** `getMonthPlan()`. **Explanation export:** snapshot → formatter → Ask Beynd context.
+- **Amount rule (Rule C):** baseline in step lines; when `alignment.active`, formatter adds Reality-adjusted amounts per step.
 - **Docs:** [`docs/stages/76/README.md`](./stages/76/README.md), [`docs/handover-stage-76-ask-beynd-reasoning.md`](./handover-stage-76-ask-beynd-reasoning.md).
 
-Do not wire snapshot into Ask Beynd without alignment block and 76D-A.5 parity review.
+Do not inject full JSON snapshot into Ask Beynd context.
 
 ## Cleanup Rule
 

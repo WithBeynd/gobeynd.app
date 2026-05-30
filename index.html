@@ -25799,6 +25799,144 @@ function geodePlanRationaleSnapshot(state, opts) {
   }
 }
 
+/** Truncate plan rationale lines for Ask Beynd context (export only). */
+function geodePlanRationaleTruncateLine(text, maxLen) {
+  var s = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  maxLen = maxLen != null && isFinite(Number(maxLen)) ? Number(maxLen) : 160;
+  if (s.length <= maxLen) return s;
+  return s.slice(0, Math.max(0, maxLen - 3)) + '...';
+}
+
+/**
+ * Stage 76D-B: concise bounded plan rationale text for Ask Beynd context only.
+ * Not UI. Does not mutate state. Returns '' when snap is null/empty.
+ */
+function geodeFormatPlanRationaleContextBlock(snap, sym) {
+  sym = sym != null ? String(sym) : '£';
+  if (!snap || typeof snap !== 'object') return '';
+  var MAX_BLOCK = 2500;
+  var lines = [];
+  lines.push('PLAN RATIONALE (read-only export from your plan engine; coaching not advice)');
+  if (snap.monthKey) lines.push('Month: ' + String(snap.monthKey));
+  if (snap.strategy && snap.strategy.displayName) {
+    lines.push('Strategy: ' + String(snap.strategy.displayName));
+  }
+  if (snap.headline && snap.headline.summary) {
+    lines.push('Summary: ' + geodePlanRationaleTruncateLine(snap.headline.summary, 200));
+  }
+  if (snap.firstIncomplete && snap.firstIncomplete.label) {
+    lines.push(
+      'First incomplete step: ' +
+        String(snap.firstIncomplete.label).replace(/\u2011/g, '-') +
+        ' (step index ' +
+        snap.firstIncomplete.index +
+        ')'
+    );
+  }
+
+  var al = snap.alignment && typeof snap.alignment === 'object' ? snap.alignment : {};
+  if (al.active) {
+    lines.push(
+      'Reality shift: active this month' +
+        (al.summary ? ' (' + String(al.summary) + ')' : '') +
+        '. For adjusted steps, state BOTH the usual plan amount and the Reality-adjusted amount for this month only. The usual plan remains available.'
+    );
+  } else {
+    lines.push('Reality shift: not active; use usual plan amounts only.');
+  }
+
+  var adjByIx = {};
+  if (al.active && Array.isArray(al.stepAdjustments)) {
+    var ai;
+    for (ai = 0; ai < al.stepAdjustments.length; ai++) {
+      var adjRow = al.stepAdjustments[ai];
+      if (adjRow && typeof adjRow.stepIndex === 'number') {
+        adjByIx[adjRow.stepIndex] = adjRow;
+      }
+    }
+  }
+
+  var steps = Array.isArray(snap.steps) ? snap.steps : [];
+  var stepLimit = Math.min(3, steps.length);
+  if (!stepLimit) {
+    lines.push('Steps: none this month');
+  } else {
+    lines.push(
+      'Steps (showing ' +
+        stepLimit +
+        (steps.length > stepLimit ? ' of ' + steps.length : '') +
+        '):'
+    );
+    var si;
+    for (si = 0; si < stepLimit; si++) {
+      var st = steps[si];
+      if (!st) continue;
+      var stIx = st.index != null ? st.index : si;
+      var lbl = String(st.label || '').replace(/\u2011/g, '-');
+      var usualAmt = Math.round(toNum(st.amount));
+      var row = '  ' + (si + 1) + '. ' + lbl + ' | usual plan: ' + sym + usualAmt;
+      var stAdj = adjByIx[stIx];
+      if (stAdj) {
+        if (String(stAdj.action) === 'pause') {
+          row += ' | Reality view this month: paused';
+        } else {
+          row += ' | Reality view this month: ' + sym + Math.round(toNum(stAdj.displayAmount));
+        }
+        row += ' (baseline at approval: ' + sym + Math.round(toNum(stAdj.baselineAmount)) + ')';
+      }
+      lines.push(row);
+      var whyLine = st.reasonHeadline || st.reasonDetail || st.notePlain || '';
+      whyLine = geodePlanRationaleTruncateLine(whyLine, 160);
+      if (whyLine) lines.push('     Why: ' + whyLine);
+      if (st.progress && typeof st.progress === 'object') {
+        lines.push(
+          '     Progress: ' +
+            sym +
+            Math.round(toNum(st.progress.applied)) +
+            ' of ' +
+            sym +
+            Math.round(toNum(st.progress.suggested)) +
+            ' (' +
+            String(st.progress.phase || 'none') +
+            ')'
+        );
+      }
+    }
+    if (steps.length > stepLimit) {
+      lines.push('  (+ ' + (steps.length - stepLimit) + ' more step(s) in plan)');
+    }
+  }
+
+  var aff = snap.affordability && typeof snap.affordability === 'object' ? snap.affordability : {};
+  if (aff.suggestableRoom != null && isFinite(Number(aff.suggestableRoom))) {
+    lines.push('Suggestable plan room: ' + sym + Math.round(toNum(aff.suggestableRoom)));
+  }
+  var affCodes = Array.isArray(aff.reasonCodes) ? aff.reasonCodes.slice(0, 6) : [];
+  if (affCodes.length) lines.push('Affordability codes: ' + affCodes.join(', '));
+
+  var cautions = Array.isArray(snap.cautions) ? snap.cautions.slice(0, 8) : [];
+  if (cautions.length) lines.push('Cautions: ' + cautions.join(', '));
+
+  lines.push('Assistant rules: Use only figures in this block for plan amounts and rationale. Say "suggests" not "must". Do not invent skip outcomes.');
+  if (al.active) {
+    lines.push(
+      'Assistant rules: Never describe only the usual plan amount for a Reality-adjusted step; include both usual and Reality-adjusted views.'
+    );
+  }
+  var rv = snap.reality && typeof snap.reality === 'object' ? snap.reality : {};
+  if (!rv.hasData) {
+    lines.push('Assistant rules: No balance sense-check this month; avoid stating affordability as fact.');
+  } else if (rv.activitySinceCheck) {
+    lines.push('Assistant rules: Balance check may be outdated after recent activity.');
+  }
+
+  var out = lines.join('\n');
+  if (out.length > MAX_BLOCK) out = out.slice(0, MAX_BLOCK - 3) + '...';
+  return out;
+}
+
 /** Build a financial summary string for the AI system prompt. No raw transaction names. */
 function geodeBuildCoachingContext() {
   try {
@@ -25815,7 +25953,14 @@ function geodeBuildCoachingContext() {
     var incType = S.incomeType === 'irregular' ? 'variable/irregular' : S.incomeType === 'none' ? 'none' : 'stable';
     var deps   = S.hasDependants ? 'Yes — plans for stability.' : 'No';
     var plan   = getMonthPlan();
-    var planSteps = (plan.steps || []).map(function(st,i) {
+    var planRationaleBlock = '';
+    try {
+      var planSnap = geodePlanRationaleSnapshot(S, { plan: plan, generatedAt: Date.now() });
+      planRationaleBlock = geodeFormatPlanRationaleContextBlock(planSnap, sym);
+    } catch (_ePrCtx) {
+      planRationaleBlock = '';
+    }
+    var planStepsFallback = (plan.steps || []).map(function(st,i) {
       return 'P' + (i+1) + ': ' + String(st.label||'').replace(/\u2011/g,'-') + ' (' + sym + Math.round(Number(st.amount)||0) + ')';
     }).join('; ');
 
@@ -25937,11 +26082,17 @@ function geodeBuildCoachingContext() {
       goalLines,
       '',
       'INVESTMENTS',
-      invLines,
-      '',
-      'THIS MONTH\'S PLAN',
-      planSteps || '  Not enough data to build a plan yet'
+      invLines
     );
+    if (planRationaleBlock) {
+      ctx.push('', planRationaleBlock);
+    } else {
+      ctx.push(
+        '',
+        'THIS MONTH\'S PLAN',
+        planStepsFallback || '  Not enough data to build a plan yet'
+      );
+    }
     return ctx.join('\n');
   } catch(e) { return 'Financial context unavailable.'; }
 }

@@ -1,13 +1,14 @@
 # Stage 76 Handover — Ask Beynd Reasoning & Plan Rationale Snapshot
 
 **Date:** May 2026  
-**Status:** In progress — shadow export complete; Ask Beynd **not wired**  
+**Status:** In progress — Ask Beynd context wired with plan rationale block (76D-B); post-build audit pending  
 **Commits:**
 
 | Stage | SHA | Message |
 |-------|-----|---------|
 | 76C-B | `cdc77e2` | `feat(ask): add shadow plan rationale snapshot` |
-| 76D-A.6 | *pending* | `feat(ask): export Reality alignment in plan rationale snapshot` |
+| 76D-A.6 | `c4c9552` | `feat(ask): export Reality alignment in plan rationale snapshot` |
+| 76D-B | *pending* | `feat(ask): add plan rationale block to Ask Beynd context` |
 
 **Documentation index:** [`docs/stages/76/README.md`](./stages/76/README.md)
 
@@ -45,13 +46,20 @@ Shadow read-model in `index.html` (~25592+):
 - Closes parity gap with Plan UI when Month Shift approved
 - Does **not** change `steps[].amount` (baseline preserved)
 
+### Ask Beynd plan rationale context (76D-B)
+
+- `geodeFormatPlanRationaleContextBlock(snap, sym)` — bounded text (~2500 chars, max 3 steps)
+- `geodeBuildCoachingContext()` calls snapshot with shared `plan` object; appends rationale block **instead of** legacy `P1: label (£X)` strip when successful
+- **Rule C** embedded in block when `alignment.active`
+- Fallback to legacy plan strip if snapshot/formatter fails
+
 ---
 
 ## What was intentionally not changed
 
-- Ask Beynd UI, `geodeBuildCoachingContext`, prompts, worker, coaching.json
+- Ask Beynd UI/modal, Home, Main Action, Plan/Reality visible copy
+- Prompts (`coaching.json`), worker, service-worker
 - Plan math, Reality logic, Month Shift approve/revert flows
-- Home, Main Action, Plan/Reality visible copy
 - `js/geode-pure/*` (identity helpers consumed read-only)
 
 ---
@@ -64,7 +72,7 @@ Shadow read-model in `index.html` (~25592+):
 
 Plan UI: row amount = layer 3 when active, else layer 1 (+ progress remaining).  
 Main Action: layer 1 / progress only (no overlay).  
-Ask Beynd today: layer 1 label+amount string only.
+Ask Beynd context: rationale block with usual amounts + alignment dual amounts when active (76D-B).
 
 ---
 
@@ -91,14 +99,14 @@ snap.steps.map(function(s){ return [s.label, s.amount, s.reasonHeadline]; });
 
 ---
 
-## Next stage: 76D-B (recommended)
+## Next stage: 76D-B post-build audit (recommended)
 
-1. Add `geodeFormatPlanRationaleContextBlock(snap)` (or equivalent) — **serialize only**, no prompt rewrite unless scoped.
-2. Call snapshot once from Ask Beynd path; pass `opts.plan` from same `getMonthPlan()` if context still needs plan strip.
-3. Implement rule **C** in coaching guidance string when `alignment.active`.
-4. Post-build audit + update this handover.
+1. Verify `geodeBuildCoachingContext()` contains `PLAN RATIONALE` and not duplicate thin plan strip.
+2. Verify Month Shift dual amounts in context when alignment active.
+3. Verify fallback when snapshot returns null.
+4. Post-build audit doc + update this handover.
 
-**Do not:** replace full `geodeBuildCoachingContext` (debts, goals, posture still required).
+**Do not:** change worker/coaching.json unless alignment answers remain wrong after context-only ship.
 
 ---
 
