@@ -19489,6 +19489,50 @@ function geodePlanPageStyleSectionHtml() {
  * there is nothing to allocate. Shows the specific gap, the biggest spending
  * categories, and a single action to fix it.
  */
+/** Read-only flexible expense totals by category (protected rows excluded). Matches Plan over-budget breakdown. */
+function geodeAskBeyndFlexibleSpendingCategories(state, maxItems) {
+  state = state || S;
+  maxItems = maxItems != null && isFinite(Number(maxItems)) ? Math.max(1, Number(maxItems)) : 5;
+  var catLabels = {
+    food: 'Food',
+    transport: 'Transport',
+    utilities: 'Bills & utilities',
+    entertainment: 'Entertainment',
+    health: 'Health',
+    shopping: 'Shopping',
+    subs: 'Subscriptions',
+    other: 'Other'
+  };
+  var catTotals = {};
+  var nowYM =
+    typeof currentYM === 'function' ? currentYM() : new Date().toISOString().slice(0, 7);
+  var expenses = (state && state.expenses) || [];
+  var ei;
+  for (ei = 0; ei < expenses.length; ei++) {
+    var e = expenses[ei];
+    if (!e) continue;
+    if (geodeStage62ProtectedReasonForExpense(state, e)) continue;
+    var monthly = geodeStage62MonthlyExpenseAmount(e, nowYM);
+    if (monthly <= 0) continue;
+    var cat = e.cat || 'other';
+    catTotals[cat] = (catTotals[cat] || 0) + monthly;
+  }
+  var keys = Object.keys(catTotals).sort(function(a, b) {
+    return catTotals[b] - catTotals[a];
+  });
+  var out = [];
+  var ki;
+  for (ki = 0; ki < keys.length && out.length < maxItems; ki++) {
+    var k = keys[ki];
+    out.push({
+      key: k,
+      label: catLabels[k] || 'Other',
+      amount: catTotals[k]
+    });
+  }
+  return out;
+}
+
 function geodeOverBudgetPlanBlockHtml(left) {
   var over = Math.abs(toNum(left));
   var h = '';
@@ -19505,33 +19549,22 @@ function geodeOverBudgetPlanBlockHtml(left) {
 
   // Spending breakdown — show top categories by monthly total
   try {
-    var catTotals = {};
-    var catLabels = { food:'Food', transport:'Transport', utilities:'Bills & utilities',
-      entertainment:'Entertainment', health:'Health', shopping:'Shopping',
-      subs:'Subscriptions', other:'Other' };
-    var nowYM = (typeof currentYM === 'function') ? currentYM() : new Date().toISOString().slice(0,7);
-    (S.expenses || []).forEach(function(e) {
-      if (!e) return;
-      if (geodeStage62ProtectedReasonForExpense(S, e)) return;
-      var monthly = geodeStage62MonthlyExpenseAmount(e, nowYM);
-      if (monthly <= 0) return;
-      var cat = e.cat || 'other';
-      catTotals[cat] = (catTotals[cat] || 0) + monthly;
-    });
-    var sorted = Object.keys(catTotals).sort(function(a,b){ return catTotals[b]-catTotals[a]; });
-    if (sorted.length > 0) {
+    var flexCats = geodeAskBeyndFlexibleSpendingCategories(S, 5);
+    if (flexCats.length > 0) {
       h += '<div class="overbudget-section">';
       h += '<div class="detail-kicker">Your spending breakdown</div>';
       h += '<div class="overbudget-breakdown">';
-      var topCats = sorted.slice(0, 5);
-      var totalExpense = topCats.reduce(function(s,k){ return s + catTotals[k]; }, 0);
-      topCats.forEach(function(cat, idx) {
-        var amt = catTotals[cat];
+      var totalExpense = 0;
+      var fi;
+      for (fi = 0; fi < flexCats.length; fi++) {
+        totalExpense += toNum(flexCats[fi].amount);
+      }
+      flexCats.forEach(function(row) {
+        var amt = toNum(row.amount);
         var pct = totalExpense > 0 ? Math.round(amt / totalExpense * 100) : 0;
-        var label = catLabels[cat] || 'Other';
         h += '<div class="overbudget-row">';
         h += '<div>';
-        h += '<div class="overbudget-label">' + escHtmlLite(label) + '</div>';
+        h += '<div class="overbudget-label">' + escHtmlLite(row.label) + '</div>';
         h += '<div class="overbudget-bar ' + geodePctBucketClass(Math.max(pct, 4)) + '"></div>';
         h += '</div>';
         h += '<div class="overbudget-value">' + escHtmlLite(fm(amt)) + '</div>';
@@ -19539,10 +19572,9 @@ function geodeOverBudgetPlanBlockHtml(left) {
       });
       h += '</div>';
 
-      // Specific reduction target
-      var topCat = sorted[0];
-      var topAmt = catTotals[topCat];
-      var topLabel = catLabels[topCat] || 'spending';
+      var topRow = flexCats[0];
+      var topAmt = toNum(topRow.amount);
+      var topLabel = topRow.label || 'spending';
       if (topAmt > over * 0.3) {
         h += '<div class="overbudget-hint">' +
           escHtmlLite(topLabel + ' is your largest category at ' + fm(topAmt) + '/month. ' +
@@ -25810,13 +25842,13 @@ function geodePlanRationaleTruncateLine(text, maxLen) {
 }
 
 /**
- * Stage 76D-B: concise bounded plan rationale text for Ask Beynd context only.
+ * Stage 76D-B / 77B-B: concise bounded plan rationale text for Ask Beynd context only.
  * Not UI. Does not mutate state. Returns '' when snap is null/empty.
  */
 function geodeFormatPlanRationaleContextBlock(snap, sym) {
   sym = sym != null ? String(sym) : '£';
   if (!snap || typeof snap !== 'object') return '';
-  var MAX_BLOCK = 2500;
+  var MAX_BLOCK = 2800;
   var lines = [];
   lines.push('PLAN RATIONALE (read-only export from your plan engine; coaching not advice)');
   if (snap.monthKey) lines.push('Month: ' + String(snap.monthKey));
@@ -25919,10 +25951,39 @@ function geodeFormatPlanRationaleContextBlock(snap, sym) {
   var cautions = Array.isArray(snap.cautions) ? snap.cautions.slice(0, 8) : [];
   if (cautions.length) lines.push('Cautions: ' + cautions.join(', '));
 
-  lines.push('Assistant rules: Use only figures in this block for plan amounts and rationale. Say "suggests" not "must". Do not invent skip outcomes.');
+  lines.push(
+    'Assistant rules: Use only figures in this block for plan amounts and rationale. Say "suggests" not "must".'
+  );
+  lines.push(
+    'SKIP / WHAT-IF LIMITS (coaching only; Beynd does not simulate skips, delays, partial pays, or pauses):'
+  );
+  lines.push(
+    'Assistant rules: Do not calculate or invent exact outcomes if a step is skipped, delayed, reduced, or paused.'
+  );
+  lines.push(
+    'Assistant rules: Do not invent payoff dates, interest saved or lost, balance changes, penalties, or target-date shifts; do not reverse or extrapolate projection text.'
+  );
+  lines.push(
+    'Assistant rules: Use the Why line and debts/goals context to explain why the step exists; describe likely direction only (e.g. slower progress, interest continues on debt balances).'
+  );
+  lines.push(
+    'Assistant rules: Plan steps are suggestions — preserve user agency; do not say the user can or cannot afford to skip.'
+  );
+  lines.push(
+    'Assistant rules: Extra debt plan steps are above minimums in this picture; do not claim minimums are met or missed unless explicitly in context.'
+  );
+  lines.push(
+    'Assistant rules: For goals, buffer, and investing, skipping may slow progress; do not quantify months or amounts skipped.'
+  );
+  lines.push(
+    'Assistant rules: If the month looks tight or a Reality shift is active, favour flexibility and smaller steps; suggest reviewing Plan or refreshing Reality — do not simulate a new plan.'
+  );
   if (al.active) {
     lines.push(
       'Assistant rules: Never describe only the usual plan amount for a Reality-adjusted step; include both usual and Reality-adjusted views.'
+    );
+    lines.push(
+      'Assistant rules: Reality-adjusted amounts are this month\'s view only; not a skip simulation.'
     );
   }
   var rv = snap.reality && typeof snap.reality === 'object' ? snap.reality : {};
@@ -25931,6 +25992,109 @@ function geodeFormatPlanRationaleContextBlock(snap, sym) {
   } else if (rv.activitySinceCheck) {
     lines.push('Assistant rules: Balance check may be outdated after recent activity.');
   }
+
+  var out = lines.join('\n');
+  if (out.length > MAX_BLOCK) out = out.slice(0, MAX_BLOCK - 3) + '...';
+  return out;
+}
+
+/**
+ * Stage 77C-B: bounded over-budget spending context for Ask Beynd when leftover is negative.
+ * Read-only; uses same flexible category rules as Plan over-budget breakdown.
+ */
+function geodeFormatAskBeyndSpendingPressureContextBlock(state, sym) {
+  state = state || S;
+  sym = sym != null ? String(sym) : '£';
+  var left = 0;
+  try {
+    left = calcMonthlyLeftover(state);
+  } catch (_eSpLeft) {
+    return '';
+  }
+  if (!(left < 0)) return '';
+
+  var MAX_BLOCK = 650;
+  var over = Math.round(Math.abs(toNum(left)));
+  var income = Math.round(toNum(state.income));
+  var expenses = 0;
+  var payments = 0;
+  try {
+    expenses = Math.round(sumExpensesMonthly(state.expenses || []));
+  } catch (_eSpEx) {}
+  try {
+    payments = Math.round(sumPaymentsMonthlyOutflow(state.payments || []));
+  } catch (_eSpPay) {}
+
+  var mc = null;
+  try {
+    mc = geodeGetMonthContext(state);
+  } catch (_eSpMc) {
+    mc = null;
+  }
+
+  var lines = [];
+  lines.push('SPENDING / OVER-BUDGET CONTEXT (read-only; coaching not advice)');
+  lines.push('Monthly income: ' + sym + income);
+  lines.push('Monthly expenses (entered): ' + sym + expenses);
+  lines.push('Monthly payments (scheduled/completed outflow): ' + sym + payments);
+  lines.push(
+    'Estimated monthly leftover: -' +
+      sym +
+      over +
+      ' (over budget by ' +
+      sym +
+      over +
+      ')'
+  );
+  if (mc && mc.protect) {
+    lines.push('Month context — keep in mind: ' + geodePlanRationaleTruncateLine(mc.protect, 120));
+  } else {
+    lines.push('Month context — keep in mind: none');
+  }
+  if (mc && mc.worried) {
+    lines.push('Month context — worried about: ' + geodePlanRationaleTruncateLine(mc.worried, 120));
+  } else {
+    lines.push('Month context — worried about: none');
+  }
+
+  var flexCats = geodeAskBeyndFlexibleSpendingCategories(state, 5);
+  if (!flexCats.length) {
+    lines.push('Flexible spending by category (protected items excluded from this list): none listed');
+  } else {
+    lines.push('Flexible spending by category (protected items excluded from this list):');
+    var ci;
+    for (ci = 0; ci < flexCats.length; ci++) {
+      lines.push(
+        '  ' +
+          (ci + 1) +
+          '. ' +
+          flexCats[ci].label +
+          ': ' +
+          sym +
+          Math.round(toNum(flexCats[ci].amount)) +
+          '/month'
+      );
+    }
+  }
+
+  lines.push(
+    'Assistant rules: Explain pressure using only figures above; do not shame the user.'
+  );
+  lines.push(
+    'Assistant rules: Do not call protected or "keep in mind" spending bad; suggest reviewing flexible categories first.'
+  );
+  lines.push(
+    'Assistant rules: Do not invent category totals or merchant-level cuts not listed.'
+  );
+  lines.push(
+    'Assistant rules: Do not create a new budget; suggest reviewing Plan and Money spending, and refreshing Reality if useful.'
+  );
+  lines.push(
+    'Assistant rules: For "what to cut first", name the largest flexible category here gently — not as a command.'
+  );
+  lines.push(
+    'Assistant rules: If PLAN RATIONALE shows little suggestable room or plan_room_negative, avoid promising save/invest steps this month.'
+  );
 
   var out = lines.join('\n');
   if (out.length > MAX_BLOCK) out = out.slice(0, MAX_BLOCK - 3) + '...';
@@ -26072,6 +26236,15 @@ function geodeBuildCoachingContext() {
     }
     if (orchBlock) {
       ctx.push('', orchBlock);
+    }
+    var spendingPressureBlock = '';
+    try {
+      spendingPressureBlock = geodeFormatAskBeyndSpendingPressureContextBlock(S, sym);
+    } catch (_eSpCtx) {
+      spendingPressureBlock = '';
+    }
+    if (spendingPressureBlock) {
+      ctx.push('', spendingPressureBlock);
     }
     ctx.push(
       '',

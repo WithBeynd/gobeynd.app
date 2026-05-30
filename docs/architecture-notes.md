@@ -57,8 +57,9 @@ Future backlog work may move to a Beynd-managed API backend. Never put a Beynd L
 ### Plan rationale snapshot (Stage 76)
 
 - **`geodePlanRationaleSnapshot(state, opts)`** — plan reasoning export; also updates `window._geodePlanRationaleSnapshot`.
-- **`geodeFormatPlanRationaleContextBlock(snap, sym)`** — bounded Ask Beynd text block (76D-B).
-- **`geodeBuildCoachingContext()`** — includes plan rationale block when snapshot succeeds; legacy plan strip as fallback.
+- **`geodeFormatPlanRationaleContextBlock(snap, sym)`** — bounded Ask Beynd text block (76D-B); includes always-on **SKIP / WHAT-IF LIMITS** assistant rules (77B-B) — no skip simulation.
+- **`geodeFormatAskBeyndSpendingPressureContextBlock(state, sym)`** — over-budget spending block when `calcMonthlyLeftover < 0` (77C-B); uses `geodeAskBeyndFlexibleSpendingCategories` (same rules as Plan over-budget breakdown).
+- **`geodeBuildCoachingContext()`** — includes plan rationale block when snapshot succeeds; spending pressure block when over budget; legacy plan strip as fallback.
 - **Allocation SSOT:** `getMonthPlan()`. **Explanation export:** snapshot → formatter → Ask Beynd context.
 - **Amount rule (Rule C):** baseline in step lines; when `alignment.active`, formatter adds Reality-adjusted amounts per step.
 - **Docs:** [`docs/stages/76/README.md`](./stages/76/README.md), [`docs/handover-stage-76-ask-beynd-reasoning.md`](./handover-stage-76-ask-beynd-reasoning.md).

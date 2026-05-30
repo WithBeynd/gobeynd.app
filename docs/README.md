@@ -24,9 +24,10 @@ Project documentation for audits, builds, handovers, and architecture memory.
 
 | Document | Series | Status |
 |----------|--------|--------|
+| [**Stage 76–77 — Ask Beynd evolution**](./handovers/handover-stage-76-77-ask-beynd-evolution.md) | 76–77 | **Primary reference** — read before future Ask Beynd work |
 | [Stage 55C — Reality-to-Plan alignment](./handover-stage-55c-reality-to-plan-alignment.md) | 55C | Complete |
 | [Stage 53 mini milestone](./handover-stage-53-mini-milestone.md) | 53 | Reference |
-| [Stage 76 — Ask Beynd reasoning](./handover-stage-76-ask-beynd-reasoning.md) | 76 | In progress (through 76D-A.7) |
+| [Stage 76 — Ask Beynd reasoning (detail)](./handover-stage-76-ask-beynd-reasoning.md) | 76 | Complete (`b1de9dd`) |
 
 ---
 
@@ -36,11 +37,18 @@ Project documentation for audits, builds, handovers, and architecture memory.
 
 See [`docs/stages/76/README.md`](./stages/76/README.md) for ordered audits, builds, and verdicts.
 
+**State:** PLAN RATIONALE context block wired (`b1de9dd`).
+
+### Stage 77 — Ask Beynd capability & guardrails
+
+See [`docs/stages/77/README.md`](./stages/77/README.md) and **[`docs/handovers/handover-stage-76-77-ask-beynd-evolution.md`](./handovers/handover-stage-76-77-ask-beynd-evolution.md)** (primary handover).
+
 **Current state (May 2026):**
 
-- Shadow read-model `geodePlanRationaleSnapshot` implemented (`cdc77e2` + uncommitted alignment export)
-- **Not wired** to Ask Beynd yet
-- Next recommended stage: **76D-B** — serialize snapshot into Ask Beynd context (rule C: baseline + display when alignment active)
+- 77B-B + 77C-B built locally; **77B-C / 77C-C / 77D-A / 77D-B** audit docs on disk (77D-B.1 closure)
+- **77D-B verdict:** **PASS** (77D-B.2 console QA recorded); **user commit approval still required**
+- Capability score (77D-A): **7.5 / 10**
+- Next: user approves commit → bundled `feat(ask): add skip guardrails and over-budget context for Ask Beynd`
 
 ---
 
