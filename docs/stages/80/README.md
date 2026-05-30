@@ -20,6 +20,10 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | 80C-D | Review Plan presentation polish (incl. D.1 inline affordance) | [80C-D-review-plan-presentation-polish.md](./80C-D-review-plan-presentation-polish.md) | Built (local) | *held* |
 | 80E-C | Reality context continuity audit | [80E-C-reality-context-continuity-audit.md](./80E-C-reality-context-continuity-audit.md) | NEEDS ATTENTION | — |
 | 80E-D | Build — Reality context continuity | [80E-D-build-reality-context-continuity.md](./80E-D-build-reality-context-continuity.md) | Built (local) | *held* |
+| 80E-F | Onboarding introduction & trust audit | [80E-F-onboarding-introduction-trust-audit.md](./80E-F-onboarding-introduction-trust-audit.md) | NEEDS ATTENTION | — |
+| 80E-G | Build — first-run intro copy refinement | [80E-G-build-first-run-intro-copy.md](./80E-G-build-first-run-intro-copy.md) | Built (local) | *held* |
+| 80E-G.1 | First-run intro trigger audit | [80E-G.1-first-run-intro-trigger-audit.md](./80E-G.1-first-run-intro-trigger-audit.md) | NEEDS ATTENTION | — |
+| 80E-G.2 | Build — first-run intro trigger fix | [80E-G.2-build-first-run-intro-trigger-fix.md](./80E-G.2-build-first-run-intro-trigger-fix.md) | Built (local) | *held* |
 | 80D | Stability Room shadow snapshot audit (no UI) | — | Planned | — |
 
 ---

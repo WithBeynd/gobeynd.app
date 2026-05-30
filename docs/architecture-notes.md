@@ -99,6 +99,19 @@ Live manual Reality paths:
 - Reality Check modal helpers
 - **`geodeGetMonthContextCarry`** / **`monthContextCarry`** — prior-month suggest only (80E-D); active month context still via Save on Reality form
 
+## First-run intro (Stage 80E-G / 80E-G.2)
+
+One-time **`pg-fr`** screens (`fr1`–`fr3`) after onboarding; keyed **`geode_fr_intro_v1`** (`FR_KEY`). **80E-G** copy-only orientation; **80E-G.2** trigger fix.
+
+**Show gate (`maybeShowFirstRunIntro`):** `S.hasOnboarded === true` and `FR_KEY` not set. Do **not** gate on `_geodeFirstBoot` (page-load KEY absence).
+
+- **`#fr2`** — Reality: sense-check + monthly context; manual, no bank pull
+- **`#fr3`** — Ask Beynd: optional plan explanation; Home as next step
+
+**Reset All Data:** `wipeLocalAppStateAndReload` clears `FR_KEY` with `geode_v6` so intro can show again after re-onboarding.
+
+Do not add fields, onboarding steps, or API-key setup to first-run intro. Quick Setup step 2 and post-QS Home nudge remain separate balance-focused hints.
+
 Dormant or future-facing paths:
 
 - `geodeRealityCheckCardHtml`

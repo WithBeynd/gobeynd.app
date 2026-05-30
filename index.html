@@ -1297,6 +1297,7 @@ canvas{display:block}
       <div class="fr-p">1. Add your income and spending
 2. Beynd builds your monthly priorities
 3. Follow the plan and adjust as you go</div>
+      <div class="fr-p">Reality helps you sense-check your plan against today and keep track of what matters this month. Nothing is pulled from your bank.</div>
       <button type="button" class="btn btn-p" onclick="frNext()">Continue</button>
       <button type="button" class="btn btn-s" onclick="frSkip()">I'll explore instead</button>
     </div>
@@ -1304,7 +1305,8 @@ canvas{display:block}
       <div class="fr-dots"><div class="frd"></div><div class="frd"></div><div class="frd on"></div></div>
       <div class="fr-ey">Ready</div>
       <div class="fr-h">You’re ready</div>
-      <div class="fr-p">Your next step is always clear on Home. Start there to build your plan.</div>
+      <div class="fr-p">Ask Beynd can explain why your plan looks the way it does — optional, and your plan works without it.</div>
+      <div class="fr-p">Your next step is on Home. Reality and Ask Beynd are there when you want more context.</div>
       <button type="button" class="btn btn-p" onclick="frFinish()">Start your plan</button>
       <button type="button" class="btn btn-s" onclick="frSkip()">I'll explore instead</button>
     </div>
@@ -7664,6 +7666,7 @@ function wipeLocalAppStateAndReload() {
   try {
     localStorage.removeItem(KEY);
     localStorage.removeItem(LAST_ACTIVE_KEY);
+    localStorage.removeItem('geode_fr_intro_v1');
     sessionStorage.removeItem('geode_rot');
     try {
       sessionStorage.clear();
@@ -7803,8 +7806,8 @@ function showFrStep(n) {
   }
 }
 function maybeShowFirstRunIntro() {
-  if (!_geodeFirstBoot) return;
   if (hasSeenFirstRunIntro()) return;
+  if (S.hasOnboarded !== true) return;
   var host = document.getElementById('pg-fr');
   if (!host) return;
   showFrStep(1);
