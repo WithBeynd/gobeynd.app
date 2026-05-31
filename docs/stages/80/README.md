@@ -35,6 +35,9 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | 80H-A | Reflection entry gate architecture audit | [80H-A-reflection-entry-gate-architecture-audit.md](./80H-A-reflection-entry-gate-architecture-audit.md) | NEEDS ATTENTION | — |
 | 80H-B | Build — reflection entry gate shadow | [80H-B-build-reflection-entry-gate-shadow.md](./80H-B-build-reflection-entry-gate-shadow.md) | Built (local) | *held* |
 | 80H-B.1 | Entry gate contract alignment | [80H-B.1-reflection-entry-gate-contract-alignment.md](./80H-B.1-reflection-entry-gate-contract-alignment.md) | Built (local) | *held* |
+| 80I-A | Reflection experience ViewModel architecture audit | [80I-A-reflection-experience-viewmodel-architecture-audit.md](./80I-A-reflection-experience-viewmodel-architecture-audit.md) | NEEDS ATTENTION | — |
+| 80I-B | Build — reflection experience ViewModel shadow | [80I-B-build-reflection-experience-viewmodel-shadow.md](./80I-B-build-reflection-experience-viewmodel-shadow.md) | Built (local) | *held* |
+| 80I-C.1 | Experience ViewModel contract hardening | [80I-C.1-reflection-experience-contract-hardening.md](./80I-C.1-reflection-experience-contract-hardening.md) | Built (local) | *held* |
 
 ---
 
@@ -50,6 +53,7 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | `geodeStabilityRoomSnapshot` | Shadow Stability Room reflection read-model (80F-B) |
 | `geodeStabilityRoomVisualModel` | Shadow visual/atmosphere interpreter (80G-B) |
 | `geodeStabilityRoomEntryGate` | Shadow entry visibility gate (80H-B) |
+| `geodeStabilityRoomExperienceModel` | Shadow experience copy composer (80I-B) |
 
 ---
 

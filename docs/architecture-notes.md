@@ -124,6 +124,8 @@ Read-only **`geodeStabilityRoomSnapshot(state, opts)`** — assembles orchestrat
 
 **Entry gate (80H-B / 80H-B.1):** **`geodeStabilityRoomEntryGate(snapshot, visualModel, opts)`** — `visibility` (`hidden`/`available`/`suggested`); `label`/`dismissLabel`; `suggested` only when `trigger === 'reality_month_context_save'` **and** `justSavedMonthContext === true` **and** `dismissedThisMonth !== true`. Hook: **`window._geodeStabilityRoomEntryGate`**. `audit.noHomeEntry` / `noAutoOpen` / `noRoutes` / `noStorage` all `true`. No UI, routes, or dismiss storage yet.
 
+**Experience model (80I-B / 80I-C.1):** **`geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opts)`** — bounded human copy blocks (`what_matters_this_month`, `month_so_far`, `background` or `plan_protecting`); `density` (`light`/`roomy`/`standard`); block `source`; returns `null` when gate is `hidden`. Hook: **`window._geodeStabilityRoomExperienceModel`**. `audit.noUi` / `noRoutes` / `noStorage` / `noCalculations` and `noGo.noRawInternals` etc. all `true`. Max 3 blocks. No UI, routes, or storage.
+
 Dormant or future-facing paths:
 
 - `geodeRealityCheckCardHtml`

@@ -69,6 +69,7 @@ See [`docs/stages/80/README.md`](./stages/80/README.md).
 - **80F-B / 80F-D** — `geodeStabilityRoomSnapshot` shadow read-model
 - **80G-B / 80G-B.1 / 80G-B.2 / 80G-B.3** — `geodeStabilityRoomVisualModel` shadow visual interpreter (`mode: 'reflection'`, `noGo`; atmosphere `room`; no UI)
 - **80H-B / 80H-B.1** — `geodeStabilityRoomEntryGate` shadow entry gate (`label`/`dismissLabel`, `justSavedMonthContext`; no UI)
+- **80I-A / 80I-B / 80I-C.1** — experience ViewModel architecture audit + shadow copy composer + contract hardening (`density`, audit/noGo flags, block `source`; no UI)
 
 ---
 

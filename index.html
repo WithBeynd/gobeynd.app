@@ -27030,6 +27030,338 @@ function geodeStabilityRoomEntryGate(snapshot, visualModel, opts) {
   }
 }
 
+/**
+ * Stage 80I-B / 80I-C.1: shadow-only Reflection experience composer.
+ * Bounded human copy blocks from snapshot + visual model + entry gate — no DOM, CSS, routes, or storage.
+ */
+function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  try {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    if (!visualModel || typeof visualModel !== 'object') return null;
+    if (entryGate && entryGate.visibility === 'hidden') return null;
+
+    var maxBlocks =
+      opts.maxBlocks != null && isFinite(Number(opts.maxBlocks))
+        ? Math.max(1, Math.min(3, Number(opts.maxBlocks)))
+        : 3;
+
+    var atmosphere =
+      visualModel.atmosphere != null ? String(visualModel.atmosphere) : 'calm';
+    var copyTone =
+      visualModel.copyTone != null ? String(visualModel.copyTone) : 'declarative';
+    var density =
+      atmosphere === 'calm'
+        ? 'light'
+        : atmosphere === 'room' || atmosphere === 'recovering'
+          ? 'roomy'
+          : 'standard';
+    var snapReason = snapshot.reason != null ? String(snapshot.reason) : '';
+    var humanContext =
+      snapshot.humanContext && typeof snapshot.humanContext === 'object'
+        ? snapshot.humanContext
+        : {};
+    var monthCtx =
+      humanContext.monthContext && typeof humanContext.monthContext === 'object'
+        ? humanContext.monthContext
+        : {};
+    var monthContextHasAny = !!monthCtx.hasAny;
+    var heldBack =
+      snapshot.heldBack && typeof snapshot.heldBack === 'object' ? snapshot.heldBack : {};
+    var planFocus =
+      snapshot.planFocus && typeof snapshot.planFocus === 'object' ? snapshot.planFocus : {};
+    var quiet = snapshot.quiet && typeof snapshot.quiet === 'object' ? snapshot.quiet : {};
+    var shouldStayQuiet = quiet.shouldStayQuiet === true;
+    var motion =
+      visualModel.motion && typeof visualModel.motion === 'object'
+        ? visualModel.motion
+        : { revealMs: 220, staggerMs: 40 };
+
+    function sanitizeCopy(text, maxLen) {
+      var s = String(text || '')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\u2014/g, ', ')
+        .replace(/\u2013/g, ', ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      maxLen = maxLen != null && isFinite(Number(maxLen)) ? Number(maxLen) : 320;
+      if (s.length <= maxLen) return s;
+      return s.slice(0, Math.max(0, maxLen - 3)) + '...';
+    }
+
+    function sectionVisible(sectionId) {
+      var sections = Array.isArray(visualModel.sections) ? visualModel.sections : [];
+      var i;
+      for (i = 0; i < sections.length; i++) {
+        if (sections[i] && sections[i].id === sectionId) return !!sections[i].visible;
+      }
+      return false;
+    }
+
+    function registerClass(register) {
+      return 'vi-register-' + String(register || 'calm');
+    }
+
+    function blockSpacing() {
+      return atmosphere === 'recovering' || atmosphere === 'room' ? 'airy' : 'standard';
+    }
+
+    var deferred = Array.isArray(heldBack.deferredItems) ? heldBack.deferredItems : [];
+    var mutedLines = Array.isArray(heldBack.mutedLines) ? heldBack.mutedLines : [];
+    var deferredWithCopy = false;
+    var di;
+    for (di = 0; di < deferred.length; di++) {
+      if (deferred[di] && String(deferred[di].humanCopy || '').trim()) {
+        deferredWithCopy = true;
+        break;
+      }
+    }
+    var heldBackSignals =
+      (Array.isArray(heldBack.disclosureNeeded) && heldBack.disclosureNeeded.length > 0) ||
+      deferredWithCopy ||
+      mutedLines.length > 0;
+
+    var blockMap = {};
+
+    if (monthContextHasAny && sectionVisible('what_matters_this_month')) {
+      var matterLines = [];
+      if (String(monthCtx.protect || '').trim()) {
+        matterLines.push(
+          'You want to protect ' + sanitizeCopy(monthCtx.protect, 120) + '.'
+        );
+      }
+      if (String(monthCtx.worried || '').trim()) {
+        matterLines.push(
+          'You are watching ' + sanitizeCopy(monthCtx.worried, 120) + '.'
+        );
+      }
+      if (String(monthCtx.success || '').trim()) {
+        matterLines.push(
+          'Success this month would feel like ' +
+            sanitizeCopy(monthCtx.success, 120) +
+            '.'
+        );
+      }
+      if (matterLines.length) {
+        blockMap.what_matters_this_month = {
+          id: 'what_matters_this_month',
+          register: 'guidance',
+          registerClass: registerClass('guidance'),
+          headline: 'What you said matters',
+          body: sanitizeCopy(matterLines.join(' '), 280),
+          visible: true,
+          spacing: blockSpacing(),
+          source: 'monthContext'
+        };
+      }
+    }
+
+    if (sectionVisible('what_beynd_noticed')) {
+      var monthSoFarBody = '';
+      if (atmosphere === 'calm') {
+        monthSoFarBody = 'So far this month reads steady from here.';
+      } else if (atmosphere === 'reflective') {
+        monthSoFarBody =
+          'What you shared fits with a few threads worth holding together this month.';
+      } else if (atmosphere === 'protective') {
+        monthSoFarBody =
+          'This month looks easier with flexibility kept in view before anything new.';
+      } else if (atmosphere === 'recovering') {
+        monthSoFarBody =
+          'A couple of things stayed in the background so Home could stay calm.';
+      } else if (atmosphere === 'room') {
+        monthSoFarBody =
+          'There is a little space in the month, without treating it as money to spend.';
+      } else {
+        monthSoFarBody = 'So far this month reads steady from here.';
+      }
+      if (monthContextHasAny && atmosphere === 'reflective') {
+        monthSoFarBody =
+          'What you shared fits with how the rest of the month is shaping up.';
+      }
+      var bRegister =
+        visualModel.viRegister != null ? String(visualModel.viRegister) : 'guidance';
+      blockMap.month_so_far = {
+        id: 'month_so_far',
+        register: bRegister,
+        registerClass: registerClass(bRegister),
+        headline: 'Looking at the month so far',
+        body: sanitizeCopy(monthSoFarBody, 320),
+        visible: true,
+        spacing: blockSpacing(),
+        source: 'atmosphere'
+      };
+    }
+
+    var showBackground =
+      heldBackSignals &&
+      sectionVisible('what_home_kept_quiet') &&
+      (atmosphere === 'recovering' || atmosphere === 'reflective');
+    var showPlanProtect =
+      sectionVisible('what_plan_protecting') &&
+      (atmosphere === 'calm' ||
+        atmosphere === 'protective' ||
+        atmosphere === 'room' ||
+        !showBackground);
+
+    if (showBackground) {
+      var bgParts = [];
+      var mi;
+      for (mi = 0; mi < mutedLines.length && bgParts.length < 2; mi++) {
+        if (mutedLines[mi] && String(mutedLines[mi].text || '').trim()) {
+          bgParts.push(sanitizeCopy(mutedLines[mi].text, 160));
+        }
+      }
+      for (di = 0; di < deferred.length && bgParts.length < 2; di++) {
+        if (deferred[di] && String(deferred[di].humanCopy || '').trim()) {
+          bgParts.push(sanitizeCopy(deferred[di].humanCopy, 160));
+        }
+      }
+      var bgBody =
+        bgParts.length > 0
+          ? 'Home kept a few things quiet on purpose. ' + bgParts.join(' ')
+          : 'Home kept a few things quiet on purpose so this month could stay focused.';
+      blockMap.background = {
+        id: 'background',
+        register: 'recovery',
+        registerClass: registerClass('recovery'),
+        headline: 'What stayed in the background',
+        body: sanitizeCopy(bgBody, 200),
+        visible: true,
+        spacing: blockSpacing(),
+        source: 'heldBack'
+      };
+    } else if (showPlanProtect) {
+      var planLine = String(planFocus.headlineSummary || '').trim();
+      if (!planLine && String(planFocus.strategyDisplayName || '').trim()) {
+        planLine =
+          'Your ' +
+          sanitizeCopy(planFocus.strategyDisplayName, 80) +
+          ' plan is still guiding this month.';
+      } else if (planLine) {
+        planLine = 'Your plan is still looking after ' + sanitizeCopy(planLine, 100) + '.';
+      } else {
+        planLine = 'Your plan is still guiding what matters this month.';
+      }
+      blockMap.plan_protecting = {
+        id: 'plan_protecting',
+        register: 'guidance',
+        registerClass: registerClass('guidance'),
+        headline: 'What your plan is protecting',
+        body: sanitizeCopy(planLine, 120),
+        visible: true,
+        spacing: blockSpacing(),
+        source: 'planFocus'
+      };
+    }
+
+    var orderIds = ['what_matters_this_month', 'month_so_far', 'background', 'plan_protecting'];
+    if (atmosphere === 'calm' || atmosphere === 'room') {
+      orderIds = ['what_matters_this_month', 'month_so_far', 'plan_protecting', 'background'];
+    } else if (atmosphere === 'reflective') {
+      orderIds = ['what_matters_this_month', 'month_so_far', 'background', 'plan_protecting'];
+    } else if (atmosphere === 'protective') {
+      orderIds = ['what_matters_this_month', 'plan_protecting', 'month_so_far', 'background'];
+    } else if (atmosphere === 'recovering') {
+      orderIds = ['what_matters_this_month', 'background', 'month_so_far', 'plan_protecting'];
+    }
+
+    var blocks = [];
+    var oi;
+    for (oi = 0; oi < orderIds.length; oi++) {
+      if (blocks.length >= maxBlocks) break;
+      if (blockMap[orderIds[oi]]) {
+        blockMap[orderIds[oi]].priority = blocks.length + 1;
+        blocks.push(blockMap[orderIds[oi]]);
+      }
+    }
+
+    if (!blocks.length) return null;
+
+    var subtitle = null;
+    if (atmosphere === 'reflective') subtitle = 'How this month fits together';
+    else if (atmosphere === 'protective') subtitle = 'Keeping flexibility in view';
+    else if (atmosphere === 'recovering') subtitle = 'A quieter read of the month';
+    else if (atmosphere === 'room') subtitle = 'Space to choose carefully';
+
+    var askPointer = null;
+    if (
+      snapReason === 'reflection_eligible' &&
+      !shouldStayQuiet &&
+      blocks.length > 0
+    ) {
+      askPointer = {
+        visible: true,
+        label: 'Ask Beynd about this month',
+        style: 'inline_link'
+      };
+    }
+
+    var experience = {
+      version: 1,
+      mode: 'reflection',
+      atmosphere: atmosphere,
+      copyTone: copyTone,
+      density: density,
+      title: 'This month',
+      subtitle: subtitle,
+      exitLabel: 'Back to Reality',
+      blocks: blocks,
+      askPointer: askPointer,
+      motion: {
+        revealMs:
+          motion.revealMs != null && isFinite(Number(motion.revealMs))
+            ? Number(motion.revealMs)
+            : 220,
+        staggerMs:
+          motion.staggerMs != null && isFinite(Number(motion.staggerMs))
+            ? Number(motion.staggerMs)
+            : 40
+      },
+      noGo: {
+        autoOpen: false,
+        noCharts: true,
+        noAmountsTable: true,
+        noTrafficLights: true,
+        noRecommendations: true,
+        noRawInternals: true
+      },
+      audit: {
+        shadowOnly: true,
+        noUi: true,
+        noRoutes: true,
+        noStorage: true,
+        noCalculations: true,
+        blockCount: blocks.length,
+        sourceSnapshotVersion: Number(snapshot.version || 1) || 1,
+        sourceVisualModelVersion: Number(visualModel.version || 1) || 1,
+        entryGateVisibility:
+          entryGate && entryGate.visibility != null
+            ? String(entryGate.visibility)
+            : 'unknown',
+        forbiddenPatterns: [
+          'you should',
+          'you must',
+          'at risk',
+          'warning',
+          'danger',
+          'opportunity',
+          'optimise',
+          'action item'
+        ]
+      }
+    };
+
+    try {
+      window._geodeStabilityRoomExperienceModel = experience;
+    } catch (_eSrExWin) {}
+
+    return experience;
+  } catch (_eSrEx) {
+    return null;
+  }
+}
+
 /** Truncate plan rationale lines for Ask Beynd context (export only). */
 function geodePlanRationaleTruncateLine(text, maxLen) {
   var s = String(text || '')
