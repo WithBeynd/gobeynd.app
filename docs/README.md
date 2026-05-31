@@ -76,6 +76,15 @@ See [`docs/stages/80/README.md`](./stages/80/README.md).
 - **80M-A** — Reflection bundle release prep: service worker **v1.0.73** bump for user-facing Reflection surface + Ask integration (**80J / 80K / 80L**); no Reflection/Ask/UI logic changed in 80M-A; commit after **80M-B** final audit
 - **80M-C.1 / 80M-C.2** — month context skip audit + visit-scoped empty skip (`geode_month_context_skip_visit`; “Skip for now” = not this visit, not this month)
 
+### Stage 81 — Debt truth & net worth
+
+See [`docs/stages/81/README.md`](./stages/81/README.md).
+
+**Current state (May 2026):**
+
+- **81A / 81B** audits — dual-ledger truth gap documented (payments vs confirmed balances)
+- **81B-1** built locally — debt health fields + provider review awareness in Money (no payment balance mutation, no Ask/Plan changes)
+
 ---
 
 ## External / generated

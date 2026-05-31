@@ -163,6 +163,22 @@ Future backlog work may move to a Beynd-managed API backend. Never put a Beynd L
 
 Do not inject full JSON snapshot into Ask Beynd context.
 
+## Debt health & provider review (Stage 81B-1)
+
+**`debt.balance`** remains the user-confirmed provider balance for net worth. Optional metadata on `S.debts[]`:
+
+- **`interestType`** — `'fixed' | 'variable' | 'unknown'` (default `unknown`)
+- **`lastProviderReviewAt`** — `YYYY-MM-DD` when user last saved debt via **`saveDebt`**
+- **`lastProviderBalance`** — balance figure at last save (audit/display; net worth still uses **`balance`**)
+
+**Normalize:** **`geodeNormalizeDebtHealthFields(state)`** on load and after **`saveDebt`**.
+
+**Display only:** **`geodeDebtHealthCardHtml`**, **`geodeDebtProviderReviewNudgeCopy`** — Money debt cards + Edit Debt modal. Stale copy thresholds: 45d (unknown/variable), 60d (fixed). No badges, no auto-reduction on payment.
+
+**Not in 81B-1:** payment balance apply, `estimatedPrincipalApplied`, Ask Beynd debt rules export, savings release.
+
+**Docs:** [`docs/stages/81/README.md`](./stages/81/README.md).
+
 ## Cleanup Rule
 
 Do not delete dormant functions without a dedicated cleanup audit.

@@ -1646,6 +1646,7 @@ function load() {
   syncRecurringPayments();
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
+  geodeNormalizeDebtHealthFields(S);
   if (typeof S.incomeExplicitlySet !== 'boolean') {
     if (toNum(S.income) > 0) {
       S.incomeExplicitlySet = true;
@@ -6204,6 +6205,104 @@ function geodeNormalizeGoalInvestBaseFields() {
       if (inv.baseBalance === undefined) inv.baseBalance = toNum(inv.balance);
     }
   } catch (e) {}
+}
+
+/** Stage 81B-1: optional debt health / provider-review metadata (display + persistence only; no balance math). */
+function geodeNormalizeDebtHealthFields(state) {
+  state = state || S;
+  try {
+    var debts = state.debts || [];
+    for (var i = 0; i < debts.length; i++) {
+      var debt = debts[i];
+      if (!debt) continue;
+      var it = String(debt.interestType || '').toLowerCase();
+      debt.interestType = it === 'fixed' || it === 'variable' ? it : 'unknown';
+      debt.lastProviderReviewAt = debt.lastProviderReviewAt ? String(debt.lastProviderReviewAt).slice(0, 10) : '';
+      debt.lastProviderBalance = Number.isFinite(toNum(debt.lastProviderBalance)) ? toNum(debt.lastProviderBalance) : '';
+    }
+  } catch (e) {}
+}
+
+function geodeDebtInterestTypeLabel(interestType) {
+  var it = String(interestType || 'unknown').toLowerCase();
+  if (it === 'fixed') return 'Mostly fixed APR';
+  if (it === 'variable') return 'Variable or promotional APR';
+  return 'APR type not set';
+}
+
+function geodeDebtProviderReviewStaleAfterDays(debt) {
+  var it = String((debt && debt.interestType) || 'unknown').toLowerCase();
+  if (it === 'variable') return 45;
+  if (it === 'fixed') return 60;
+  return 45;
+}
+
+function geodeDebtDaysSinceProviderReview(debt) {
+  var at = String((debt && debt.lastProviderReviewAt) || '').slice(0, 10);
+  if (!at || !/^\d{4}-\d{2}-\d{2}$/.test(at)) return null;
+  try {
+    var reviewed = new Date(at + 'T12:00:00');
+    var today = new Date(geodeTodayLocalISO() + 'T12:00:00');
+    if (isNaN(reviewed.getTime()) || isNaN(today.getTime())) return null;
+    return Math.floor((today - reviewed) / 86400000);
+  } catch (e) {
+    return null;
+  }
+}
+
+function geodeDebtProviderReviewStatusCopy(debt) {
+  debt = debt || {};
+  var days = geodeDebtDaysSinceProviderReview(debt);
+  var at = String(debt.lastProviderReviewAt || '').slice(0, 10);
+  if (at && days != null && days >= 0) {
+    if (days === 0) return 'Provider balance saved today';
+    if (days === 1) return 'Provider balance saved yesterday';
+    return 'Provider balance saved ' + days + ' days ago';
+  }
+  return 'Save your provider balance here when you check in';
+}
+
+function geodeDebtProviderReviewNudgeCopy(debt) {
+  debt = debt || {};
+  var it = String(debt.interestType || 'unknown').toLowerCase();
+  var days = geodeDebtDaysSinceProviderReview(debt);
+  var staleAfter = geodeDebtProviderReviewStaleAfterDays(debt);
+  var base =
+    it === 'variable'
+      ? 'Variable rates and fees can shift what you owe between reviews.'
+      : 'Your provider may add interest or fees between balance checks.';
+  if (days == null) {
+    return base + ' Worth a quick look at your latest balance when you can.';
+  }
+  if (days > staleAfter) {
+    return base + ' A fresh provider check helps keep Beynd aligned.';
+  }
+  return base;
+}
+
+/** Money debt list: neutral provider-review awareness (no badges, no balance mutation). */
+function geodeDebtHealthCardHtml(debt) {
+  if (!debt) return '';
+  var status = geodeDebtProviderReviewStatusCopy(debt);
+  var nudge = geodeDebtProviderReviewNudgeCopy(debt);
+  var typeLb = geodeDebtInterestTypeLabel(debt.interestType);
+  var id = String(debt.id || '');
+  return (
+    '<div data-geode-css="margin-top:10px;padding:10px 11px;border-radius:10px;background:rgba(255,255,255,0.025);border:1px solid var(--bd)">' +
+    '<div data-geode-css="font-size:10px;font-weight:700;color:var(--tx-2);margin-bottom:4px">Debt health</div>' +
+    '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.45">' +
+    escHtmlLite(typeLb) +
+    '<br/>' +
+    escHtmlLite(status) +
+    '</div>' +
+    '<div data-geode-css="font-size:10px;color:rgba(237,234,255,0.78);line-height:1.45;margin-top:6px">' +
+    escHtmlLite(nudge) +
+    '</div>' +
+    '<button type="button" class="btn btn-s" data-geode-css="width:100%;margin-top:8px;font-size:11px" onclick="openDebtModal(\'' +
+    escHtmlLite(id) +
+    '\')">Review provider balance</button>' +
+    '</div>'
+  );
 }
 
 function currentYM() {
@@ -30680,16 +30779,22 @@ function rDebts(el) {
     }
     var lastDebtAmt = geodeLastLinkedContributionAmount('debt', d.id);
     var lastDebtLine = lastDebtAmt ? '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:6px;line-height:1.2">Last payment: ' + fm(lastDebtAmt) + '</div>' : '';
-    e.innerHTML='<div data-geode-css="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div data-geode-css="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:#f07070">'+geodeSvg(catIc)+'</span><span>'+d.name+'</span></div><div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:2px;text-transform:uppercase;letter-spacing:1px">'+d.cat+'</div></div><div data-geode-css="display:flex;gap:5px"><button class="btn-sm" onclick="openDebtModal(\''+d.id+'\')">Edit</button><button class="btn-del" onclick="delDebt(\''+d.id+'\')">Remove</button></div></div><div data-geode-css="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"><div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Balance</div><div data-geode-css="font-size:17px;font-weight:700;color:#f07070">'+fm(d.balance)+'</div>'+(showFocus?'<div data-geode-css="font-size:9px;color:#f5c234;font-weight:700;margin-top:4px;line-height:1.2">Focus here to reduce interest fastest</div>':'')+'<details data-geode-css="margin-top:4px;font-size:9px;color:rgba(189,183,220,0.8);line-height:1.25"><summary data-geode-css="cursor:pointer;font-weight:700;list-style-position:inside">Why balance vs contributions?</summary><div data-geode-css="margin-top:4px;color:rgba(237,234,255,0.78)">Balances track what you owe. Use <strong>contributions</strong> when you want an outflow to affect &ldquo;left this month.&rdquo; Update the balance when it changes.</div></details></div>'+(d.apr?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">APR</div><div data-geode-css="font-size:17px;font-weight:700;color:#f5c234">'+d.apr+'%</div></div>':'<div></div>')+(mi>0?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Interest</div><div data-geode-css="font-size:12px;font-weight:600;color:rgba(240,112,112,0.72)">~'+fm(mi)+'/mo</div></div>':'<div></div>')+'</div><button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:10px" onclick="geodePayFromDebt(\''+d.id+'\')">Pay toward this debt</button>'+lastDebtLine;
+    var healthCard = geodeDebtHealthCardHtml(d);
+    e.innerHTML='<div data-geode-css="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div data-geode-css="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:#f07070">'+geodeSvg(catIc)+'</span><span>'+d.name+'</span></div><div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:2px;text-transform:uppercase;letter-spacing:1px">'+d.cat+'</div></div><div data-geode-css="display:flex;gap:5px"><button class="btn-sm" onclick="openDebtModal(\''+d.id+'\')">Edit</button><button class="btn-del" onclick="delDebt(\''+d.id+'\')">Remove</button></div></div><div data-geode-css="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"><div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Balance</div><div data-geode-css="font-size:17px;font-weight:700;color:#f07070">'+fm(d.balance)+'</div>'+(showFocus?'<div data-geode-css="font-size:9px;color:#f5c234;font-weight:700;margin-top:4px;line-height:1.2">Focus here to reduce interest fastest</div>':'')+'<details data-geode-css="margin-top:4px;font-size:9px;color:rgba(189,183,220,0.8);line-height:1.25"><summary data-geode-css="cursor:pointer;font-weight:700;list-style-position:inside">Why balance vs contributions?</summary><div data-geode-css="margin-top:4px;color:rgba(237,234,255,0.78)">Balances track what you owe. Use <strong>contributions</strong> when you want an outflow to affect &ldquo;left this month.&rdquo; Update the balance when it changes.</div></details></div>'+(d.apr?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">APR</div><div data-geode-css="font-size:17px;font-weight:700;color:#f5c234">'+d.apr+'%</div></div>':'<div></div>')+(mi>0?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Interest</div><div data-geode-css="font-size:12px;font-weight:600;color:rgba(240,112,112,0.72)">~'+fm(mi)+'/mo</div></div>':'<div></div>')+'</div>'+healthCard+'<button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:10px" onclick="geodePayFromDebt(\''+d.id+'\')">Pay toward this debt</button>'+lastDebtLine;
     list.appendChild(e);
   }
 }
 function openDebtModal(id) {
   var d=id?S.debts.filter(function(x){return x.id===id;})[0]:null;
+  if (d) geodeNormalizeDebtHealthFields(S);
+  var intType = d && d.interestType ? String(d.interestType).toLowerCase() : 'unknown';
+  if (intType !== 'fixed' && intType !== 'variable') intType = 'unknown';
   var h=mh(d?'Edit Debt':'Add Debt');
   h+='<div data-geode-css="font-size:10px;color:rgba(245,194,52,0.95);margin:-2px 0 10px;font-weight:600;line-height:1.35">Focus here to reduce interest fastest</div>';
   h+='<div class="field"><label>Name</label><input id="dn" class="fi" placeholder="Visa Card, Student Loan..." value="'+(d?d.name:'')+'" /></div>';
   h+='<div class="field"><label>Balance</label><input type="number" id="db" class="fi" placeholder="5000" value="'+(d?d.balance:'')+'" /></div>';
+  h+=
+    '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:-4px 0 10px;line-height:1.45">Use the balance your provider shows today. Beynd does not pull live balances. Saving confirms what you owe for net worth.</div>';
   h+='<div class="field"><label>Category</label><select id="dcat" class="fi">';
   var dkeys=Object.keys(DEBT_LABELS); for(var i=0;i<dkeys.length;i++) h+='<option value="'+dkeys[i]+'"'+(d&&d.cat===dkeys[i]?' selected':'')+'>'+DEBT_LABELS[dkeys[i]]+'</option>';
   h+='</select></div>';
@@ -30697,6 +30802,19 @@ function openDebtModal(id) {
   h+='<div data-geode-css="display:grid;grid-template-columns:1fr 1fr;gap:9px;opacity:0.96">';
   h+='<div class="field"><label>APR % (optional)</label><input type="number" id="dapr" class="fi" placeholder="24.9" value="'+(d?d.apr:'')+'" /></div>';
   h+='<div class="field"><label>Min payment (optional)</label><input type="number" id="dmp" class="fi" placeholder="150" value="'+(d?d.minp:'')+'" /></div></div>';
+  h+='<div class="field"><label>APR type (optional)</label><select id="dinttype" class="fi">';
+  h+='<option value="unknown"'+(intType==='unknown'?' selected':'')+'>Not sure / can vary</option>';
+  h+='<option value="fixed"'+(intType==='fixed'?' selected':'')+'>Mostly fixed</option>';
+  h+='<option value="variable"'+(intType==='variable'?' selected':'')+'>Variable or promotional</option>';
+  h+='</select></div>';
+  h+=
+    '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:-4px 0 8px;line-height:1.45">Variable APR can change what you owe between checks. Saving updates when you last confirmed this balance with your provider.</div>';
+  if (d && d.lastProviderReviewAt) {
+    h+=
+      '<div data-geode-css="font-size:10px;color:rgba(237,234,255,0.78);margin:0 0 10px;line-height:1.45">' +
+      escHtmlLite(geodeDebtProviderReviewStatusCopy(d)) +
+      '</div>';
+  }
   h+='<button class="btn btn-p" onclick="saveDebt(\''+(id||'')+'\')">Save Debt</button>';
   openModal(h);
 }
@@ -30716,17 +30834,25 @@ function saveDebt(id) {
   setLastSnapshotBeforeChange();
   var aprRaw = (document.getElementById('dapr')||{}).value;
   var minpRaw = (document.getElementById('dmp')||{}).value;
+  var intTypeRaw = String(((document.getElementById('dinttype') || {}).value) || 'unknown').toLowerCase();
+  var interestType = intTypeRaw === 'fixed' || intTypeRaw === 'variable' ? intTypeRaw : 'unknown';
+  var reviewDate = geodeTodayLocalISO();
+  var balNum = Number(bal);
   var obj={
     name:nm,
     cat:(document.getElementById('dcat')||{}).value||'other',
-    balance:Number(bal),
+    balance:balNum,
     // Preserve visible behavior: keep blanks as '' so empty APR/payment stays visually empty.
     apr: (aprRaw==='' ? '' : toNum(aprRaw)),
-    minp: (minpRaw==='' ? '' : toNum(minpRaw))
+    minp: (minpRaw==='' ? '' : toNum(minpRaw)),
+    interestType: interestType,
+    lastProviderReviewAt: reviewDate,
+    lastProviderBalance: balNum
   };
   var msg = '';
   if(id){for(var i=0;i<S.debts.length;i++){if(S.debts[i].id===id){Object.assign(S.debts[i],obj);break;}}msg='Debt updated.';}
   else{obj.id=uid();S.debts.push(obj);msg='Debt added.';}
+  geodeNormalizeDebtHealthFields(S);
   var debtRowId = id || obj.id;
   var debtAfterLocal = toNum(obj.balance);
   var debtAfter = S.debts.reduce(function(s, d) { return s + toNum(d.balance); }, 0);
