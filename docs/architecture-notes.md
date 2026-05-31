@@ -126,6 +126,8 @@ Read-only **`geodeStabilityRoomSnapshot(state, opts)`** — assembles orchestrat
 
 **Experience model (80I-B / 80I-C.1):** **`geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opts)`** — bounded human copy blocks (`what_matters_this_month`, `month_so_far`, `background` or `plan_protecting`); `density` (`light`/`roomy`/`standard`); block `source`; returns `null` when gate is `hidden`. Hook: **`window._geodeStabilityRoomExperienceModel`**. `audit.noUi` / `noRoutes` / `noStorage` / `noCalculations` and `noGo.noRawInternals` etc. all `true`. Max 3 blocks. No UI, routes, or storage.
 
+**Reality inline entry (80J-B / 80J-E):** **`geodeRealityReflectionEntryGateForReality(state)`** + **`geodeRealityReflectionEntryHtml()`** — session-only flags; inline link in **collapsed month-context card footer** when gate is `suggested` (80J-E). No Reflection sub-surface, Home entry, or persistent dismiss storage. Primary tap toast-only until 80K.
+
 Dormant or future-facing paths:
 
 - `geodeRealityCheckCardHtml`

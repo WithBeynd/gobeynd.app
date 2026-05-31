@@ -38,6 +38,10 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | 80I-A | Reflection experience ViewModel architecture audit | [80I-A-reflection-experience-viewmodel-architecture-audit.md](./80I-A-reflection-experience-viewmodel-architecture-audit.md) | NEEDS ATTENTION | — |
 | 80I-B | Build — reflection experience ViewModel shadow | [80I-B-build-reflection-experience-viewmodel-shadow.md](./80I-B-build-reflection-experience-viewmodel-shadow.md) | Built (local) | *held* |
 | 80I-C.1 | Experience ViewModel contract hardening | [80I-C.1-reflection-experience-contract-hardening.md](./80I-C.1-reflection-experience-contract-hardening.md) | Built (local) | *held* |
+| 80J-A | Reality reflection entry experience audit | [80J-A-reality-reflection-entry-experience-audit.md](./80J-A-reality-reflection-entry-experience-audit.md) | NEEDS ATTENTION | — |
+| 80J-B | Build — Reality inline reflection entry | [80J-B-build-reality-inline-reflection-entry.md](./80J-B-build-reality-inline-reflection-entry.md) | Built (local) | *held* |
+| 80J-D | Reflection entry visual hierarchy audit | [80J-D-reflection-entry-visual-hierarchy-audit.md](./80J-D-reflection-entry-visual-hierarchy-audit.md) | NEEDS ATTENTION | — |
+| 80J-E | Reflection entry visual hierarchy refinement | [80J-E-reflection-entry-visual-hierarchy-refinement.md](./80J-E-reflection-entry-visual-hierarchy-refinement.md) | Built (local) | *held* |
 
 ---
 
@@ -54,6 +58,8 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | `geodeStabilityRoomVisualModel` | Shadow visual/atmosphere interpreter (80G-B) |
 | `geodeStabilityRoomEntryGate` | Shadow entry visibility gate (80H-B) |
 | `geodeStabilityRoomExperienceModel` | Shadow experience copy composer (80I-B) |
+| `geodeRealityReflectionEntryGateForReality` | Reality inline entry gate resolve (80J-B) |
+| `geodeRealityReflectionEntryHtml` | Inline Reflection link below MC summary (80J-B) |
 
 ---
 
