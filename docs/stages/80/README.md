@@ -48,6 +48,8 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | 80L-B | Build — Reflection → Ask Beynd integration | [80L-B-build-reflection-ask-integration.md](./80L-B-build-reflection-ask-integration.md) | Built (local) | *held* |
 | 80M-A | Reflection release — service worker bump | [80M-A-reflection-release-service-worker-bump.md](./80M-A-reflection-release-service-worker-bump.md) | Prepared (local) | *held — audit before commit* |
 | 80M-B | Reflection release — final audit | [80M-B-reflection-release-final-audit.md](./80M-B-reflection-release-final-audit.md) | Pending | — |
+| 80M-C.1 | Month context skip behaviour audit | [80M-C.1-month-context-skip-behaviour-audit.md](./80M-C.1-month-context-skip-behaviour-audit.md) | NEEDS ATTENTION | — |
+| 80M-C.2 | Visit-scoped month context skip | [80M-C.2-visit-scoped-month-context-skip.md](./80M-C.2-visit-scoped-month-context-skip.md) | Built (local) | *held* |
 
 ---
 
@@ -73,6 +75,8 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | `geodeReflectionAskContext` | Bounded Reflection read for Ask context (80L-B) |
 | `geodeReflectionAskPointerTap` | Open Ask modal from Reflection pointer (80L-B) |
 | `geodeGetAskBeyndReflectionUiCopy` | Reflection-origin Ask modal copy (80L-B) |
+| `geodeSetMonthContextSkipVisit` | Session-only empty MC skip for Reality visit (80M-C.2) |
+| `geodeGetMonthContextSkipVisit` | Read visit-scoped MC skip flag (80M-C.2) |
 
 ---
 

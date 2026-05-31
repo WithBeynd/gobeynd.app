@@ -9817,8 +9817,14 @@ function goTab(t) {
       window._geodePlanBackToHome = false;
     } catch (_eClrPbth) {}
   }
+  if (tab === 'money' && (msub === 'reality' || msub === 'reflection') && t !== 'money') {
+    geodeClearMonthContextSkipVisit();
+  }
   tab = t;
-  if (t === 'money' && (msub === 'reality' || msub === 'reflection')) msub = 'overview';
+  if (t === 'money' && (msub === 'reality' || msub === 'reflection')) {
+    geodeClearMonthContextSkipVisit();
+    msub = 'overview';
+  }
   if (t === 'me') window._geodeSettingsSection = '';
   var btns = document.querySelectorAll('.tab');
   for (var i=0; i<btns.length; i++) { btns[i].className = 'tab' + (btns[i].dataset.t===t?' on':''); }
@@ -23568,6 +23574,7 @@ function geodeExitRealitySurface() {
     geodeClearRealityReturnOrigin();
     geodeClearRealitySavedThisVisit();
     geodeClearReflectionJustSavedMonthContext();
+    geodeClearMonthContextSkipVisit();
     if (msub === 'reality') msub = 'overview';
     if (origin === 'plan') {
       tab = 'plan';
@@ -23856,6 +23863,7 @@ function geodeNormalizeMonthContext(state) {
     mc.success = '';
     mc.updatedAt = 0;
     mc.dismissedYm = '';
+    geodeClearMonthContextSkipVisit();
   }
   mc.protect = String(mc.protect || '').trim();
   mc.worried = String(mc.worried || '').trim();
@@ -23896,6 +23904,32 @@ function geodeSetMonthContextOpen(open) {
       else sessionStorage.removeItem('geode_month_context_open');
     }
   } catch (_eMcS) {}
+}
+
+/** Stage 80M-C.2: session-only — hide empty month-context prompt for this Reality visit. */
+function geodeMonthContextSkipVisitKey() {
+  return 'geode_month_context_skip_visit';
+}
+
+function geodeSetMonthContextSkipVisit(value) {
+  try {
+    if (typeof sessionStorage === 'undefined') return;
+    if (value) sessionStorage.setItem(geodeMonthContextSkipVisitKey(), '1');
+    else sessionStorage.removeItem(geodeMonthContextSkipVisitKey());
+  } catch (_eMcSkSet) {}
+}
+
+function geodeGetMonthContextSkipVisit() {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      return sessionStorage.getItem(geodeMonthContextSkipVisitKey()) === '1';
+    }
+  } catch (_eMcSkGet) {}
+  return false;
+}
+
+function geodeClearMonthContextSkipVisit() {
+  geodeSetMonthContextSkipVisit(false);
 }
 
 /** Stage 80J-B: session-only flag — month context just saved on Reality (one save event). */
@@ -23996,6 +24030,7 @@ function geodeNavigateToReflectionFromReality() {
     var stack = geodeReflectionStackForSurface(S);
     if (!stack || !stack.exp) return;
     geodeClearReflectionJustSavedMonthContext();
+    geodeClearMonthContextSkipVisit();
     tab = 'money';
     msub = 'reflection';
     var btns = document.querySelectorAll('.tab');
@@ -24241,6 +24276,7 @@ function geodeSaveMonthContextFromReality() {
   save();
   toast('Saved for this month.', 'ok', 2600);
   geodeClearReflectionEntryDismissed();
+  geodeClearMonthContextSkipVisit();
   var _mcSavedAny = !!(
     String(S.monthContext.protect || '').trim() ||
     String(S.monthContext.worried || '').trim() ||
@@ -24258,10 +24294,15 @@ function geodeSaveMonthContextFromReality() {
 
 function geodeDismissMonthContextForNow() {
   geodeNormalizeMonthContext(S);
-  S.monthContext.dismissedYm = currentYM();
+  var mc = geodeGetMonthContext(S);
   geodeSetMonthContextOpen(false);
-  save();
-  toast('Noted for this month.', 'ok', 2600);
+  if (!mc.hasAny) {
+    geodeSetMonthContextSkipVisit(true);
+  } else {
+    S.monthContext.dismissedYm = currentYM();
+    save();
+    toast('Noted for this month.', 'ok', 2600);
+  }
   if (typeof tab !== 'undefined' && tab === 'money' && msub === 'reality') {
     var c = document.getElementById('content');
     if (c) c.innerHTML = geodeRealityPageHtml();
@@ -24789,7 +24830,7 @@ function geodeRealityMonthContextExpandedFormHtml(mc) {
 
 function geodeRealityMonthContextSectionHtml() {
   var mc = geodeGetMonthContext(S);
-  if (mc.dismissedThisMonth && !mc.hasAny) return '';
+  if (!mc.hasAny && (mc.dismissedThisMonth || geodeGetMonthContextSkipVisit())) return '';
   if (!geodeMonthContextIsOpen()) return geodeRealityMonthContextCollapsedRowHtml(mc);
   return geodeRealityMonthContextExpandedFormHtml(mc);
 }
@@ -30330,7 +30371,10 @@ function rInvestInMoney(el) {
   rInvest(el || document.getElementById('content'));
 }
 function rMoney() {
-  if (msub !== 'reality' && msub !== 'reflection') geodeClearReflectionJustSavedMonthContext();
+  if (msub !== 'reality' && msub !== 'reflection') {
+    geodeClearReflectionJustSavedMonthContext();
+    geodeClearMonthContextSkipVisit();
+  }
   var c = document.getElementById('content');
   if (msub === 'reality') {
     c.innerHTML = geodeRealityPageHtml();

@@ -134,6 +134,8 @@ Read-only **`geodeStabilityRoomSnapshot(state, opts)`** — assembles orchestrat
 
 **Reflection bundle release (80M-A / 80M-B):** Release cut bumps **`CACHE_VERSION`** once (**v1.0.73** after 80M-A) so clients refresh static assets for the **80J + 80K + 80L** bundle. **80M-A** changes **`service-worker.js` version string only** — no install/activate/fetch/message logic, no Reflection/Ask/UI edits. **Final audit (80M-B) required before commit.**
 
+**Month context skip (80M-C.2):** Empty **Skip for now** uses session-only **`geode_month_context_skip_visit`** — hides prompt for current Reality visit; clears on leave Reality, save, or month rollover. Persisted **`dismissedYm`** unchanged for non-empty skip path only. Does not affect Reflection entry triggers.
+
 Dormant or future-facing paths:
 
 - `geodeRealityCheckCardHtml`

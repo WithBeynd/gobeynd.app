@@ -74,6 +74,7 @@ See [`docs/stages/80/README.md`](./stages/80/README.md).
 - **80K-A / 80K-B** — Reflection surface architecture audit + Money `msub='reflection'` sub-surface (ExperienceModel render only)
 - **80L-A / 80L-B** — Reflection → Ask Beynd integration audit + modal overlay with bounded context (no auto-send)
 - **80M-A** — Reflection bundle release prep: service worker **v1.0.73** bump for user-facing Reflection surface + Ask integration (**80J / 80K / 80L**); no Reflection/Ask/UI logic changed in 80M-A; commit after **80M-B** final audit
+- **80M-C.1 / 80M-C.2** — month context skip audit + visit-scoped empty skip (`geode_month_context_skip_visit`; “Skip for now” = not this visit, not this month)
 
 ---
 
