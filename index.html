@@ -6280,29 +6280,278 @@ function geodeDebtProviderReviewNudgeCopy(debt) {
   return base;
 }
 
-/** Money debt list: neutral provider-review awareness (no badges, no balance mutation). */
-function geodeDebtHealthCardHtml(debt) {
+/** Stage 81B-2.2: paid debt-linked payment after last provider save (existing state only). */
+function geodeDebtPaidPaymentSinceProviderReview(debt, state) {
+  if (!debt || !debt.id) return false;
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var reviewAt = String(debt.lastProviderReviewAt || '').slice(0, 10);
+  var pay = (state && state.payments) || [];
+  var pi;
+  for (pi = 0; pi < pay.length; pi++) {
+    var p = pay[pi];
+    if (!p || String(p.debtId || '') !== String(debt.id)) continue;
+    if (String(p.status || '') !== 'paid') continue;
+    var payDate = '';
+    if (p.rec === 'yes') {
+      var lym = String(p.lastPaidYM || currentYM());
+      payDate = lym.length >= 7 ? lym + '-01' : geodeTodayLocalISO();
+    } else {
+      payDate = String(p.date || '').slice(0, 10);
+    }
+    if (!payDate || payDate.length < 10) continue;
+    if (!reviewAt) return true;
+    if (payDate > reviewAt) return true;
+  }
+  return false;
+}
+
+/** Stage 81B-2.2: show Debt Health inline copy only when awareness is relevant. */
+function geodeDebtShouldShowHealthOnCard(debt, state) {
+  if (!debt) return false;
+  state = state || (typeof S !== 'undefined' ? S : null);
+  if (!String(debt.lastProviderReviewAt || '').slice(0, 10)) return true;
+  var days = geodeDebtDaysSinceProviderReview(debt);
+  var staleAfter = geodeDebtProviderReviewStaleAfterDays(debt);
+  if (days != null && days > staleAfter) return true;
+  var it = String(debt.interestType || 'unknown').toLowerCase();
+  if (it === 'unknown' || it === 'variable') return true;
+  if (geodeDebtPaidPaymentSinceProviderReview(debt, state)) return true;
+  return false;
+}
+
+/** Stage 81B-2.3: one factual debt-card line — no provider-review narrative. */
+function geodeDebtHealthCardMinimalCopy(debt, state) {
+  debt = debt || {};
+  state = state || (typeof S !== 'undefined' ? S : null);
+  if (geodeDebtPaidPaymentSinceProviderReview(debt, state)) {
+    return 'Payment since last balance confirmation';
+  }
+  var at = String(debt.lastProviderReviewAt || '').slice(0, 10);
+  var days = geodeDebtDaysSinceProviderReview(debt);
+  var staleAfter = geodeDebtProviderReviewStaleAfterDays(debt);
+  if (!at) return 'Balance not confirmed';
+  if (days != null && days > staleAfter) {
+    return 'Balance confirmed ' + days + 'd ago';
+  }
+  var it = String(debt.interestType || 'unknown').toLowerCase();
+  if (it === 'variable') return 'Variable APR';
+  if (it === 'unknown') return 'APR type not set';
+  return '';
+}
+
+/** Money debt list: minimal factual signal only (no narrative; Edit Debt holds guidance). */
+function geodeDebtHealthCardHtml(debt, state) {
   if (!debt) return '';
-  var status = geodeDebtProviderReviewStatusCopy(debt);
-  var nudge = geodeDebtProviderReviewNudgeCopy(debt);
-  var typeLb = geodeDebtInterestTypeLabel(debt.interestType);
-  var id = String(debt.id || '');
+  state = state || (typeof S !== 'undefined' ? S : null);
+  if (!geodeDebtShouldShowHealthOnCard(debt, state)) return '';
+  var line = geodeDebtHealthCardMinimalCopy(debt, state);
+  if (!line) return '';
   return (
-    '<div data-geode-css="margin-top:10px;padding:10px 11px;border-radius:10px;background:rgba(255,255,255,0.025);border:1px solid var(--bd)">' +
-    '<div data-geode-css="font-size:10px;font-weight:700;color:var(--tx-2);margin-bottom:4px">Debt health</div>' +
-    '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.45">' +
-    escHtmlLite(typeLb) +
-    '<br/>' +
-    escHtmlLite(status) +
-    '</div>' +
-    '<div data-geode-css="font-size:10px;color:rgba(237,234,255,0.78);line-height:1.45;margin-top:6px">' +
-    escHtmlLite(nudge) +
-    '</div>' +
-    '<button type="button" class="btn btn-s" data-geode-css="width:100%;margin-top:8px;font-size:11px" onclick="openDebtModal(\'' +
-    escHtmlLite(id) +
-    '\')">Review provider balance</button>' +
+    '<div data-geode-css="margin-top:8px;font-size:9px;color:var(--tx-3);line-height:1.35">' +
+    escHtmlLite(line) +
     '</div>'
   );
+}
+
+/**
+ * Stage 81B-2: shadow-only principal estimate for a debt-linked payment.
+ * Read-only — does not mutate debt.balance, payments, net worth, or Plan math.
+ */
+function geodeEstimateDebtPrincipalApplied(debt, payment, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var out = {
+    principalApplied: null,
+    paymentAmount: 0,
+    paymentKind: 'unknown',
+    interestAssumption: 'none',
+    confidence: 'none',
+    monthlyInterestEstimate: null,
+    applicable: false,
+    reasonCodes: [],
+    shadowOnly: true
+  };
+  if (!debt || !payment) {
+    out.reasonCodes.push('missing_debt_or_payment');
+    return out;
+  }
+  if (opts.requirePaid !== false && String(payment.status || '') !== 'paid') {
+    out.reasonCodes.push('payment_not_paid');
+    return out;
+  }
+  var debtId = String(debt.id || '');
+  if (!debtId || String(payment.debtId || '') !== debtId) {
+    out.reasonCodes.push('payment_not_linked');
+    return out;
+  }
+  var amt = toNum(payment.amount);
+  if (amt <= 0) {
+    out.reasonCodes.push('zero_amount');
+    return out;
+  }
+  out.paymentAmount = amt;
+  var bal = toNum(debt.balance);
+  if (bal <= 0) {
+    out.reasonCodes.push('zero_balance');
+    return out;
+  }
+  out.applicable = true;
+
+  var minp = geodeDebtReadMinimumPayment(debt);
+  var extraAmt = 0;
+  var minAmt = 0;
+  if (geodeDebtPaymentLooksLikeExtraAction(payment)) {
+    extraAmt = amt;
+    out.paymentKind = 'extra';
+  } else if (minp <= 0) {
+    extraAmt = amt;
+    out.paymentKind = 'extra';
+  } else {
+    var state = opts.state || (typeof S !== 'undefined' ? S : null);
+    var remainingMin = minp;
+    if (state) {
+      if (opts.requirePaid !== false && geodePaymentCountsAsPaidInCurrentMonth(payment)) {
+        remainingMin = Math.max(
+          0,
+          minp - geodeDebtMinimumRepresentedAmountForUnpaidOrNonPaymentRows(state, debt)
+        );
+      } else {
+        remainingMin = Math.max(
+          0,
+          minp - geodeDebtMinimumRepresentedAmountExcludingPayment(state, debt, payment)
+        );
+      }
+    }
+    extraAmt = Math.max(0, amt - remainingMin);
+    minAmt = Math.max(0, amt - extraAmt);
+    if (extraAmt > 0 && minAmt > 0) out.paymentKind = 'mixed';
+    else if (extraAmt > 0) out.paymentKind = 'extra';
+    else out.paymentKind = 'minimum';
+  }
+
+  var apr = toNum(debt.apr);
+  var interestType = String(debt.interestType || 'unknown').toLowerCase();
+  if (interestType !== 'fixed' && interestType !== 'variable') interestType = 'unknown';
+  var mi = apr > 0 ? monthlyInterest(debt.apr, bal) : 0;
+  if (mi > 0) out.monthlyInterestEstimate = Math.round(mi * 100) / 100;
+  var hasApr = apr > 0 && mi > 0;
+
+  if (hasApr) {
+    if (interestType === 'variable') out.interestAssumption = 'variable_apr_illustrative';
+    else if (interestType === 'fixed') out.interestAssumption = 'fixed_apr_illustrative';
+    else out.interestAssumption = 'apr_illustrative';
+  }
+
+  var principal = 0;
+  var hasEstimate = false;
+
+  if (minAmt > 0) {
+    if (!hasApr) {
+      out.reasonCodes.push('minimum_without_apr');
+    } else {
+      principal += Math.max(0, minAmt - mi);
+      hasEstimate = true;
+    }
+  }
+
+  if (extraAmt > 0) {
+    if (hasApr) {
+      principal += Math.min(extraAmt, Math.max(0, bal - principal));
+      hasEstimate = true;
+    } else {
+      var extraOnly = Math.min(extraAmt, Math.max(0, bal - principal));
+      if (extraOnly > 0) {
+        principal += extraOnly;
+        hasEstimate = true;
+      }
+      out.reasonCodes.push('apr_unknown');
+    }
+  }
+
+  if (!hasEstimate) {
+    if (minAmt > 0 && extraAmt <= 0) out.reasonCodes.push('no_estimate_minimum_no_apr');
+    return out;
+  }
+
+  principal = Math.min(Math.max(0, Math.round(principal * 100) / 100), bal);
+  out.principalApplied = principal;
+
+  if (!hasApr) {
+    out.confidence = 'low';
+  } else if (interestType === 'fixed' && out.paymentKind === 'extra') {
+    out.confidence = 'moderate';
+  } else if (interestType === 'fixed') {
+    out.confidence = 'moderate';
+  } else {
+    out.confidence = 'low';
+  }
+
+  return out;
+}
+
+/**
+ * Stage 81B-2: shadow snapshot of principal estimates for paid debt-linked payments.
+ * Compose-only — no balance writes, no UI wiring.
+ */
+function geodeDebtPrincipalEstimateSnapshot(state, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var rows = [];
+  var totalPrincipal = 0;
+  var pay = (state && state.payments) || [];
+  var reasonCodes = [];
+  var pi;
+  for (pi = 0; pi < pay.length; pi++) {
+    var p = pay[pi];
+    if (!p || !p.debtId) continue;
+    if (opts.paidOnly !== false && String(p.status || '') !== 'paid') continue;
+    if (opts.currentMonthOnly === true && !geodePaymentCountsAsPaidInCurrentMonth(p)) continue;
+    var debt = geodeDebtById(state, p.debtId);
+    if (!debt) {
+      rows.push({
+        paymentId: p.id || '',
+        debtId: String(p.debtId || ''),
+        debtName: '',
+        estimate: { applicable: false, reasonCodes: ['debt_not_found'], shadowOnly: true }
+      });
+      continue;
+    }
+    var est = geodeEstimateDebtPrincipalApplied(debt, p, {
+      state: state,
+      requirePaid: opts.paidOnly !== false
+    });
+    rows.push({
+      paymentId: p.id || '',
+      debtId: String(p.debtId || ''),
+      debtName: String(debt.name || ''),
+      paymentAmount: est.paymentAmount,
+      estimate: est
+    });
+    if (est.principalApplied != null && isFinite(est.principalApplied)) {
+      totalPrincipal += est.principalApplied;
+    }
+  }
+  if (!rows.length) reasonCodes.push('no_qualifying_payments');
+
+  var snapshot = {
+    version: 1,
+    generatedAt: opts.generatedAt != null ? opts.generatedAt : null,
+    rowCount: rows.length,
+    totalEstimatedPrincipal: Math.round(totalPrincipal * 100) / 100,
+    rows: rows,
+    reasonCodes: reasonCodes,
+    audit: {
+      shadowOnly: true,
+      sideEffects: [],
+      note: 'Estimates do not change debt.balance or net worth.'
+    }
+  };
+
+  try {
+    window._geodeDebtPrincipalEstimateSnapshot = snapshot;
+    window._geodeEstimateDebtPrincipalApplied = geodeEstimateDebtPrincipalApplied;
+  } catch (_eDpeWin) {}
+
+  return snapshot;
 }
 
 function currentYM() {
@@ -30779,7 +31028,7 @@ function rDebts(el) {
     }
     var lastDebtAmt = geodeLastLinkedContributionAmount('debt', d.id);
     var lastDebtLine = lastDebtAmt ? '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:6px;line-height:1.2">Last payment: ' + fm(lastDebtAmt) + '</div>' : '';
-    var healthCard = geodeDebtHealthCardHtml(d);
+    var healthCard = geodeDebtHealthCardHtml(d, S);
     e.innerHTML='<div data-geode-css="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div data-geode-css="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:#f07070">'+geodeSvg(catIc)+'</span><span>'+d.name+'</span></div><div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:2px;text-transform:uppercase;letter-spacing:1px">'+d.cat+'</div></div><div data-geode-css="display:flex;gap:5px"><button class="btn-sm" onclick="openDebtModal(\''+d.id+'\')">Edit</button><button class="btn-del" onclick="delDebt(\''+d.id+'\')">Remove</button></div></div><div data-geode-css="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"><div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Balance</div><div data-geode-css="font-size:17px;font-weight:700;color:#f07070">'+fm(d.balance)+'</div>'+(showFocus?'<div data-geode-css="font-size:9px;color:#f5c234;font-weight:700;margin-top:4px;line-height:1.2">Focus here to reduce interest fastest</div>':'')+'<details data-geode-css="margin-top:4px;font-size:9px;color:rgba(189,183,220,0.8);line-height:1.25"><summary data-geode-css="cursor:pointer;font-weight:700;list-style-position:inside">Why balance vs contributions?</summary><div data-geode-css="margin-top:4px;color:rgba(237,234,255,0.78)">Balances track what you owe. Use <strong>contributions</strong> when you want an outflow to affect &ldquo;left this month.&rdquo; Update the balance when it changes.</div></details></div>'+(d.apr?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">APR</div><div data-geode-css="font-size:17px;font-weight:700;color:#f5c234">'+d.apr+'%</div></div>':'<div></div>')+(mi>0?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Interest</div><div data-geode-css="font-size:12px;font-weight:600;color:rgba(240,112,112,0.72)">~'+fm(mi)+'/mo</div></div>':'<div></div>')+'</div>'+healthCard+'<button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:10px" onclick="geodePayFromDebt(\''+d.id+'\')">Pay toward this debt</button>'+lastDebtLine;
     list.appendChild(e);
   }

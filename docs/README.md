@@ -84,6 +84,9 @@ See [`docs/stages/81/README.md`](./stages/81/README.md).
 
 - **81A / 81B** audits — dual-ledger truth gap documented (payments vs confirmed balances)
 - **81B-1** built locally — debt health fields + provider review awareness in Money (no payment balance mutation, no Ask/Plan changes)
+- **81B-2** built locally — shadow `geodeEstimateDebtPrincipalApplied` + snapshot (no balance/net worth/UI wiring)
+- **81B-2.2** built locally — Debt Health compact inline + conditional display; Review button removed
+- **81B-2.3** built locally — debt card one factual line only; provider narrative in Edit Debt modal
 
 ---
 

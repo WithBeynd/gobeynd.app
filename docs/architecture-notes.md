@@ -163,7 +163,7 @@ Future backlog work may move to a Beynd-managed API backend. Never put a Beynd L
 
 Do not inject full JSON snapshot into Ask Beynd context.
 
-## Debt health & provider review (Stage 81B-1)
+## Debt health & provider review (Stage 81B-1 / 81B-2.2 / 81B-2.3)
 
 **`debt.balance`** remains the user-confirmed provider balance for net worth. Optional metadata on `S.debts[]`:
 
@@ -173,9 +173,29 @@ Do not inject full JSON snapshot into Ask Beynd context.
 
 **Normalize:** **`geodeNormalizeDebtHealthFields(state)`** on load and after **`saveDebt`**.
 
-**Display only:** **`geodeDebtHealthCardHtml`**, **`geodeDebtProviderReviewNudgeCopy`** — Money debt cards + Edit Debt modal. Stale copy thresholds: 45d (unknown/variable), 60d (fixed). No badges, no auto-reduction on payment.
+**Money → Debts card (81B-2.3):**
 
-**Not in 81B-1:** payment balance apply, `estimatedPrincipalApplied`, Ask Beynd debt rules export, savings release.
+- Balance, APR, Interest
+- Optional **single factual** Debt Health line via **`geodeDebtHealthCardMinimalCopy`** / **`geodeDebtHealthCardHtml`** when **`geodeDebtShouldShowHealthOnCard`** is true (81B-2.2 gate)
+- No nudge paragraphs, no multi-line guidance, no Review button on card
+
+**Provider-review guidance — Edit Debt modal only:**
+
+- Inline balance/provider copy, APR type selector, **`geodeDebtProviderReviewStatusCopy`** when `lastProviderReviewAt` is set
+- **`geodeDebtProviderReviewNudgeCopy`** exists in code but is **not rendered** on cards or in the modal (dormant helper)
+
+**Stale thresholds (copy helpers):** 45d (unknown/variable), 60d (fixed). No badges, no auto-reduction on payment.
+
+**Not in 81B-1 / 81B-2.x:** payment balance apply, dismiss/cap storage, `estimatedPrincipalApplied` on payment rows, Ask Beynd debt rules export, savings release. Reflection carries long-term interpretation later.
+
+## Debt principal estimate shadow model (Stage 81B-2)
+
+**Read-only helpers** — compute likely principal from paid debt-linked payments without mutating `debt.balance`, net worth, or payment rows.
+
+- **`geodeEstimateDebtPrincipalApplied(debt, payment, opts)`** — minimum vs extra split; APR-based illustrative interest; returns `principalApplied`, `confidence`, `reasonCodes`, `shadowOnly: true`
+- **`geodeDebtPrincipalEstimateSnapshot(state, opts)`** — rollup over paid payments; dev hook **`window._geodeDebtPrincipalEstimateSnapshot`**
+
+**Shadow-only — no card UI.** No Home/Plan/Reflection/Ask wiring; no persisting `estimatedPrincipalApplied` on payment completion.
 
 **Docs:** [`docs/stages/81/README.md`](./stages/81/README.md).
 
