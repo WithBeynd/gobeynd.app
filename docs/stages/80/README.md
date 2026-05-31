@@ -42,6 +42,12 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | 80J-B | Build — Reality inline reflection entry | [80J-B-build-reality-inline-reflection-entry.md](./80J-B-build-reality-inline-reflection-entry.md) | Built (local) | *held* |
 | 80J-D | Reflection entry visual hierarchy audit | [80J-D-reflection-entry-visual-hierarchy-audit.md](./80J-D-reflection-entry-visual-hierarchy-audit.md) | NEEDS ATTENTION | — |
 | 80J-E | Reflection entry visual hierarchy refinement | [80J-E-reflection-entry-visual-hierarchy-refinement.md](./80J-E-reflection-entry-visual-hierarchy-refinement.md) | Built (local) | *held* |
+| 80K-A | Reflection surface architecture audit | [80K-A-reflection-surface-architecture-audit.md](./80K-A-reflection-surface-architecture-audit.md) | NEEDS ATTENTION | — |
+| 80K-B | Build — Reflection Money sub-surface | [80K-B-build-reflection-money-subsurface.md](./80K-B-build-reflection-money-subsurface.md) | Built (local) | *held* |
+| 80L-A | Reflection Ask integration audit | [80L-A-reflection-ask-beynd-integration-audit.md](./80L-A-reflection-ask-beynd-integration-audit.md) | NEEDS ATTENTION | — |
+| 80L-B | Build — Reflection → Ask Beynd integration | [80L-B-build-reflection-ask-integration.md](./80L-B-build-reflection-ask-integration.md) | Built (local) | *held* |
+| 80M-A | Reflection release — service worker bump | [80M-A-reflection-release-service-worker-bump.md](./80M-A-reflection-release-service-worker-bump.md) | Prepared (local) | *held — audit before commit* |
+| 80M-B | Reflection release — final audit | [80M-B-reflection-release-final-audit.md](./80M-B-reflection-release-final-audit.md) | Pending | — |
 
 ---
 
@@ -60,6 +66,13 @@ Ordered documentation after Stage 79B Home hierarchy wiring.
 | `geodeStabilityRoomExperienceModel` | Shadow experience copy composer (80I-B) |
 | `geodeRealityReflectionEntryGateForReality` | Reality inline entry gate resolve (80J-B) |
 | `geodeRealityReflectionEntryHtml` | Inline Reflection link below MC summary (80J-B) |
+| `geodeReflectionStackForSurface` | Reflection surface stack resolve (80K-B) |
+| `geodeReflectionSurfaceHtml` | Reflection Money sub-surface HTML (80K-B) |
+| `geodeNavigateToReflectionFromReality` | Open Reflection from Reality entry (80K-B) |
+| `geodeExitReflectionSurface` | Return Reflection → Reality (80K-B) |
+| `geodeReflectionAskContext` | Bounded Reflection read for Ask context (80L-B) |
+| `geodeReflectionAskPointerTap` | Open Ask modal from Reflection pointer (80L-B) |
+| `geodeGetAskBeyndReflectionUiCopy` | Reflection-origin Ask modal copy (80L-B) |
 
 ---
 

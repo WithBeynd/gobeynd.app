@@ -70,7 +70,10 @@ See [`docs/stages/80/README.md`](./stages/80/README.md).
 - **80G-B / 80G-B.1 / 80G-B.2 / 80G-B.3** — `geodeStabilityRoomVisualModel` shadow visual interpreter (`mode: 'reflection'`, `noGo`; atmosphere `room`; no UI)
 - **80H-B / 80H-B.1** — `geodeStabilityRoomEntryGate` shadow entry gate (`label`/`dismissLabel`, `justSavedMonthContext`; no UI)
 - **80I-A / 80I-B / 80I-C.1** — experience ViewModel architecture audit + shadow copy composer + contract hardening (`density`, audit/noGo flags, block `source`; no UI)
-- **80J-A / 80J-B / 80J-D / 80J-E** — Reality reflection entry audit + inline link + in-card footer hierarchy (session-only; no Reflection surface yet)
+- **80J-A / 80J-B / 80J-D / 80J-E** — Reality reflection entry audit + inline link + in-card footer hierarchy
+- **80K-A / 80K-B** — Reflection surface architecture audit + Money `msub='reflection'` sub-surface (ExperienceModel render only)
+- **80L-A / 80L-B** — Reflection → Ask Beynd integration audit + modal overlay with bounded context (no auto-send)
+- **80M-A** — Reflection bundle release prep: service worker **v1.0.73** bump for user-facing Reflection surface + Ask integration (**80J / 80K / 80L**); no Reflection/Ask/UI logic changed in 80M-A; commit after **80M-B** final audit
 
 ---
 

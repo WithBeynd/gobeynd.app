@@ -126,7 +126,13 @@ Read-only **`geodeStabilityRoomSnapshot(state, opts)`** — assembles orchestrat
 
 **Experience model (80I-B / 80I-C.1):** **`geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opts)`** — bounded human copy blocks (`what_matters_this_month`, `month_so_far`, `background` or `plan_protecting`); `density` (`light`/`roomy`/`standard`); block `source`; returns `null` when gate is `hidden`. Hook: **`window._geodeStabilityRoomExperienceModel`**. `audit.noUi` / `noRoutes` / `noStorage` / `noCalculations` and `noGo.noRawInternals` etc. all `true`. Max 3 blocks. No UI, routes, or storage.
 
-**Reality inline entry (80J-B / 80J-E):** **`geodeRealityReflectionEntryGateForReality(state)`** + **`geodeRealityReflectionEntryHtml()`** — session-only flags; inline link in **collapsed month-context card footer** when gate is `suggested` (80J-E). No Reflection sub-surface, Home entry, or persistent dismiss storage. Primary tap toast-only until 80K.
+**Reality inline entry (80J-B / 80J-E):** **`geodeRealityReflectionEntryGateForReality(state)`** + **`geodeRealityReflectionEntryHtml()`** — session-only flags; inline link in **collapsed month-context card footer** when gate is `suggested` (80J-E). Primary tap opens Reflection sub-surface (80K-B).
+
+**Reflection surface (80K-B):** Money sub-surface **`msub='reflection'`** — **`geodeReflectionStackForSurface`** → **`geodeReflectionSurfaceHtml()`** renders ExperienceModel copy only. Entry via **`geodeNavigateToReflectionFromReality()`**; exit via **`geodeExitReflectionSurface()`** (returns to Reality, not overview). No Home entry, charts, or persistent storage.
+
+**Reflection → Ask Beynd (80L-B):** Ask pointer opens existing **`geodeOpenAskBeynd({ reflectionOrigin, prefill })`** modal overlay — no tab, no inline chat, **no auto-send**. **`geodeReflectionAskContext`** exports experienceModel display copy only; appended once via in-memory **`_geodeReflectionAskContextPending`** on first Ask send. Plan rationale / SKIP limits unchanged.
+
+**Reflection bundle release (80M-A / 80M-B):** Release cut bumps **`CACHE_VERSION`** once (**v1.0.73** after 80M-A) so clients refresh static assets for the **80J + 80K + 80L** bundle. **80M-A** changes **`service-worker.js` version string only** — no install/activate/fetch/message logic, no Reflection/Ask/UI edits. **Final audit (80M-B) required before commit.**
 
 Dormant or future-facing paths:
 

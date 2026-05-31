@@ -14,6 +14,21 @@
       "fallbackReply": "Sorry, I could not answer that.",
       "unavailableError": "Ask Beynd is unavailable right now. Your plan still works."
     },
+    "reflection": {
+      "prefill": "Help me understand this month",
+      "intro": "Ask about what you just read on Reflection, or edit the question below.",
+      "subIntro": "Nothing sends until you tap Ask.",
+      "starters": [
+        "What should I watch this month?",
+        "How does my plan fit what I shared?",
+        "What can wait for now?"
+      ],
+      "stabilityStarters": [
+        "What needs me first this month?",
+        "What can safely wait?",
+        "Help me understand this month"
+      ]
+    },
     "modifierStarters": {
       "default": "What should I keep in mind this month?",
       "worriedOnly": "What\u2019s worth not rushing right now?"

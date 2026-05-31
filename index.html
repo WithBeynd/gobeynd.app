@@ -9818,7 +9818,7 @@ function goTab(t) {
     } catch (_eClrPbth) {}
   }
   tab = t;
-  if (t === 'money' && msub === 'reality') msub = 'overview';
+  if (t === 'money' && (msub === 'reality' || msub === 'reflection')) msub = 'overview';
   if (t === 'me') window._geodeSettingsSection = '';
   var btns = document.querySelectorAll('.tab');
   for (var i=0; i<btns.length; i++) { btns[i].className = 'tab' + (btns[i].dataset.t===t?' on':''); }
@@ -23964,6 +23964,176 @@ function geodeRealityReflectionEntryGateForReality(state) {
   });
 }
 
+/** Stage 80K-B: read-only Reflection stack for surface — no DOM, routes, or storage. */
+function geodeReflectionStackForSurface(state) {
+  state = state || S;
+  try {
+    var snap = geodeStabilityRoomSnapshot(state, { generatedAt: Date.now() });
+    if (!snap) return null;
+    var vm = geodeStabilityRoomVisualModel(snap);
+    if (!vm) return null;
+    var gate = geodeStabilityRoomEntryGate(snap, vm, {
+      trigger: 'reality_month_context_save',
+      justSavedMonthContext: geodeGetReflectionJustSavedMonthContext(),
+      dismissedThisMonth: geodeGetReflectionEntryDismissed()
+    });
+    if (!gate || gate.visibility === 'hidden') return null;
+    var exp = geodeStabilityRoomExperienceModel(snap, vm, gate, { maxBlocks: 3 });
+    if (!exp || !Array.isArray(exp.blocks) || !exp.blocks.length) return null;
+    var stack = { snap: snap, vm: vm, gate: gate, exp: exp };
+    try {
+      window._geodeReflectionStackForSurface = stack;
+    } catch (_eRfStWin) {}
+    return stack;
+  } catch (_eRfSt) {
+    return null;
+  }
+}
+
+/** Stage 80K-B: open Reflection Money sub-surface from Reality inline entry. */
+function geodeNavigateToReflectionFromReality() {
+  try {
+    var stack = geodeReflectionStackForSurface(S);
+    if (!stack || !stack.exp) return;
+    geodeClearReflectionJustSavedMonthContext();
+    tab = 'money';
+    msub = 'reflection';
+    var btns = document.querySelectorAll('.tab');
+    var i;
+    for (i = 0; i < btns.length; i++) {
+      btns[i].className = 'tab' + (btns[i].dataset.t === 'money' ? ' on' : '');
+    }
+    render();
+  } catch (_eNavRf) {}
+}
+
+/** Stage 80K-B: Reflection Money sub-surface — renders ExperienceModel only. */
+function geodeReflectionSurfaceHtml() {
+  var stack = null;
+  try {
+    stack = geodeReflectionStackForSurface(S);
+  } catch (_eRfHtml) {
+    return '';
+  }
+  if (!stack || !stack.exp) return '';
+  var exp = stack.exp;
+  var exitLabel =
+    exp.exitLabel != null && String(exp.exitLabel).trim()
+      ? String(exp.exitLabel).trim()
+      : 'Back to Reality';
+  var blocks = exp.blocks;
+  var blockGap =
+    exp.density === 'roomy' ? '18px' : exp.density === 'light' ? '10px' : '14px';
+  var h = '';
+  h += '<div class="reality-page reflection-surface-page">';
+  h +=
+    '<div class="reality-topbar">' +
+    '<button type="button" class="reality-exit" onclick="geodeExitReflectionSurface()" aria-label="' +
+    escHtmlLite(exitLabel) +
+    '">' +
+    escHtmlLite(exitLabel) +
+    '</button>' +
+    '</div>';
+  h += '<div class="reality-head">';
+  h +=
+    '<div class="reality-title">' +
+    escHtmlLite(String(exp.title || 'This month')) +
+    '</div>';
+  if (exp.subtitle != null && String(exp.subtitle).trim()) {
+    h +=
+      '<div class="reality-subtitle">' +
+      escHtmlLite(String(exp.subtitle)) +
+      '</div>';
+  }
+  h += '</div>';
+  var bi;
+  for (bi = 0; bi < blocks.length; bi++) {
+    var block = blocks[bi];
+    if (!block || block.visible === false) continue;
+    var regClass =
+      block.registerClass != null && String(block.registerClass).trim()
+        ? String(block.registerClass).trim()
+        : 'vi-register-calm';
+    var spacingMb =
+      block.spacing === 'airy'
+        ? blockGap
+        : exp.density === 'light'
+          ? '8px'
+          : blockGap;
+    var staggerMs =
+      exp.motion && exp.motion.staggerMs != null && isFinite(Number(exp.motion.staggerMs))
+        ? Number(exp.motion.staggerMs)
+        : 40;
+    var revealMs =
+      exp.motion && exp.motion.revealMs != null && isFinite(Number(exp.motion.revealMs))
+        ? Number(exp.motion.revealMs)
+        : 220;
+    var animDelay = Math.round(revealMs + bi * staggerMs);
+    h +=
+      '<div class="' +
+      escHtmlLite(regClass) +
+      '" data-geode-css="padding:14px 15px;margin-bottom:' +
+      spacingMb +
+      ';animation:geodeSoftEnter ' +
+      revealMs +
+      'ms ease both;animation-delay:' +
+      animDelay +
+      'ms">';
+    if (block.headline != null && String(block.headline).trim()) {
+      h +=
+        '<div data-geode-css="font-size:11px;font-weight:600;color:var(--tx-3);margin-bottom:6px;line-height:1.35;letter-spacing:0.01em">' +
+        escHtmlLite(String(block.headline)) +
+        '</div>';
+    }
+    if (block.body != null && String(block.body).trim()) {
+      h +=
+        '<div data-geode-css="font-size:12px;color:rgba(237,234,255,0.82);line-height:1.5">' +
+        escHtmlLite(String(block.body)) +
+        '</div>';
+    }
+    h += '</div>';
+  }
+  if (exp.askPointer && exp.askPointer.visible === true && exp.askPointer.label) {
+    h +=
+      '<div data-geode-css="margin-top:6px;padding-top:14px;border-top:1px solid rgba(189,183,220,0.1)">' +
+      '<button type="button" onclick="geodeReflectionAskPointerTap()" ' +
+      'data-geode-css="display:block;padding:0;border:none;background:transparent;font-family:inherit;font-size:11px;font-weight:600;color:rgba(189,183,220,0.78);cursor:pointer;line-height:1.4;-webkit-tap-highlight-color:transparent;outline:none;text-align:left;width:100%">' +
+      escHtmlLite(String(exp.askPointer.label)) +
+      ' \u203a</button></div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+/** Stage 80L-B: open Ask Beynd from Reflection pointer — modal overlay, prefill only, no auto-send. */
+function geodeReflectionAskPointerTap() {
+  try {
+    var stack = geodeReflectionStackForSurface(S);
+    if (!stack || !stack.exp) return;
+    var ctxBlock = geodeReflectionAskContext(stack.snap, stack.vm, stack.gate, stack.exp, {});
+    if (!ctxBlock) return;
+    _geodeReflectionAskContextPending = ctxBlock;
+    geodeOpenAskBeynd({
+      reflectionOrigin: true,
+      prefill: geodeCopy('askBeynd.reflection.prefill', 'Help me understand this month')
+    });
+  } catch (_eRfAskTap) {}
+}
+
+/** Stage 80K-B: return from Reflection sub-surface to Reality. */
+function geodeExitReflectionSurface() {
+  try {
+    tab = 'money';
+    msub = 'reality';
+    var btns = document.querySelectorAll('.tab');
+    var i;
+    for (i = 0; i < btns.length; i++) {
+      btns[i].className = 'tab' + (btns[i].dataset.t === 'money' ? ' on' : '');
+    }
+    render();
+  } catch (_eExRf) {}
+}
+
 /** Stage 80J-B / 80J-E: inline Reflection entry inside collapsed month-context card footer. */
 function geodeRealityReflectionEntryHtml() {
   var gate = null;
@@ -23991,9 +24161,9 @@ function geodeRealityReflectionEntryHtml() {
   return h;
 }
 
-/** Stage 80J-B: primary entry — Reflection surface deferred to 80K. */
+/** Stage 80K-B: open Reflection from Reality inline entry. */
 function geodeRealityReflectionEntryTap() {
-  toast('Your monthly read is coming soon.', 'ok', 2400);
+  geodeNavigateToReflectionFromReality();
 }
 
 /** Stage 80J-B: dismiss inline Reflection entry for this session save event. */
@@ -27489,6 +27659,98 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
   }
 }
 
+/**
+ * Stage 80L-B: bounded Reflection read for Ask Beynd context only.
+ * Exports experienceModel display copy — not raw snapshot, visual model, or gate internals.
+ */
+function geodeReflectionAskContext(snapshot, visualModel, entryGate, experienceModel, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  try {
+    if (!experienceModel || typeof experienceModel !== 'object') return '';
+    if (!Array.isArray(experienceModel.blocks) || !experienceModel.blocks.length) return '';
+
+    var maxChars =
+      opts.maxChars != null && isFinite(Number(opts.maxChars)) ? Number(opts.maxChars) : 1200;
+    var maxBodyLen =
+      opts.maxBodyLen != null && isFinite(Number(opts.maxBodyLen)) ? Number(opts.maxBodyLen) : 280;
+
+    function truncLine(text, maxLen) {
+      var s = String(text || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      maxLen = maxLen != null && isFinite(Number(maxLen)) ? Number(maxLen) : 280;
+      if (s.length <= maxLen) return s;
+      return s.slice(0, Math.max(0, maxLen - 3)) + '...';
+    }
+
+    var atm =
+      visualModel && visualModel.atmosphere != null
+        ? String(visualModel.atmosphere)
+        : experienceModel.atmosphere != null
+          ? String(experienceModel.atmosphere)
+          : '';
+    var atmLabels = {
+      calm: 'calm read',
+      reflective: 'reflective read',
+      protective: 'protective read',
+      recovering: 'quieter read',
+      room: 'space to choose carefully'
+    };
+    var atmosphereLabel = atmLabels[atm] || (atm ? atm + ' read' : '');
+
+    var lines = [];
+    lines.push('REFLECTION READ (what the user just saw — coaching tone only; not advice)');
+    if (opts.includeOrigin !== false) {
+      lines.push('Origin: User opened Reflection from Reality after saving month context.');
+    }
+    if (atmosphereLabel) lines.push('Atmosphere: ' + atmosphereLabel);
+    if (experienceModel.title != null && String(experienceModel.title).trim()) {
+      lines.push('Title: ' + truncLine(experienceModel.title, 80));
+    }
+    if (experienceModel.subtitle != null && String(experienceModel.subtitle).trim()) {
+      lines.push('Subtitle: ' + truncLine(experienceModel.subtitle, 120));
+    }
+
+    var bi;
+    var blockNum = 0;
+    for (bi = 0; bi < experienceModel.blocks.length && blockNum < 3; bi++) {
+      var block = experienceModel.blocks[bi];
+      if (!block || block.visible === false) continue;
+      blockNum++;
+      var head =
+        block.headline != null && String(block.headline).trim()
+          ? truncLine(block.headline, 80)
+          : '';
+      var body =
+        block.body != null && String(block.body).trim() ? truncLine(block.body, maxBodyLen) : '';
+      if (head || body) {
+        lines.push(blockNum + '. ' + (head || 'Block') + (body ? ' — ' + body : ''));
+      }
+    }
+
+    lines.push('');
+    lines.push('Assistant rules:');
+    lines.push(
+      '- User just read the Reflection summary above. Help them understand or explore this month in conversation.'
+    );
+    lines.push('- Do not repeat the Reflection read verbatim.');
+    lines.push(
+      '- Month context and plan rationale appear elsewhere in this context; use those for exact user words and figures.'
+    );
+    lines.push('- Do not invent figures, skip outcomes, or plan changes not in context.');
+    if (snapshot && snapshot.quiet && snapshot.quiet.shouldStayQuiet === true) {
+      lines.push('- This month may need gentler pacing; favour stability over new commitments.');
+    }
+    lines.push('- Coaching not regulated financial advice.');
+
+    var out = lines.join('\n');
+    if (out.length > maxChars) out = out.slice(0, Math.max(0, maxChars - 3)) + '...';
+    return out;
+  } catch (_eRfAskCtx) {
+    return '';
+  }
+}
+
 /** Truncate plan rationale lines for Ask Beynd context (export only). */
 function geodePlanRationaleTruncateLine(text, maxLen) {
   var s = String(text || '')
@@ -27886,6 +28148,10 @@ function geodeBuildCoachingContext() {
     if (monthCtxBlock) {
       ctx.push('', 'MONTH CONTEXT', monthCtxBlock);
     }
+    if (_geodeReflectionAskContextPending) {
+      ctx.push('', String(_geodeReflectionAskContextPending));
+      _geodeReflectionAskContextPending = '';
+    }
     var orchBlock = '';
     try {
       orchBlock = geodeFormatAskBeyndOrchestrationBlock(S);
@@ -27929,6 +28195,8 @@ function geodeBuildCoachingContext() {
 }
 
 var _beynd_chat_history = [];
+/** Stage 80L-B: one-shot Reflection context block for next Ask send (in-memory only). */
+var _geodeReflectionAskContextPending = '';
 var GEODE_ASK_BEYND_WORKER_URL = 'https://beynd-ask-worker.withbeynd.workers.dev/ask-beynd';
 var GEODE_ASK_BEYND_CLIENT_VERSION = 'web';
 
@@ -28269,6 +28537,66 @@ function geodeGetAskBeyndUiCopy(state) {
   };
 }
 
+/** Stage 80L-B: Ask Beynd modal copy when opened from Reflection pointer. */
+function geodeGetAskBeyndReflectionUiCopy(state) {
+  state = state || S;
+  var reflectionCopy = geodeCopy('askBeynd.reflection', {
+    intro: 'Ask about what you just read on Reflection, or edit the question below.',
+    subIntro: 'Nothing sends until you tap Ask.',
+    prefill: 'Help me understand this month',
+    starters: [
+      'What should I watch this month?',
+      'How does my plan fit what I shared?',
+      'What can wait for now?'
+    ],
+    stabilityStarters: [
+      'What needs me first this month?',
+      'What can safely wait?',
+      'Help me understand this month'
+    ]
+  });
+  var starters = Array.isArray(reflectionCopy.starters)
+    ? reflectionCopy.starters.slice()
+    : [
+        'What should I watch this month?',
+        'How does my plan fit what I shared?',
+        'What can wait for now?'
+      ];
+  try {
+    var snap = geodeOrchestrationSnapshot(state);
+    var mods = snap && snap.askBeyndModifiers ? snap.askBeyndModifiers : [];
+    var stabilityFirst =
+      (snap && (snap.userLoad === 'critical' || snap.userLoad === 'high')) ||
+      mods.indexOf('stability_first') >= 0;
+    if (stabilityFirst) {
+      starters = starters.filter(function (q) {
+        var n = String(q || '').toLowerCase();
+        if (n.indexOf('invest') >= 0) return false;
+        if (n.indexOf('growth') >= 0) return false;
+        if (n.indexOf('opportunity') >= 0) return false;
+        return true;
+      });
+      var stableFallback = Array.isArray(reflectionCopy.stabilityStarters)
+        ? reflectionCopy.stabilityStarters.slice()
+        : [
+            'What needs me first this month?',
+            'What can safely wait?',
+            'Help me understand this month'
+          ];
+      if (starters.length < 2) starters = stableFallback;
+    }
+  } catch (_eRfAskUi) {}
+  if (starters.length > 3) starters = starters.slice(0, 3);
+  return {
+    intro:
+      reflectionCopy.intro ||
+      'Ask about what you just read on Reflection, or edit the question below.',
+    subIntro: reflectionCopy.subIntro || 'Nothing sends until you tap Ask.',
+    starters: starters,
+    mode: 'reflection'
+  };
+}
+
 function geodeShouldShowAskBeyndFirstRun() {
   return S.askBeyndFirstRunShown === false;
 }
@@ -28307,10 +28635,16 @@ function geodeArmAskBeyndFirstRunIntro() {
   } catch (_eAskFrArm) {}
 }
 
-function geodeOpenAskBeynd() {
+function geodeOpenAskBeynd(opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  if (!opts.reflectionOrigin) {
+    _geodeReflectionAskContextPending = '';
+  }
   _beynd_chat_history = [];
-  var uiCopy = geodeGetAskBeyndUiCopy(S);
-  var showFirstRunIntro = geodeShouldShowAskBeyndFirstRun();
+  var uiCopy = opts.reflectionOrigin
+    ? geodeGetAskBeyndReflectionUiCopy(S)
+    : geodeGetAskBeyndUiCopy(S);
+  var showFirstRunIntro = !opts.reflectionOrigin && geodeShouldShowAskBeyndFirstRun();
   var h = mh(geodeCopy('askBeynd.modal.title', 'Ask Beynd'));
   h += '<div class="beynd-ask-caption">' + escHtmlLite(geodeCopy('askBeynd.modal.caption', 'Ask from your plan and the picture you have built in Beynd. Bank connection is not live yet.')) + '</div>';
   h += '<div class="beynd-ask-sheet">';
@@ -28335,6 +28669,14 @@ function geodeOpenAskBeynd() {
   h += '<div class="beynd-ask-foot">' + escHtmlLite(geodeCopy('askBeynd.modal.privacyFoot', 'When you ask, Beynd sends a short financial summary to answer your question. Your plan stays on this device, and this chat is not stored by Beynd.')) + '</div>';
   h += '</div>';
   openModal(h);
+  var prefill =
+    opts.prefill != null && String(opts.prefill).trim()
+      ? String(opts.prefill).trim()
+      : '';
+  if (prefill) {
+    var inpEl = document.getElementById('beynd-input');
+    if (inpEl) inpEl.value = prefill;
+  }
   if (showFirstRunIntro) {
     geodeMarkAskBeyndFirstRunShown();
     geodeArmAskBeyndFirstRunIntro();
@@ -29988,10 +30330,20 @@ function rInvestInMoney(el) {
   rInvest(el || document.getElementById('content'));
 }
 function rMoney() {
-  if (msub !== 'reality') geodeClearReflectionJustSavedMonthContext();
+  if (msub !== 'reality' && msub !== 'reflection') geodeClearReflectionJustSavedMonthContext();
   var c = document.getElementById('content');
   if (msub === 'reality') {
     c.innerHTML = geodeRealityPageHtml();
+    return;
+  }
+  if (msub === 'reflection') {
+    var _rfHtml = geodeReflectionSurfaceHtml();
+    if (!_rfHtml) {
+      msub = 'reality';
+      c.innerHTML = geodeRealityPageHtml();
+      return;
+    }
+    c.innerHTML = _rfHtml;
     return;
   }
   var tDebt=S.debts.reduce(function(s,d){return s+Number(d.balance);},0);
@@ -30127,6 +30479,11 @@ function rMsub() {
   else if (msub==='invest')   rInvestInMoney(el);
   else if (msub==='review')   rReview(el);
   else if (msub==='reality')  el.innerHTML = geodeRealityPageHtml();
+  else if (msub==='reflection') {
+    var _rfMsubHtml = geodeReflectionSurfaceHtml();
+    el.innerHTML = _rfMsubHtml || geodeRealityPageHtml();
+    if (!_rfMsubHtml) msub = 'reality';
+  }
   else rMoneyOverview(el);
 }
 
