@@ -1379,6 +1379,8 @@ var S = {
   /** K7.1: whether user supports others financially (display / nudges only) */
   hasDependants: false,
   goals: [], debts: [], payments: [], expenses: [], archivedExpenses: [], beyondStatement: [], investments: [],
+  /** Stage 81D-3: user-confirmed savings releases (mutates baseSaved/baseBalance only). */
+  savingsReleases: [],
   /** Monthly totals keyed by YYYY-MM (one object per month, overwritten on update). */
   snapshots: {},
   /** Snapshot fields for “since last update” (totals + leftThisMonth); persisted on save. */
@@ -1647,6 +1649,7 @@ function load() {
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
   geodeNormalizeDebtHealthFields(S);
+  geodeNormalizeSavingsReleases(S);
   if (typeof S.incomeExplicitlySet !== 'boolean') {
     if (toNum(S.income) > 0) {
       S.incomeExplicitlySet = true;
@@ -6207,6 +6210,39 @@ function geodeNormalizeGoalInvestBaseFields() {
   } catch (e) {}
 }
 
+/** Stage 81D-3: normalize persisted savings release events (safe for old data). */
+function geodeNormalizeSavingsReleases(state) {
+  state = state || S;
+  if (!state.savingsReleases || !Array.isArray(state.savingsReleases)) {
+    state.savingsReleases = [];
+    return;
+  }
+  var validReasons = { overbudget: 1, essential: 1, emergency: 1, planned_use: 1, manual: 1 };
+  var out = [];
+  var i;
+  for (i = 0; i < state.savingsReleases.length; i++) {
+    var r = state.savingsReleases[i];
+    if (!r || typeof r !== 'object') continue;
+    var rec = {
+      id: String(r.id || uid()),
+      sourceType: String(r.sourceType || 'unknown'),
+      sourceId: String(r.sourceId || ''),
+      amount: Number.isFinite(toNum(r.amount)) ? Math.round(toNum(r.amount) * 100) / 100 : 0,
+      reason: validReasons[r.reason] ? r.reason : 'manual',
+      date: r.date ? String(r.date).slice(0, 10) : '',
+      ym: String(r.ym || ''),
+      relatedYm: String(r.relatedYm || ''),
+      remainingBalance: Number.isFinite(toNum(r.remainingBalance)) ? toNum(r.remainingBalance) : 0,
+      createdAt: typeof r.createdAt === 'number' ? r.createdAt : Date.now(),
+      confirmedByUser: r.confirmedByUser !== false,
+      note: String(r.note || '')
+    };
+    if (!rec.sourceId || rec.amount <= 0) continue;
+    out.push(rec);
+  }
+  state.savingsReleases = out;
+}
+
 /** Stage 81B-1: optional debt health / provider-review metadata (display + persistence only; no balance math). */
 function geodeNormalizeDebtHealthFields(state) {
   state = state || S;
@@ -6552,6 +6588,591 @@ function geodeDebtPrincipalEstimateSnapshot(state, opts) {
   } catch (_eDpeWin) {}
 
   return snapshot;
+}
+
+/**
+ * Stage 81D-2: shadow-only savings release read-model (no balance, storage, or UI writes).
+ * Using savings is not failure — preview only until explicit release build (81D-3+).
+ */
+function geodeSavingsReleaseFindGoal(state, goalId) {
+  var id = String(goalId || '');
+  if (!id) return null;
+  var list = (state && state.goals) || [];
+  var i;
+  for (i = 0; i < list.length; i++) {
+    if (list[i] && String(list[i].id || '') === id) return list[i];
+  }
+  return null;
+}
+
+function geodeSavingsReleaseFindInvest(state, investId) {
+  var id = String(investId || '');
+  if (!id) return null;
+  var list = (state && state.investments) || [];
+  var i;
+  for (i = 0; i < list.length; i++) {
+    if (list[i] && String(list[i].id || '') === id) return list[i];
+  }
+  return null;
+}
+
+/** Normalize goal / investment row or { kind, id } into a resolved source descriptor. */
+function geodeSavingsReleaseResolveSource(state, source) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  if (!source || typeof source !== 'object') return null;
+  var kind = String(source.kind || source.sourceKind || '').toLowerCase();
+  var id = String(source.id || source.sourceId || '');
+  if (kind === 'invest' || kind === 'investment') kind = 'investment';
+  if (kind === 'goal' && id) {
+    var g0 = geodeSavingsReleaseFindGoal(state, id);
+    if (!g0) return null;
+    return { kind: 'goal', id: id, entity: g0, name: String(g0.name || '') };
+  }
+  if (kind === 'investment' && id) {
+    var i0 = geodeSavingsReleaseFindInvest(state, id);
+    if (!i0) return null;
+    return { kind: 'investment', id: id, entity: i0, name: String(i0.name || '') };
+  }
+  if (id && source.balance !== undefined && source.type !== undefined) {
+    var invRow = geodeSavingsReleaseFindInvest(state, id);
+    if (invRow) {
+      return { kind: 'investment', id: String(invRow.id || ''), entity: invRow, name: String(invRow.name || '') };
+    }
+  }
+  if (id && (source.saved !== undefined || source.amount !== undefined || source.cat)) {
+    var goalRow = geodeSavingsReleaseFindGoal(state, id);
+    if (goalRow) {
+      return { kind: 'goal', id: String(goalRow.id || ''), entity: goalRow, name: String(goalRow.name || '') };
+    }
+  }
+  return null;
+}
+
+function geodeSavingsReleaseSourceType(state, source) {
+  var resolved = geodeSavingsReleaseResolveSource(state, source);
+  if (!resolved) return 'unknown';
+  if (resolved.kind === 'goal') {
+    if (geodeIsEmergencyBufferGoal(resolved.entity)) return 'buffer';
+    if (geodeGoalHasPositiveLinkedInvestmentForState(state, resolved.entity)) return 'linked_investment';
+    return 'goal';
+  }
+  if (String(resolved.entity.goalId || '')) return 'linked_investment';
+  return 'investment';
+}
+
+function geodeSnapshotFiguresFromState(state) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var totalDebt = (state.debts || []).reduce(function (s, x) {
+    return s + toNum(x.balance);
+  }, 0);
+  var totalSaved = (state.goals || []).reduce(function (s, x) {
+    return s + geodeGoalEffectiveSavedFromState(state, x);
+  }, 0);
+  var totalInvestments = geodeUnlinkedInvestmentBalance(state);
+  var netWorth = totalSaved + totalInvestments - totalDebt;
+  return {
+    totalDebt: totalDebt,
+    totalSaved: totalSaved,
+    totalInvestments: totalInvestments,
+    netWorth: netWorth,
+    figVersion: 2
+  };
+}
+
+function geodeSavingsReleaseAvailableBalance(state, source) {
+  var resolved = geodeSavingsReleaseResolveSource(state, source);
+  if (!resolved) return 0;
+  if (resolved.kind === 'goal') {
+    if (geodeGoalHasPositiveLinkedInvestmentForState(state, resolved.entity)) return 0;
+    return geodeGoalEffectiveSavedFromState(state, resolved.entity);
+  }
+  return toNum(resolved.entity.balance);
+}
+
+function geodeSavingsReleaseEligibility(state, source, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var out = {
+    eligible: false,
+    sourceType: 'unknown',
+    sourceId: '',
+    sourceName: '',
+    availableBalance: 0,
+    confirmedBase: 0,
+    reasonCodes: [],
+    shadowOnly: true
+  };
+  var resolved = geodeSavingsReleaseResolveSource(state, source);
+  if (!resolved) {
+    out.reasonCodes.push('source_not_found');
+    return out;
+  }
+  out.sourceType = geodeSavingsReleaseSourceType(state, resolved);
+  out.sourceId = resolved.id;
+  out.sourceName = resolved.name;
+  if (resolved.kind === 'goal' && geodeGoalHasPositiveLinkedInvestmentForState(state, resolved.entity)) {
+    out.reasonCodes.push('use_linked_investment_row');
+    return out;
+  }
+  out.availableBalance = geodeSavingsReleaseAvailableBalance(state, resolved);
+  if (resolved.kind === 'goal') {
+    out.confirmedBase = toNum(resolved.entity.baseSaved);
+    if (out.confirmedBase === 0 && resolved.entity.baseSaved === undefined) {
+      out.confirmedBase = toNum(resolved.entity.saved);
+    }
+  } else {
+    out.confirmedBase = toNum(resolved.entity.baseBalance);
+    if (out.confirmedBase === 0 && resolved.entity.baseBalance === undefined) {
+      out.confirmedBase = toNum(resolved.entity.balance);
+    }
+  }
+  if (out.availableBalance <= 0) {
+    out.reasonCodes.push('zero_available');
+    return out;
+  }
+  out.eligible = true;
+  return out;
+}
+
+function geodePreviewSavingsRelease(state, source, amount, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var out = {
+    amount: 0,
+    applicable: false,
+    sourceType: 'unknown',
+    sourceId: '',
+    sourceName: '',
+    availableBefore: 0,
+    remainingAfter: null,
+    netWorthBefore: null,
+    netWorthAfter: null,
+    monthlyLeftBefore: null,
+    monthlyLeftAfter: null,
+    monthlyLeftUnchanged: true,
+    reasonCodes: [],
+    shadowOnly: true
+  };
+  var elig = geodeSavingsReleaseEligibility(state, source, opts);
+  out.sourceType = elig.sourceType;
+  out.sourceId = elig.sourceId;
+  out.sourceName = elig.sourceName;
+  if (!elig.eligible) {
+    out.reasonCodes = elig.reasonCodes.slice();
+    return out;
+  }
+  var amt = toNum(amount);
+  out.availableBefore = Math.round(elig.availableBalance * 100) / 100;
+  if (amt <= 0) {
+    out.reasonCodes.push('zero_amount');
+    return out;
+  }
+  if (amt > out.availableBefore) {
+    out.reasonCodes.push('amount_capped');
+    amt = out.availableBefore;
+  }
+  out.amount = Math.round(amt * 100) / 100;
+  out.remainingAfter = Math.round((out.availableBefore - out.amount) * 100) / 100;
+  var fig = geodeSnapshotFiguresFromState(state);
+  var left = calcMonthlyLeftover(state);
+  out.netWorthBefore = Math.round(fig.netWorth * 100) / 100;
+  out.netWorthAfter = Math.round((fig.netWorth - amt) * 100) / 100;
+  out.monthlyLeftBefore = left;
+  out.monthlyLeftAfter = left;
+  out.applicable = true;
+  return out;
+}
+
+function geodeSavingsReleaseSourcesSnapshot(state, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var rows = [];
+  var reasonCodes = [];
+  var goals = state.goals || [];
+  var invs = state.investments || [];
+  var gi;
+  for (gi = 0; gi < goals.length; gi++) {
+    var g = goals[gi];
+    if (!g || !g.id) continue;
+    if (geodeGoalHasPositiveLinkedInvestmentForState(state, g)) continue;
+    var gSrc = { kind: 'goal', id: g.id };
+    var gElig = geodeSavingsReleaseEligibility(state, gSrc, opts);
+    rows.push({
+      kind: 'goal',
+      sourceId: g.id,
+      sourceName: String(g.name || ''),
+      eligibility: gElig
+    });
+  }
+  var ii;
+  for (ii = 0; ii < invs.length; ii++) {
+    var inv = invs[ii];
+    if (!inv || !inv.id) continue;
+    var iSrc = { kind: 'investment', id: inv.id };
+    var iElig = geodeSavingsReleaseEligibility(state, iSrc, opts);
+    rows.push({
+      kind: 'investment',
+      sourceId: inv.id,
+      sourceName: String(inv.name || ''),
+      linkedGoalId: String(inv.goalId || ''),
+      eligibility: iElig
+    });
+  }
+  if (!rows.length) reasonCodes.push('no_sources');
+  var eligibleCount = 0;
+  var ri;
+  for (ri = 0; ri < rows.length; ri++) {
+    if (rows[ri].eligibility && rows[ri].eligibility.eligible) eligibleCount++;
+  }
+  if (rows.length && eligibleCount === 0) reasonCodes.push('no_eligible_sources');
+  return {
+    version: 1,
+    generatedAt: opts.generatedAt != null ? opts.generatedAt : null,
+    rowCount: rows.length,
+    eligibleCount: eligibleCount,
+    rows: rows,
+    reasonCodes: reasonCodes,
+    audit: {
+      shadowOnly: true,
+      sideEffects: [],
+      note: 'Preview only — does not mutate balances, Monthly Left, or net worth.'
+    }
+  };
+}
+
+function geodeSavingsReleaseSnapshot(state, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var left = calcMonthlyLeftover(state);
+  var over = left < 0;
+  var sources = geodeSavingsReleaseSourcesSnapshot(state, opts);
+  var fig = geodeSnapshotFiguresFromState(state);
+  var snapshot = {
+    version: 1,
+    generatedAt: opts.generatedAt != null ? opts.generatedAt : null,
+    ym: currentYM(),
+    cashFlow: {
+      monthlyLeft: left,
+      overBudget: over,
+      amountOver: over ? Math.round(Math.abs(left) * 100) / 100 : 0
+    },
+    netWorth: {
+      before: Math.round(fig.netWorth * 100) / 100,
+      totalSaved: Math.round(fig.totalSaved * 100) / 100,
+      totalInvestments: Math.round(fig.totalInvestments * 100) / 100,
+      totalDebt: Math.round(fig.totalDebt * 100) / 100
+    },
+    sources: sources,
+    reasonCodes: sources.reasonCodes.slice(),
+    audit: {
+      shadowOnly: true,
+      sideEffects: [],
+      note: 'Release preview model only. Monthly Left unchanged by preview; apply build reduces base balances later.'
+    }
+  };
+
+  try {
+    window._geodeSavingsReleaseSnapshot = snapshot;
+    window._geodePreviewSavingsRelease = geodePreviewSavingsRelease;
+    window._geodeSavingsReleaseSourceType = geodeSavingsReleaseSourceType;
+    window._geodeSavingsReleaseEligibility = geodeSavingsReleaseEligibility;
+  } catch (_eSrWin) {}
+
+  return snapshot;
+}
+
+/** Stage 81D-3: parse modal source select value → { kind, id }. */
+function geodeSavingsReleaseParseSourceKey(key) {
+  var parts = String(key || '').split(':');
+  if (parts.length < 2) return null;
+  var kind = parts[0];
+  var id = parts.slice(1).join(':');
+  if ((kind !== 'goal' && kind !== 'investment') || !id) return null;
+  return { kind: kind, id: id };
+}
+
+function geodeSavingsReleaseReasonLabel(reason) {
+  var r = String(reason || '');
+  if (r === 'overbudget') return 'Tight month / over budget';
+  if (r === 'essential') return 'Essential need';
+  if (r === 'emergency') return 'Emergency';
+  if (r === 'planned_use') return 'Planned use';
+  return 'Other';
+}
+
+function geodeSavingsReleaseSourceSelectLabel(row) {
+  if (!row || !row.eligibility || !row.eligibility.eligible) return '';
+  var elig = row.eligibility;
+  var tag = elig.sourceType === 'buffer' ? 'Buffer' : elig.sourceType === 'linked_investment' ? 'Linked investment' : elig.sourceType === 'investment' ? 'Investment' : 'Goal';
+  return String(row.sourceName || tag) + ' (' + fm(elig.availableBalance) + ' available)';
+}
+
+/** Stage 81D-3: apply a user-confirmed savings release (base fields only; Monthly Left unchanged). */
+function geodeApplySavingsRelease(event) {
+  event = event && typeof event === 'object' ? event : {};
+  var sourceId = String(event.sourceId || '');
+  var sourceType = String(event.sourceType || '');
+  var rawAmt = toNum(event.amount);
+  if (!sourceId || rawAmt <= 0) return { ok: false, reason: 'invalid_input' };
+
+  var kind = sourceType === 'investment' || sourceType === 'linked_investment' ? 'investment' : 'goal';
+  var src = { kind: kind, id: sourceId };
+  var elig = geodeSavingsReleaseEligibility(S, src);
+  if (!elig.eligible) return { ok: false, reason: (elig.reasonCodes && elig.reasonCodes[0]) || 'ineligible' };
+
+  var cap = Math.round(elig.availableBalance * 100) / 100;
+  var amt = Math.min(Math.round(rawAmt * 100) / 100, cap);
+  if (amt <= 0) return { ok: false, reason: 'zero_amount' };
+
+  var resolved = geodeSavingsReleaseResolveSource(S, src);
+  if (!resolved) return { ok: false, reason: 'source_not_found' };
+
+  setLastSnapshotBeforeChange();
+
+  if (resolved.kind === 'goal') {
+    var g = resolved.entity;
+    if (g.baseSaved === undefined) g.baseSaved = toNum(g.saved);
+    g.baseSaved = Math.max(0, Math.round((toNum(g.baseSaved) - amt) * 100) / 100);
+  } else {
+    var inv = resolved.entity;
+    if (inv.baseBalance === undefined) inv.baseBalance = toNum(inv.balance);
+    inv.baseBalance = Math.max(0, Math.round((toNum(inv.baseBalance) - amt) * 100) / 100);
+  }
+
+  geodeRecomputeBalancesFromPayments();
+
+  var remaining = Math.round(geodeSavingsReleaseAvailableBalance(S, src) * 100) / 100;
+  var ym = currentYM();
+  var releaseRecord = {
+    id: String(event.id || uid()),
+    sourceType: sourceType || elig.sourceType,
+    sourceId: sourceId,
+    amount: amt,
+    reason: String(event.reason || 'manual'),
+    date: String(event.date || geodeTodayLocalISO()).slice(0, 10),
+    ym: String(event.ym || ym),
+    relatedYm: String(event.relatedYm || ym),
+    remainingBalance: remaining,
+    createdAt: typeof event.createdAt === 'number' ? event.createdAt : Date.now(),
+    confirmedByUser: event.confirmedByUser !== false,
+    note: String(event.note || '')
+  };
+
+  if (!S.savingsReleases || !Array.isArray(S.savingsReleases)) S.savingsReleases = [];
+  S.savingsReleases.push(releaseRecord);
+
+  appendActivityLog('savings_release', -amt, {
+    sourceType: releaseRecord.sourceType,
+    sourceId: releaseRecord.sourceId,
+    sourceName: elig.sourceName,
+    reason: releaseRecord.reason,
+    releaseId: releaseRecord.id,
+    relatedYm: releaseRecord.relatedYm
+  });
+
+  save();
+  render();
+  return { ok: true, event: releaseRecord };
+}
+
+function geodeSavingsReleaseReadModalUi() {
+  var srcKey = String(((document.getElementById('geode-sr-source') || {}).value) || '');
+  var source = geodeSavingsReleaseParseSourceKey(srcKey);
+  var amRaw = (document.getElementById('geode-sr-amount') || {}).value;
+  var amount = amRaw === '' || amRaw == null ? 0 : toNum(amRaw);
+  var reason = String(((document.getElementById('geode-sr-reason') || {}).value) || 'overbudget');
+  var note = String(((document.getElementById('geode-sr-note') || {}).value) || '').trim();
+  return { source: source, amount: amount, reason: reason, note: note };
+}
+
+function geodeSavingsReleasePreviewBlockHtml(preview, monthlyLeft) {
+  var hostOpen =
+    '<div id="geode-sr-preview-host" data-geode-css="margin:12px 0 4px;padding:10px 11px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid var(--bd)">';
+  var hostClose = '</div>';
+  if (!preview || !preview.applicable) {
+    return (
+      hostOpen +
+      '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.2px;color:rgba(189,183,220,0.65);text-transform:uppercase;margin-bottom:6px">Preview</div>' +
+      '<div data-geode-css="font-size:11px;color:rgba(237,234,255,0.78);line-height:1.45">Choose a source and enter an amount to see how this release affects your saved balance.</div>' +
+      hostClose
+    );
+  }
+  var h = hostOpen;
+  h += '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.2px;color:rgba(189,183,220,0.65);text-transform:uppercase;margin-bottom:6px">Preview</div>';
+  if (preview.reasonCodes && preview.reasonCodes.indexOf('amount_capped') >= 0) {
+    h +=
+      '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:8px">Available balance: ' +
+      escHtmlLite(fm(preview.availableBefore)) +
+      '. Amount adjusted to what\u2019s available.</div>';
+  } else if (preview.availableBefore > 0) {
+    h +=
+      '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin-bottom:8px">Available: ' +
+      escHtmlLite(fm(preview.availableBefore)) +
+      '</div>';
+  }
+  h +=
+    '<div data-geode-css="font-size:12px;color:var(--tx-1);line-height:1.5;margin-bottom:4px"><span data-geode-css="color:var(--tx-3)">Amount released</span> ' +
+    escHtmlLite(fm(preview.amount)) +
+    '</div>';
+  h +=
+    '<div data-geode-css="font-size:12px;color:var(--tx-1);line-height:1.5;margin-bottom:4px"><span data-geode-css="color:var(--tx-3)">Remaining balance</span> ' +
+    escHtmlLite(fm(preview.remainingAfter)) +
+    '</div>';
+  if (preview.netWorthBefore != null && preview.netWorthAfter != null) {
+    h +=
+      '<div data-geode-css="font-size:12px;color:var(--tx-1);line-height:1.5;margin-bottom:4px"><span data-geode-css="color:var(--tx-3)">Net worth</span> ' +
+      escHtmlLite(fm(preview.netWorthBefore) + ' \u2192 ' + fm(preview.netWorthAfter)) +
+      '</div>';
+  }
+  if (monthlyLeft < 0 && preview.amount > 0) {
+    var pressure = Math.abs(monthlyLeft);
+    var covered = Math.min(preview.amount, pressure);
+    var remainingPressure = Math.max(0, pressure - preview.amount);
+    h +=
+      '<div data-geode-css="font-size:12px;color:var(--tx-1);line-height:1.5;margin-top:8px"><span data-geode-css="color:var(--tx-3)">Pressure covered</span> ' +
+      escHtmlLite(fm(covered)) +
+      '</div>';
+    h +=
+      '<div data-geode-css="font-size:12px;color:var(--tx-1);line-height:1.5;margin-bottom:4px"><span data-geode-css="color:var(--tx-3)">Remaining pressure</span> ' +
+      escHtmlLite(fm(remainingPressure)) +
+      '</div>';
+    if (remainingPressure > 0) {
+      h +=
+        '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:6px">This helped cover a tight month. Savings are sometimes there to be used.</div>';
+    }
+  }
+  if (preview.sourceType === 'linked_investment') {
+    h +=
+      '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45;margin-top:6px">This goal is linked to an investment balance, so the release is recorded against the investment.</div>';
+  }
+  h +=
+    '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin-top:8px">Your saved balance will reduce. This does not change your income or spending lines.</div>';
+  h += hostClose;
+  return h;
+}
+
+function geodeSavingsReleaseModalImpactRefresh() {
+  var host = document.getElementById('geode-sr-preview-host');
+  if (!host) return;
+  var ui = geodeSavingsReleaseReadModalUi();
+  var monthlyLeft = calcMonthlyLeftover(S);
+  if (!ui.source) {
+    host.outerHTML = geodeSavingsReleasePreviewBlockHtml(null, monthlyLeft);
+    return;
+  }
+  var preview = geodePreviewSavingsRelease(S, ui.source, ui.amount);
+  host.outerHTML = geodeSavingsReleasePreviewBlockHtml(preview, monthlyLeft);
+}
+
+function geodeConfirmSavingsRelease() {
+  var ui = geodeSavingsReleaseReadModalUi();
+  if (!ui.source) {
+    toast('Choose a source to release from.', 'warn');
+    return;
+  }
+  var preview = geodePreviewSavingsRelease(S, ui.source, ui.amount);
+  if (!preview.applicable || preview.amount <= 0) {
+    toast('Enter an amount to release.', 'warn');
+    return;
+  }
+  var result = geodeApplySavingsRelease({
+    sourceType: preview.sourceType,
+    sourceId: preview.sourceId,
+    amount: preview.amount,
+    reason: ui.reason,
+    note: ui.note,
+    relatedYm: currentYM(),
+    confirmedByUser: true
+  });
+  if (!result.ok) {
+    toast('Could not record release.', 'warn');
+    return;
+  }
+  closeModal();
+  toast('Recorded. Your saved balance now reflects what you used.', 'ok');
+}
+
+function geodeOpenSavingsReleaseModal() {
+  var snap = geodeSavingsReleaseSnapshot(S);
+  var rows = (snap.sources && snap.sources.rows) || [];
+  var eligible = [];
+  var ri;
+  for (ri = 0; ri < rows.length; ri++) {
+    if (rows[ri].eligibility && rows[ri].eligibility.eligible) eligible.push(rows[ri]);
+  }
+  var monthlyLeft = calcMonthlyLeftover(S);
+  var overAmt = monthlyLeft < 0 ? Math.abs(monthlyLeft) : 0;
+  var escOpt = function (s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/"/g, '&quot;');
+  };
+
+  var h = mh('Release from savings');
+  h +=
+    '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin:-6px 0 12px">Savings are sometimes there to be used. This reduces your saved balance. It does not change your income or spending lines.</div>';
+
+  if (!eligible.length) {
+    h +=
+      '<div data-geode-css="font-size:12px;color:var(--tx-2);line-height:1.5;margin-bottom:14px">No saved balances are available to release from right now.</div>' +
+      '<button type="button" class="btn btn-s" onclick="closeModal()">Close</button>';
+    openModal(h);
+    return;
+  }
+
+  var defKey = eligible[0].kind + ':' + eligible[0].sourceId;
+  var defAvail = eligible[0].eligibility.availableBalance;
+  var defAmt = overAmt > 0 ? Math.min(overAmt, defAvail) : defAvail;
+  defAmt = Math.round(defAmt * 100) / 100;
+
+  h += '<div class="field"><label>Release from</label><select id="geode-sr-source" class="fi" onchange="try{geodeSavingsReleaseModalImpactRefresh()}catch(e){}">';
+  for (ri = 0; ri < eligible.length; ri++) {
+    var row = eligible[ri];
+    var key = row.kind + ':' + row.sourceId;
+    h +=
+      '<option value="' +
+      escOpt(key) +
+      '"' +
+      (key === defKey ? ' selected' : '') +
+      '>' +
+      escOpt(geodeSavingsReleaseSourceSelectLabel(row)) +
+      '</option>';
+  }
+  h += '</select></div>';
+
+  h +=
+    '<div class="field"><label>Amount (' +
+    S.cur.code +
+    ')</label><input type="number" id="geode-sr-amount" class="fi" min="0" step="0.01" value="' +
+    defAmt +
+    '" oninput="try{geodeSavingsReleaseModalImpactRefresh()}catch(e){}" /></div>';
+
+  h += '<div class="field"><label>Reason</label><select id="geode-sr-reason" class="fi">';
+  h += '<option value="overbudget"' + (overAmt > 0 ? ' selected' : '') + '>Tight month / over budget</option>';
+  h += '<option value="essential">Essential need</option>';
+  h += '<option value="emergency">Emergency</option>';
+  h += '<option value="planned_use">Planned use</option>';
+  h += '<option value="manual">Other</option>';
+  h += '</select></div>';
+
+  h +=
+    '<div class="field"><label>Note (optional)</label><input type="text" id="geode-sr-note" class="fi" placeholder="Optional context" maxlength="120" /></div>';
+
+  h += geodeSavingsReleasePreviewBlockHtml(
+    geodePreviewSavingsRelease(S, geodeSavingsReleaseParseSourceKey(defKey), defAmt),
+    monthlyLeft
+  );
+
+  h +=
+    '<button type="button" class="btn btn-p" onclick="geodeConfirmSavingsRelease()">Confirm release</button>' +
+    '<button type="button" class="btn btn-s" onclick="closeModal()">Cancel</button>';
+
+  openModal(h);
+  setTimeout(function () {
+    try {
+      geodeSavingsReleaseModalImpactRefresh();
+    } catch (_eSrRf) {}
+  }, 0);
 }
 
 function currentYM() {
@@ -7333,6 +7954,78 @@ function getFirstEmergencyGoal(state) {
   return null;
 }
 
+/**
+ * Stage 81D-3.5: ensure buffer-like contributions link to a real emergency goal (future payments only).
+ * Creates emergency goal when none exists; reuses getFirstEmergencyGoal when safe.
+ */
+function geodeEnsureEmergencyBufferGoalForPayment(state, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var out = {
+    applied: false,
+    goalId: '',
+    created: false,
+    linkedExisting: false,
+    reasonCodes: []
+  };
+  if (!state) {
+    out.reasonCodes.push('no_state');
+    return out;
+  }
+  var paymentName = String(opts.paymentName || opts.name || '');
+  var isBuffer =
+    opts.bufferContribution === true ||
+    opts.fromBufferContribution === true ||
+    geodePaymentNameLooksLikeBuffer(paymentName);
+  if (!isBuffer) {
+    out.reasonCodes.push('not_buffer_payment');
+    return out;
+  }
+  if (opts.goalId) {
+    out.goalId = String(opts.goalId);
+    out.reasonCodes.push('already_linked');
+    return out;
+  }
+  if (opts.investId || opts.debtId) {
+    out.reasonCodes.push('other_link');
+    return out;
+  }
+
+  var existing = getFirstEmergencyGoal(state);
+  if (existing && existing.id) {
+    if (geodeGoalHasPositiveLinkedInvestmentForState(state, existing)) {
+      out.reasonCodes.push('linked_investment_goal');
+      return out;
+    }
+    out.goalId = String(existing.id);
+    out.linkedExisting = true;
+    out.applied = true;
+    return out;
+  }
+
+  if (!state.goals || !Array.isArray(state.goals)) state.goals = [];
+  var monthlyExp = geodeMonthlyExpenseTotal(state);
+  var targetAmt = monthlyExp > 0 ? Math.round(monthlyExp * 3 * 100) / 100 : 0;
+  var newId = uid();
+  var isFirst = state.goals.length === 0;
+  state.goals.push({
+    id: newId,
+    name: 'Emergency buffer',
+    amount: targetAmt,
+    saved: 0,
+    baseSaved: 0,
+    monthly: 0,
+    targetDate: null,
+    cat: 'emergency',
+    isPrimary: isFirst,
+    col: rc()
+  });
+  out.goalId = newId;
+  out.created = true;
+  out.applied = true;
+  return out;
+}
+
 /** Sum of monthly expense line items (display / readiness only — does not change plan math). */
 function geodeMonthlyExpenseTotal(state) {
   state = state || S;
@@ -7527,33 +8220,100 @@ function geodeApplyBufferReadinessToSuggestedActions(actions) {
       });
       continue;
     }
-    if (st === 'BUFFER_ESTIMATABLE') {
-      var b1 = Object.assign({}, a);
-      b1.title = 'Start building your estimated safety buffer';
-      b1.subtitle = 'Based on your monthly expenses';
-      b1._bufferReadiness = 'BUFFER_ESTIMATABLE';
-      out.push(b1);
-      continue;
-    }
-    if (st === 'BUFFER_IN_PROGRESS_ESTIMATED') {
-      var b1e = Object.assign({}, a);
-      b1e.title = 'Continue building your estimated safety buffer';
-      b1e.subtitle = 'You\u2019ve already started — keep going';
-      b1e._bufferReadiness = 'BUFFER_IN_PROGRESS_ESTIMATED';
-      out.push(b1e);
-      continue;
-    }
-    if (st === 'BUFFER_IN_PROGRESS') {
-      var b2 = Object.assign({}, a);
-      b2.title = 'Continue building your safety buffer';
-      b2.subtitle = 'Keep adding to your emergency fund';
-      b2._bufferReadiness = 'BUFFER_IN_PROGRESS';
-      out.push(b2);
-      continue;
-    }
-    out.push(a);
+    var bc = geodeBufferActionCopy(S);
+    var bx = Object.assign({}, a);
+    bx.title = bc.cardTitle;
+    bx.subtitle = bc.cardSub;
+    bx._bufferReadiness = st;
+    out.push(bx);
   }
   return out;
+}
+
+/** Stage 81D-3.7: display-only — unpaid buffer contribution scheduled this month (not plan math). */
+function geodeBufferHasScheduledUnpaidBuffer(state) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  if (!state) return false;
+  var eg = getFirstEmergencyGoal(state);
+  var egId = eg ? String(eg.id || '') : '';
+  var pay = state.payments || [];
+  for (var i = 0; i < pay.length; i++) {
+    var p = pay[i];
+    if (!p || p.status === 'paid') continue;
+    var pst = geodePaymentEffectiveStatus(p);
+    if (pst !== 'upcoming' && pst !== 'overdue') continue;
+    if (!paymentCountsForMonthlyOutflowDisplay(p)) continue;
+    if (egId && String(p.goalId || '') === egId) return true;
+    if (geodePaymentNameLooksLikeBuffer(p.name)) return true;
+  }
+  return false;
+}
+
+/**
+ * Stage 81D-3.7: state-aware buffer action copy (display only; no plan/payment math).
+ * Two-stage journey: add emergency buffer goal, then contribute until adequate.
+ */
+function geodeBufferActionCopy(state) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var readiness = geodeGetBufferReadinessState(state);
+  var eg = getFirstEmergencyGoal(state);
+  var hasGoal = !!(eg && eg.id);
+  var scheduled = geodeBufferHasScheduledUnpaidBuffer(state);
+  var out = {
+    readiness: readiness,
+    hasGoal: hasGoal,
+    hasScheduled: scheduled,
+    headline: 'Add your emergency buffer',
+    cta: 'Add emergency buffer',
+    cardTitle: 'Add your emergency buffer',
+    cardSub: 'Creates a buffer for unexpected expenses.',
+    planPartialHeadline: 'Your buffer is a layer of stability worth building',
+    planDefaultHeadline: 'Add your emergency buffer',
+    mainSub: 'Your plan points here before longer-term goals.',
+    modalHeading: 'Add emergency buffer'
+  };
+  if (hasGoal) {
+    out.headline = scheduled ? 'Your buffer is still building' : 'Build your emergency buffer';
+    out.cta = scheduled ? 'Add to buffer' : 'Contribute to buffer';
+    out.cardTitle = out.headline;
+    out.cardSub = scheduled
+      ? 'You have a contribution scheduled this month.'
+      : 'Keep adding to your emergency buffer.';
+    out.planPartialHeadline = scheduled ? 'Your buffer is still building' : 'Your buffer is a layer of stability worth building';
+    out.planDefaultHeadline = out.headline;
+    out.mainSub = scheduled
+      ? 'Your scheduled contribution counts toward this step.'
+      : 'Keep building your emergency buffer toward your target.';
+    out.modalHeading = scheduled ? 'Add to buffer' : 'Contribute to buffer';
+  } else if (readiness === 'BUFFER_IN_PROGRESS_ESTIMATED') {
+    out.headline = scheduled ? 'Your buffer is still building' : 'Build your emergency buffer';
+    out.cta = scheduled ? 'Add to buffer' : 'Add emergency buffer';
+    out.cardTitle = scheduled ? 'Your buffer is still building' : 'Continue building your estimated safety buffer';
+    out.cardSub = scheduled
+      ? 'You have a contribution scheduled this month.'
+      : 'You\u2019ve already started. Keep going.';
+    out.planDefaultHeadline = out.headline;
+    out.planPartialHeadline = scheduled ? 'Your buffer is still building' : 'Your buffer is a layer of stability worth building';
+    out.mainSub = scheduled
+      ? 'Your scheduled contribution counts toward this step.'
+      : 'Estimated from your spending. Keep the momentum.';
+    out.modalHeading = scheduled ? 'Add to buffer' : 'Add emergency buffer';
+  } else if (readiness === 'BUFFER_ESTIMATABLE') {
+    out.cardSub = 'Based on your monthly expenses.';
+    out.planDefaultHeadline = 'Add your emergency buffer';
+  }
+  return out;
+}
+
+/** Display-only: plan-money afford gate recognises buffer CTAs (Stage 81D-3.7). */
+function geodeIsBufferMoneyAffordCta(cta) {
+  var c = String(cta || '').trim();
+  return (
+    c === 'Plan a buffer contribution' ||
+    c === 'Add emergency buffer' ||
+    c === 'Contribute to buffer' ||
+    c === 'Add to buffer'
+  );
 }
 
 /** Sum of all investment balances (incl. goal-linked). Net worth / snapshots use geodeUnlinkedInvestmentBalance. */
@@ -14803,9 +15563,10 @@ function geodeOrchestrationSnapshotV2(state, opts) {
         out.cta = 'Schedule extra payment';
         out.runIntent = v2MainActionIntent('money', 'schedule_debt_extra');
       } else if (lb === 'Build your emergency fund') {
+        var bcV2 = geodeBufferActionCopy(st0);
         out.kind = 'buffer';
-        out.title = lb;
-        out.cta = 'Plan a buffer contribution';
+        out.title = bcV2.headline;
+        out.cta = bcV2.cta;
         out.runIntent = v2MainActionIntent('money', 'schedule_buffer');
       } else if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
         out.kind = 'goal';
@@ -18325,11 +19086,6 @@ function getMonthPlan() {
   // - Goal catch-up before investing if off track
   // - Investing last
 
-  var hasEmergency = false;
-  for (var i = 0; i < S.goals.length; i++) {
-    if (geodeIsEmergencyBufferGoal(S.goals[i])) { hasEmergency = true; break; }
-  }
-
   // Step 1: High-interest debt overpayment
   var worstDebt = selectWorstHighAprDebt(S.debts, 10);
   if (worstDebt && budget > 50) {
@@ -18380,14 +19136,33 @@ function getMonthPlan() {
     budget -= overpay;
   }
 
-  // Step 2: Emergency fund (if missing) before investing
-  // Only show if no emergency fund goal exists and budget still has remainder
-  // Cap so later steps (goal recovery, investing) can still use remaining budget.
-  if (!hasEmergency && budget > 0 && steps.length < 4) {
+  // Step 2: Emergency fund before investing — while buffer is not adequate (Stage 81D-3.6).
+  // Goal existence alone is not enough; align with geodeGetBufferReadinessState and cap by target minus saved/scheduled.
+  var bufferNeedsPlanStep = geodeGetBufferReadinessState(S) !== 'BUFFER_COMPLETE';
+  if (bufferNeedsPlanStep && budget > 0 && steps.length < 4) {
     var remainingEmergencyNeeded = Infinity;
-    for (var ei = 0; ei < S.goals.length; ei++) {
-      if (geodeIsEmergencyBufferGoal(S.goals[ei])) {
-        remainingEmergencyNeeded = Math.min(remainingEmergencyNeeded, Math.max(0, toNum(S.goals[ei].amount) - toNum(S.goals[ei].saved)));
+    var egPlan = getFirstEmergencyGoal(S);
+    if (egPlan) {
+      var svPlan = geodeGoalEffectiveSavedFromState(S, egPlan);
+      var tgtPlan = toNum(egPlan.amount);
+      if (tgtPlan <= 0) {
+        var moPlan = geodeMonthlyExpenseTotal(S);
+        if (moPlan > 0) tgtPlan = Math.round(moPlan * 3 * 100) / 100;
+      }
+      if (tgtPlan > 0) {
+        var schedBufPlan = 0;
+        var payPlan = S.payments || [];
+        var egIdPlan = String(egPlan.id || '');
+        for (var sbi = 0; sbi < payPlan.length; sbi++) {
+          var sbp = payPlan[sbi];
+          if (!sbp || sbp.status === 'paid') continue;
+          var sbst = geodePaymentEffectiveStatus(sbp);
+          if (sbst !== 'upcoming' && sbst !== 'overdue') continue;
+          if (!paymentCountsForMonthlyOutflowDisplay(sbp)) continue;
+          if (egIdPlan && String(sbp.goalId || '') === egIdPlan) schedBufPlan += toNum(sbp.amount);
+          else if (geodePaymentNameLooksLikeBuffer(sbp.name)) schedBufPlan += toNum(sbp.amount);
+        }
+        remainingEmergencyNeeded = Math.max(0, tgtPlan - svPlan - schedBufPlan);
       }
     }
     var budgetBeforeEf = budget;
@@ -19030,7 +19805,9 @@ function geodePlanPageStepTitle(step, prog) {
   }
   if (lb === 'Build your emergency fund') {
     if (ph === 'done') return 'Safety buffer';
-    return 'Build your safety buffer';
+    var bcPt = geodeBufferActionCopy(S);
+    if (ph === 'partial') return bcPt.planPartialHeadline;
+    return bcPt.planDefaultHeadline;
   }
   if (lb.indexOf('Restart progress on ') === 0) {
     var g1 = lb.slice('Restart progress on '.length).trim();
@@ -20055,6 +20832,7 @@ function geodeOverBudgetPlanBlockHtml(left) {
 
   // Primary CTA
   h += '<button type="button" class="btn btn-p btn--block-spaced" onclick="msub=\'expenses\';goTab(\'money\')">Edit monthly spending</button>';
+  h += '<button type="button" class="btn btn-s btn--block-spaced" onclick="geodeOpenSavingsReleaseModal()">Use saved money</button>';
 
   // Show plan steps collapsed — so user can see what's coming when fixed
   h += '<details class="collapsed-steps">';
@@ -21323,10 +22101,8 @@ function geodeHomeActionCardCopy(a) {
     });
   }
   if (a.type === 'buffer_contribution') {
-    return geodeCopy('suggestedActions.homeCardCopy.buffer_contribution', {
-      title: 'Build your safety buffer',
-      sub: 'Creates a buffer for unexpected expenses.'
-    });
+    var bcCard = geodeBufferActionCopy(S);
+    return { title: bcCard.cardTitle, sub: bcCard.cardSub };
   }
   if (a.type === 'goal_contribution') {
     var gn = a.targetName ? String(a.targetName).trim() : '';
@@ -21698,7 +22474,7 @@ function geodeHomePlanStepRibbonTitle(step, prog) {
   }
   if (lb === 'Build your emergency fund') {
     if (ph === 'done') return 'Next plan step';
-    return 'Your buffer may be the next layer of stability';
+    return geodeBufferActionCopy(S).planDefaultHeadline;
   }
   if (lb.indexOf('Restart progress on ') === 0) {
     var r1 = lb.slice('Restart progress on '.length).trim();
@@ -21745,12 +22521,13 @@ function geodePlanStepDisplayTitle(step, prog) {
     return nm ? nm + ' is costing the most in interest' : 'Your highest-interest debt is the one to watch';
   }
   if (lb === 'Build your emergency fund') {
+    var bcDisp = geodeBufferActionCopy(S);
     if (prog && prog.phase === 'done')
       return sk === 'growth'
         ? 'Buffer step completed \u2014 growth stays next'
         : 'Buffer plan step completed this month';
-    if (prog && prog.phase === 'partial') return 'Your buffer is a layer of stability worth building';
-    return sk === 'debt' ? 'Your buffer may be the next layer of stability' : 'Your buffer may be the next layer of stability';
+    if (prog && prog.phase === 'partial') return bcDisp.planPartialHeadline;
+    return bcDisp.planDefaultHeadline;
   }
   if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
     var rest = lb.indexOf('Restart') === 0 ? lb.slice('Restart progress on '.length).trim() : lb.slice('Catch up on '.length).trim();
@@ -21788,7 +22565,7 @@ function geodeMainActionSubForStep(step, prog, mainKind) {
     return 'Extra payments here reduce interest fastest in your plan.';
   }
   if (lb === 'Build your emergency fund') {
-    return 'Your plan points here before longer-term goals.';
+    return geodeBufferActionCopy(S).mainSub;
   }
   if (lb === 'Invest what remains') {
     return 'After earlier plan steps, review what is left.';
@@ -21898,13 +22675,20 @@ function geodeMainActionFromPriorityStep(state, p1, prog) {
     return {
       title: bufTitle,
       amount: payAmt,
-      cta: 'Plan a buffer contribution',
+      cta: geodeBufferActionCopy(state).cta,
       sub: bufSub,
       run: function () {
         msub = 'payments';
         goTab('money');
         var today = geodeTodayLocalISO();
-        openPayModal(null, { name: 'Emergency buffer', amount: payAmt, date: today, status: 'upcoming', rec: true });
+        openPayModal(null, {
+          name: 'Emergency buffer',
+          amount: payAmt,
+          date: today,
+          status: 'upcoming',
+          rec: true,
+          bufferContribution: true
+        });
       }
     };
   }
@@ -23479,7 +24263,7 @@ function geodeAffordGateBuildForPlanMoneyAction(amount, cta, sigFam) {
     var _moneyCta =
       _ctaAff === 'Schedule payment' ||
       _ctaAff === 'Schedule extra payment' ||
-      _ctaAff === 'Plan a buffer contribution' ||
+      geodeIsBufferMoneyAffordCta(_ctaAff) ||
       _ctaAff === 'Schedule contribution' ||
       _ctaAff === 'Plan a contribution' ||
       _ctaAff === 'Begin contributing' ||
@@ -23837,6 +24621,7 @@ function openSuggestedAction(idx) {
   } else if (a.type === 'buffer_contribution') {
     prefill.name = 'Emergency buffer';
     prefill.rec = true;
+    prefill.bufferContribution = true;
   }
   openPayModal(null, prefill);
 }
@@ -31883,6 +32668,9 @@ function rPayments(el) {
 function openPayModal(id, prefill) {
   var p = id ? S.payments.filter(function(x){ return x.id===id; })[0] : null;
   prefill = prefill && !p ? prefill : null;
+  try {
+    window._geodePayPrefillBufferContribution = p ? false : !!(prefill && prefill.bufferContribution === true);
+  } catch (_eBufPm) {}
   var escOpt = function(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   };
@@ -31900,7 +32688,13 @@ function openPayModal(id, prefill) {
   var defGid = p ? (p.goalId || '') : prefill ? String(prefill.goalId || '') : '';
   var defInv = p ? (p.investId || '') : prefill ? String(prefill.investId || '') : '';
   var defDebt = p ? (p.debtId || '') : prefill ? String(prefill.debtId || '') : '';
-  var h = mh(p ? 'Edit contribution' : 'Schedule contribution');
+  var payModalTitle = 'Schedule contribution';
+  if (!p && prefill && prefill.bufferContribution) {
+    try {
+      payModalTitle = geodeBufferActionCopy(S).modalHeading;
+    } catch (_eBufPmTit) {}
+  }
+  var h = mh(p ? 'Edit contribution' : payModalTitle);
   h +=
     '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin:-6px 0 10px">This schedules a contribution that affects your monthly cash flow.</div>';
   h += '<input type="hidden" id="geode_pay_edit_id" value="' + (p ? String(p.id).replace(/"/g, '&quot;') : '') + '" />';
@@ -32379,6 +33173,24 @@ function geodeSaveExpApply(id, nm, am, edRaw, cat, rec) {
   geodeSuccessToast(geodeStageLToastAfterSave(expMsg, 'expense', { _seed: Date.now() }));
 }
 function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, payKind, amtNum) {
+  var bufPrefill = false;
+  try {
+    bufPrefill = !!window._geodePayPrefillBufferContribution;
+  } catch (_eBufPf0) {}
+  if (!gid && !invid && !debtid && (!id || bufPrefill)) {
+    var bufEns = geodeEnsureEmergencyBufferGoalForPayment(S, {
+      paymentName: nm,
+      bufferContribution: bufPrefill
+    });
+    if (bufEns.applied && bufEns.goalId) {
+      gid = bufEns.goalId;
+      payKind = 'goal';
+    }
+  }
+  try {
+    window._geodePayPrefillBufferContribution = false;
+  } catch (_eBufPf1) {}
+
   setLastSnapshotBeforeChange();
   var userMsg = '';
   var directCtx = window._geodeDirectContribCtx || null;
@@ -34221,6 +35033,7 @@ function geodeBeyndBackupRestorableKeyWhitelist() {
     'archivedExpenses',
     'beyondStatement',
     'investments',
+    'savingsReleases',
     'snapshots',
     'lastSnapshot',
     'lastShownNudgeTopics',

@@ -87,6 +87,12 @@ See [`docs/stages/81/README.md`](./stages/81/README.md).
 - **81B-2** built locally — shadow `geodeEstimateDebtPrincipalApplied` + snapshot (no balance/net worth/UI wiring)
 - **81B-2.2** built locally — Debt Health compact inline + conditional display; Review button removed
 - **81B-2.3** built locally — debt card one factual line only; provider narrative in Edit Debt modal
+- **81D-2** built locally — shadow savings release eligibility + preview (no apply/storage/UI)
+- **81D-3** built locally — savings release confirmation sheet; Plan overbudget **Use saved money**; `S.savingsReleases[]` + `activityLog`; Monthly Left unchanged on release
+- **81D-3.1** built locally — `savingsReleases` on backup whitelist; Savings Release copy em-dash compliance
+- **81D-3.5** built locally — buffer contributions auto-create or link emergency goal on save (forward-only; no backfill)
+- **81D-3.6** built locally — Plan buffer step uses adequacy gate (fixes 81D-3.5 Plan regression)
+- **81D-3.7** built locally — state-aware buffer action copy (add vs contribute; copy only)
 
 ---
 

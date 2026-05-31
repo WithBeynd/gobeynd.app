@@ -197,7 +197,76 @@ Do not inject full JSON snapshot into Ask Beynd context.
 
 **Shadow-only — no card UI.** No Home/Plan/Reflection/Ask wiring; no persisting `estimatedPrincipalApplied` on payment completion.
 
-**Docs:** [`docs/stages/81/README.md`](./stages/81/README.md).
+## Savings release shadow model (Stage 81D-2)
+
+**Read-only helpers** — identify eligible release sources and preview impact without mutating balances, Monthly Left, or net worth.
+
+- **`geodeSavingsReleaseSourceType(state, source)`** — `buffer` | `goal` | `investment` | `linked_investment`
+- **`geodeSavingsReleaseEligibility`**, **`geodePreviewSavingsRelease`** — preview `netWorthAfter`; **`monthlyLeftUnchanged: true`**
+- **`geodeSavingsReleaseSnapshot(state, opts)`** — rollup + dev hook **`window._geodeSavingsReleaseSnapshot`**
+
+**Not in 81D-2:** apply UI, `S.savingsReleases[]`, `activityLog` writes, Plan overbudget release CTA, base balance mutation.
+
+## Savings release confirmation sheet (Stage 81D-3)
+
+**First actual savings release build** — user-confirmed release from Plan overbudget block only (**Use saved money**).
+
+- **`geodeNormalizeSavingsReleases`**, **`S.savingsReleases[]`**
+- **`geodeApplySavingsRelease(event)`** — reduces `goal.baseSaved` or `investment.baseBalance` (linked inv: investment row only); then **`geodeRecomputeBalancesFromPayments()`**
+- **`appendActivityLog('savings_release', -amount, …)`**; **`setLastSnapshotBeforeChange()`** before mutation
+- Confirmation modal: source, amount (capped to available), reason, optional note; preview net worth + pressure relief
+- **Does not change** Monthly Left, income, expenses, payments, or Plan math
+- Reflection and Ask integration **deferred**; no Home / Goal card entry; **no service-worker bump** in this stage
+
+**Docs:** [`docs/stages/81/81D-3-savings-release-confirmation-sheet.md`](./stages/81/81D-3-savings-release-confirmation-sheet.md).
+
+## Savings release backup & copy fix (Stage 81D-3.1)
+
+Closes **81D-3-C** release-readiness gaps without behaviour changes:
+
+- **`savingsReleases`** added to **`geodeBeyndBackupRestorableKeyWhitelist()`** (release history survives export/import)
+- Em dashes removed from Savings Release modal intro and source dropdown labels
+- No apply/preview/net worth/Monthly Left changes; **no service-worker bump**
+
+**Docs:** [`docs/stages/81/81D-3.1-savings-release-backup-copy-fix.md`](./stages/81/81D-3.1-savings-release-backup-copy-fix.md).
+
+## Emergency buffer goal auto-link (Stage 81D-3.5)
+
+Closes **81D-3.4** buffer flow/balance gap for **future** buffer contributions:
+
+- **`geodeEnsureEmergencyBufferGoalForPayment`** — on save, create or reuse emergency goal when payment is buffer-like and unlinked
+- **`geodeSavePayApply`** — sets `goalId` before persist; paid completions increase `goal.saved` via existing recompute
+- Buffer Home/suggested-action CTAs pass **`bufferContribution: true`**; no backfill of old payments
+- Skips auto-link when emergency goal has positive linked investment (manual link only)
+
+**Not changed:** Monthly Left, net worth formula, Savings Release apply, investment release rules, `S.bufferBalance`; **no service-worker bump**
+
+**Docs:** [`docs/stages/81/81D-3.5-buffer-goal-truth-build.md`](./stages/81/81D-3.5-buffer-goal-truth-build.md).
+
+## Buffer adequacy Plan gate (Stage 81D-3.6)
+
+Fixes **81D-3.5-C** Plan regression — buffer step no longer disappears when an emergency goal is created on schedule:
+
+- **`getMonthPlan` Step 2** — show buffer while `geodeGetBufferReadinessState !== 'BUFFER_COMPLETE'` (not `!hasEmergency`)
+- Cap step amount by **target − effective saved − scheduled unpaid buffer** this month
+- Target fallback: `3 × geodeMonthlyExpenseTotal` when emergency goal `amount <= 0`
+
+**Not changed:** payment save, goal auto-link helper, Savings Release, balances, Monthly Left; **no service-worker bump**
+
+**Docs:** [`docs/stages/81/81D-3.6-buffer-adequacy-plan-gate-fix.md`](./stages/81/81D-3.6-buffer-adequacy-plan-gate-fix.md).
+
+## Buffer action state copy (Stage 81D-3.7)
+
+Copy-only refinement for buffer CTAs after 81D-3.5 asset truth:
+
+- **`geodeBufferActionCopy`** — add emergency buffer vs contribute/add to buffer from goal + readiness + scheduled state
+- Home Main Action, suggested actions, Plan titles, payment modal heading (prefill only)
+- Payment name **`Emergency buffer`** and save/create-link behaviour **unchanged**
+- Two-stage journey: add buffer, then contribute until adequate
+
+**Not changed:** Plan amounts/sequencing, payment save, balances, Savings Release; **no service-worker bump**
+
+**Docs:** [`docs/stages/81/81D-3.7-buffer-action-state-copy-refinement.md`](./stages/81/81D-3.7-buffer-action-state-copy-refinement.md).
 
 ## Cleanup Rule
 
