@@ -8543,19 +8543,22 @@ function geodePlanInvestStepDisplay(step) {
   if (ib === 'NO_INVESTMENT_CONTEXT') {
     return { label: null, explainLine: null, amountStr: null, amountCaption: null };
   }
+  var inv0 = geodePrimaryInvestment(S);
+  var basis = geodeInvestCommittedThisMonth(S, inv0 && inv0.id ? inv0.id : '');
+  var committedStr = basis.committed > 0 ? fm(basis.committed) : null;
   if (ib === 'INVESTMENT_WITH_PRESSURE') {
     return {
       label: 'Invest what remains (keep it modest)',
       explainLine:
-        'You already have portfolio activity — prioritise essentials, buffer, and high-cost debt before increasing this slice.',
-      amountStr: null,
-      amountCaption: 'Already investing — use spare cash carefully'
+        'You already have portfolio activity. Prioritise essentials, buffer, and high-cost debt before increasing this slice.',
+      amountStr: committedStr,
+      amountCaption: committedStr ? null : 'Already investing. Use spare cash carefully'
     };
   }
   return {
     label: 'Continue investing',
-    explainLine: 'Add to what you have already started — steady contributions build momentum.',
-    amountStr: null,
+    explainLine: 'Add to what you have already started. Steady contributions build momentum.',
+    amountStr: committedStr,
     amountCaption: null
   };
 }
@@ -20309,16 +20312,28 @@ function geodePlanPageInvestPriorityBodyHtml(step, invDisp, prog) {
   var invContribState = geodeInvestmentContributionState(S);
   var h = '<div class="detail-section">';
 
-  var bLine =
-    invContribState === 'NONE'
-      ? 'Add an investment in Portfolio, then schedule it here.'
-      : prog.phase === 'done'
-        ? 'Suggested contribution met' + (invName ? ' (' + invName + ')' : '') + '.'
-        : prog.phase === 'partial'
-          ? 'Schedule the remainder this month' + (invName ? ' · ' + invName : '') + '.'
-          : invContribState === 'NOT_STARTED'
-            ? 'Start a small recurring amount' + (invName ? ' · ' + invName : '') + '.'
-            : 'Schedule this amount toward your portfolio' + (invName ? ' · ' + invName : '') + '.';
+  var invBasisBody = geodeInvestCommittedThisMonth(S, inv0 && inv0.id ? inv0.id : '');
+  var bLine;
+  if (invContribState === 'NONE') {
+    bLine = 'Add an investment in Portfolio, then schedule it here.';
+  } else if (invBasisBody.committed > 0) {
+    if (invBasisBody.paid > 0) {
+      bLine =
+        'You\u2019ve invested this month. Add more only if it still fits.' +
+        (invName ? ' \u00b7 ' + invName : '') +
+        '.';
+    } else {
+      bLine =
+        'You\u2019ve scheduled this contribution. Mark it complete when the money moves.' +
+        (invName ? ' \u00b7 ' + invName : '') +
+        '.';
+    }
+  } else {
+    bLine =
+      'This is optional spare-cash guidance, not a commitment.' +
+      (invName ? ' \u00b7 ' + invName : '') +
+      '.';
+  }
   h +=
     '<div class="detail-copy">' +
     escHtmlLite(bLine) +
@@ -20371,7 +20386,7 @@ function geodePlanPageInvestPriorityBodyHtml(step, invDisp, prog) {
 
   var impact =
     sk === 'growth'
-      ? 'Time in market beats timing the market — stay consistent.'
+      ? 'Time in market beats timing the market. Stay consistent.'
       : sk === 'debt'
         ? 'Keep this slice small until debt and buffer feel steady.'
         : 'Small monthly beats occasional large jumps.';
@@ -20680,6 +20695,9 @@ function geodePlanPageDebtStepAmountDisplay(step, actionState) {
 function geodePlanPageStepRowAmountDisplay(step, prog, bufDisp, invDisp) {
   if (geodePlanPageIsDebtStep(step)) {
     return geodePlanPageDebtStepAmountDisplay(step, geodePlanStepActionState(S, step));
+  }
+  if (step && step.label === 'Invest what remains') {
+    return geodePlanInvestPageAmountDisplay(step, invDisp);
   }
   var sug = toNum(step && step.amount);
   var amtShown =
@@ -21130,6 +21148,10 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     var _debtAmtDet = geodePlanPageDebtStepAmountDisplay(step, geodePlanStepActionState(S, step));
     amtShown = _debtAmtDet.amtShown;
     _rpaDetCap = _debtAmtDet.capShown || '';
+  } else if (step.label === 'Invest what remains') {
+    var _invAmtDet = geodePlanInvestPageAmountDisplay(step, invDisp);
+    amtShown = _invAmtDet.amtShown;
+    _rpaDetCap = _invAmtDet.capShown || '';
   } else {
     amtShown =
       invDisp.amountStr != null
@@ -21238,7 +21260,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     }
   } else if (detailInvest) {
     whyShort =
-      'Beynd shows this after earlier plan steps because debt, buffer, and goal needs are ordered ahead in this month\u2019s sequence. This is a planning prompt to review spare cash — not a recommendation to buy an investment.';
+      'Beynd shows this after earlier plan steps because debt, buffer, and goal needs are ordered ahead in this month\u2019s sequence. This is a planning prompt to review spare cash, not a recommendation to buy an investment.';
   } else {
     whyShort = whySrc
       ? geodeHomeInsightShortLine(whySrc, 200)
@@ -21449,38 +21471,66 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         '</div>';
     }
   } else if (detailInvest) {
-    if (prog.suggested > 0) {
-      h +=
-        '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
-        escHtmlLite(fm(prog.suggested)) +
-        '</span></div>';
+    var invBasisDet = geodeInvestCommittedThisMonth(S, inv0 && inv0.id ? inv0.id : '');
+    var invSugDet = toNum(prog.suggested);
+    var invPaidDet = toNum(prog.applied);
+    var invSchedDet = invBasisDet.scheduled;
+    var invSchedOnly = invSchedDet > 0 && invPaidDet <= 0;
+    var invImpactNote =
+      'This is optional spare-cash guidance. Beynd uses what you entered, not a forecast.';
+    if (invSugDet > 0 || invBasisDet.committed > 0) {
+      if (invSugDet > 0) {
+        h +=
+          '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
+          escHtmlLite(fm(invSugDet)) +
+          '</span></div>';
+      }
+      if (invSchedDet > 0) {
+        h +=
+          '<div class="geode-plan-detail-metricrow"><span>Scheduled this month</span><span>' +
+          escHtmlLite(fm(invSchedDet)) +
+          '</span></div>';
+      }
       h +=
         '<div class="geode-plan-detail-metricrow"><span>Marked complete this month</span><span>' +
-        escHtmlLite(fm(prog.applied)) +
+        escHtmlLite(fm(invPaidDet)) +
         '</span></div>';
-      h +=
-        '<div class="geode-plan-detail-metricrow"><span>Remaining on this step</span><span>' +
-        escHtmlLite(fm(prog.remaining)) +
-        '</span></div>';
-      var pctInv = Math.round(Math.min(100, Math.max(0, prog.ratio * 100)));
-      h +=
-        '<div class="geode-plan-detail-pbar" role="progressbar" aria-valuenow="' +
-        pctInv +
-        '" aria-valuemin="0" aria-valuemax="100">';
-      h += '<div class="geode-plan-detail-pfill" data-geode-css="width:' + pctInv + '%"></div></div>';
+      if (invSchedOnly) {
+        h +=
+          '<div class="geode-plan-detail-metricrow"><span>Next step</span><span>' +
+          escHtmlLite('Mark complete when money moves') +
+          '</span></div>';
+      } else if (prog.phase === 'done') {
+        h +=
+          '<div class="geode-plan-detail-metricrow"><span>Remaining on this step</span><span>' +
+          escHtmlLite(fm(0)) +
+          '</span></div>';
+      } else if (invSugDet > 0) {
+        h +=
+          '<div class="geode-plan-detail-metricrow"><span>Remaining on this step</span><span>' +
+          escHtmlLite(fm(Math.max(0, prog.remaining))) +
+          '</span></div>';
+      }
+      if (!invSchedOnly && invSugDet > 0) {
+        var pctInvStd = Math.round(Math.min(100, Math.max(0, prog.ratio * 100)));
+        h +=
+          '<div class="geode-plan-detail-pbar" role="progressbar" aria-valuenow="' +
+          pctInvStd +
+          '" aria-valuemin="0" aria-valuemax="100">';
+        h +=
+          '<div class="geode-plan-detail-pfill" data-geode-css="width:' + pctInvStd + '%"></div></div>';
+      }
     } else {
       h +=
         '<div class="geode-plan-detail-muted">' +
         escHtmlLite(
-          'No fixed amount on this step. When you act, Beynd tracks what you mark complete against what the plan suggested.'
+          'No fixed amount on this step. When you act, Beynd tracks what you schedule or invest this month.'
         ) +
         '</div>';
     }
     h +=
       '<div class="geode-plan-detail-impact-note">' +
-      escHtmlLite(
-        'This is the amount left for review after earlier plan steps — based on what you entered, not a forecast.'
-      ) +
+      escHtmlLite(invImpactNote) +
       '</div>';
   } else {
     if (prog.suggested > 0) {
@@ -22356,6 +22406,61 @@ function geodeSumPaymentsForInvestThisMonth(state, investId) {
     sum += toNum(p.amount);
   }
   return sum;
+}
+
+/**
+ * PLAN-STABILITY-INV-B: read-only unpaid investment scheduled this month (display only).
+ * Mirrors geodePlanStepScheduledAmount invest branch; does not mutate state.
+ */
+function geodeInvestScheduledThisMonth(state, investId) {
+  if (!investId) return 0;
+  state = state || S;
+  var wantInv = String(investId);
+  var sum = 0;
+  var pay = (state && state.payments) ? state.payments : [];
+  for (var i = 0; i < pay.length; i++) {
+    var p = pay[i];
+    if (!p || p.status === 'paid') continue;
+    var st = geodePaymentEffectiveStatus(p);
+    if (st !== 'upcoming' && st !== 'overdue') continue;
+    if (!paymentCountsForMonthlyOutflowDisplay(p)) continue;
+    var amt = toNum(p.amount);
+    if (amt <= 0) continue;
+    if (String(p.investId || '') === wantInv) sum += amt;
+  }
+  return sum;
+}
+
+/**
+ * PLAN-STABILITY-INV-B: read-only investment committed this month (scheduled unpaid + paid).
+ * Display-only; engine step.amount remains dynamic in getMonthPlan.
+ */
+function geodeInvestCommittedThisMonth(state, investId) {
+  state = state || S;
+  var id = investId ? String(investId) : '';
+  if (!id) {
+    var inv0 = geodePrimaryInvestment(state);
+    if (inv0 && inv0.id) id = String(inv0.id);
+  }
+  var scheduled = id ? geodeInvestScheduledThisMonth(state, id) : 0;
+  var paid = id ? geodeSumPaymentsForInvestThisMonth(state, id) : 0;
+  return { scheduled: scheduled, paid: paid, committed: scheduled + paid };
+}
+
+/** Display-only Plan row/detail amount for Invest what remains (payment-derived when user has acted). */
+function geodePlanInvestPageAmountDisplay(step, invDisp) {
+  step = step || null;
+  invDisp = invDisp || geodePlanInvestStepDisplay(step);
+  var inv0 = geodePrimaryInvestment(S);
+  var basis = geodeInvestCommittedThisMonth(S, inv0 && inv0.id ? inv0.id : '');
+  var suggested = toNum(step && step.amount);
+  if (basis.committed > 0) {
+    return { amtShown: fm(basis.committed), capShown: '' };
+  }
+  if (invDisp && invDisp.amountStr != null) {
+    return { amtShown: invDisp.amountStr, capShown: '' };
+  }
+  return { amtShown: suggested > 0 ? fm(suggested) : fm(0), capShown: '' };
 }
 
 function geodeSumBufferContributionsThisMonth(state) {
