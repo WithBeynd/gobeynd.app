@@ -7955,6 +7955,28 @@ function getFirstEmergencyGoal(state) {
 }
 
 /**
+ * PLAN-STABILITY-D.2: read-only canonical buffer target (does not mutate state or goals).
+ * a) emergency goal amount > 0
+ * b) legacy S.emergencyBuffer > 0
+ * c) monthly expenses × 3
+ * d) 0
+ * Never lets monthly × 3 override an emergency goal with amount > 0.
+ */
+function geodeResolveBufferTarget(state) {
+  state = state || S;
+  var eg = getFirstEmergencyGoal(state);
+  if (eg) {
+    var goalAmt = toNum(eg.amount);
+    if (goalAmt > 0) return goalAmt;
+  }
+  var legacy = toNum(state && state.emergencyBuffer);
+  if (legacy > 0) return legacy;
+  var mo = geodeMonthlyExpenseTotal(state);
+  if (mo > 0) return Math.round(mo * 3 * 100) / 100;
+  return 0;
+}
+
+/**
  * Stage 81D-3.5: ensure buffer-like contributions link to a real emergency goal (future payments only).
  * Creates emergency goal when none exists; reuses getFirstEmergencyGoal when safe.
  */
@@ -8118,10 +8140,10 @@ function geodeGetBufferReadinessState(state) {
   state = state || S;
   var eg = getFirstEmergencyGoal(state);
   var hasExp = geodeHasMeaningfulMonthlyExpenses(state);
+  var target = geodeResolveBufferTarget(state);
   if (eg) {
-    var amt = toNum(eg.amount);
     var sv = geodeGoalEffectiveSavedFromState(state, eg);
-    if (amt > 0 && sv >= amt) return 'BUFFER_COMPLETE';
+    if (target > 0 && sv >= target) return 'BUFFER_COMPLETE';
     return 'BUFFER_IN_PROGRESS';
   }
   if (!hasExp) return 'NO_BUFFER_CONTEXT';
@@ -8144,7 +8166,9 @@ function geodePlanBufferStepDisplay(step) {
   }
   var st = geodeGetBufferReadinessState();
   var mo = geodeMonthlyExpenseTotal(S);
-  var threeMo = mo * 3;
+  var bufTarget = geodeResolveBufferTarget(S);
+  var egBufDisp = getFirstEmergencyGoal(S);
+  var hasUserBufTarget = !!(egBufDisp && toNum(egBufDisp.amount) > 0);
   var sug = fm(step.amount);
   if (st === 'NO_BUFFER_CONTEXT') {
     return {
@@ -8162,12 +8186,13 @@ function geodePlanBufferStepDisplay(step) {
       label: 'Continue building your estimated safety buffer',
       explainLine:
         'Based on your monthly expenses (~' +
-        fm(threeMo) +
-        ' for about 3 months). You\u2019ve already started building this buffer. Suggested from spare cash this month: ' +
+        fm(bufTarget) +
+        (hasUserBufTarget ? ' buffer target' : ' for about 3 months') +
+        '). You\u2019ve already started building this buffer. Suggested from spare cash this month: ' +
         sug +
         '.',
       amountStr: sug,
-      amountCaption: 'based on monthly expenses'
+      amountCaption: hasUserBufTarget ? 'toward your buffer target' : 'based on monthly expenses'
     };
   }
   if (st === 'BUFFER_ESTIMATABLE') {
@@ -8175,12 +8200,22 @@ function geodePlanBufferStepDisplay(step) {
       label: 'Estimated safety buffer',
       explainLine:
         'Based on your monthly expenses (~' +
-        fm(threeMo) +
-        ' for about 3 months). Suggested from spare cash this month: ' +
+        fm(bufTarget) +
+        (hasUserBufTarget ? ' buffer target' : ' for about 3 months') +
+        '). Suggested from spare cash this month: ' +
         sug +
         '.',
       amountStr: sug,
-      amountCaption: 'based on monthly expenses'
+      amountCaption: hasUserBufTarget ? 'toward your buffer target' : 'based on monthly expenses'
+    };
+  }
+  if (st === 'BUFFER_IN_PROGRESS' && hasUserBufTarget) {
+    return {
+      label: step.label,
+      explainLine:
+        'Your buffer target is ' + fm(bufTarget) + '. Suggested from spare cash this month: ' + sug + '.',
+      amountStr: null,
+      amountCaption: 'toward your buffer target'
     };
   }
   return {
@@ -15550,13 +15585,30 @@ function geodeOrchestrationSnapshotV2(state, opts) {
       out.reasonCodes.push('no_spending_baseline');
       return out;
     }
-    if (flags.plan && flags.firstIncomplete) {
-      var step = flags.firstIncomplete.step;
-      var ix = flags.firstIncomplete.index;
+    if (flags.plan && (flags.firstActionable || flags.firstIncomplete)) {
+      var target = flags.firstActionable || null;
+      if (!target && flags.firstIncomplete && flags.firstIncomplete.action) {
+        if (!flags.firstIncomplete.action.isCompleted && flags.firstIncomplete.action.isScheduledOnly) {
+          target = flags.firstIncomplete;
+        }
+      }
+      if (target) {
+      var step = target.step;
+      var ix = target.index;
+      var act = target.action || geodePlanStepActionState(st0, step);
       var lb = String(step.label || '');
+      var scheduledView = !act.isActionable && act.isScheduledOnly;
       out.show = true;
       out.planStepIndex = ix;
-      out.amount = toNum(step.amount);
+      out.amount = act.actionAmount > 0 ? act.actionAmount : null;
+      if (scheduledView) {
+        out.title = lb || 'Review your plan';
+        out.cta = 'View plan';
+        out.kind = 'plan';
+        out.runIntent = v2MainActionIntent('plan', 'monthly');
+        out.reasonCodes.push('plan_step_scheduled');
+        return out;
+      }
       if (lb.indexOf('Reduce high') === 0) {
         out.kind = 'debt';
         out.title = lb;
@@ -15586,6 +15638,7 @@ function geodeOrchestrationSnapshotV2(state, opts) {
       }
       out.reasonCodes.push('plan_first_incomplete_step');
       return out;
+      }
     }
     if (flags.plan && flags.planHasMeaningfulStep && !flags.firstIncomplete) {
       out.show = true;
@@ -15681,6 +15734,7 @@ function geodeOrchestrationSnapshotV2(state, opts) {
     }
   }
   var firstIncomplete = plan ? geodeFirstIncompletePlanStep(plan, st) : null;
+  var firstActionable = plan ? geodeFirstActionablePlanStep(plan, st) : null;
   var resolvedPlanStep = null;
   if (!empty && incomeCtx !== 'NONE' && !hasOverdue && firstIncomplete && firstIncomplete.step) {
     resolvedPlanStep = firstIncomplete.step;
@@ -15799,7 +15853,8 @@ function geodeOrchestrationSnapshotV2(state, opts) {
       hasMeaningfulUserAction: v2HasMeaningfulUserAction(st),
       plan: plan,
       planHasMeaningfulStep: planHasMeaningfulStep,
-      firstIncomplete: firstIncomplete
+      firstIncomplete: firstIncomplete,
+      firstActionable: firstActionable
     });
     if (maPf.title) primaryFocus = { type: 'main_action', label: String(maPf.title) };
   }
@@ -15939,7 +15994,8 @@ function geodeOrchestrationSnapshotV2(state, opts) {
     hasMeaningfulUserAction: v2HasMeaningfulUserAction(st),
     plan: plan,
     planHasMeaningfulStep: planHasMeaningfulStep,
-    firstIncomplete: firstIncomplete
+    firstIncomplete: firstIncomplete,
+    firstActionable: firstActionable
   });
 
   var humanMoment = {
@@ -19137,57 +19193,60 @@ function getMonthPlan() {
   }
 
   // Step 2: Emergency fund before investing — while buffer is not adequate (Stage 81D-3.6).
-  // Goal existence alone is not enough; align with geodeGetBufferReadinessState and cap by target minus saved/scheduled.
+  // PLAN-STABILITY-D: row visibility = target minus saved/completed only; scheduled unpaid reduces
+  // duplicate sizing pressure (ef) but must not hide the row while the buffer target is outstanding.
   var bufferNeedsPlanStep = geodeGetBufferReadinessState(S) !== 'BUFFER_COMPLETE';
   if (bufferNeedsPlanStep && budget > 0 && steps.length < 4) {
-    var remainingEmergencyNeeded = Infinity;
+    var actualRemainingNeed = Infinity;
+    var unscheduledGap = Infinity;
+    var schedBufPlan = 0;
     var egPlan = getFirstEmergencyGoal(S);
-    if (egPlan) {
-      var svPlan = geodeGoalEffectiveSavedFromState(S, egPlan);
-      var tgtPlan = toNum(egPlan.amount);
-      if (tgtPlan <= 0) {
-        var moPlan = geodeMonthlyExpenseTotal(S);
-        if (moPlan > 0) tgtPlan = Math.round(moPlan * 3 * 100) / 100;
+    var svPlan = egPlan ? geodeGoalEffectiveSavedFromState(S, egPlan) : 0;
+    var tgtPlan = geodeResolveBufferTarget(S);
+    if (tgtPlan > 0) {
+      actualRemainingNeed = Math.max(0, tgtPlan - svPlan);
+      var payPlan = S.payments || [];
+      var egIdPlan = egPlan ? String(egPlan.id || '') : '';
+      for (var sbi = 0; sbi < payPlan.length; sbi++) {
+        var sbp = payPlan[sbi];
+        if (!sbp || sbp.status === 'paid') continue;
+        var sbst = geodePaymentEffectiveStatus(sbp);
+        if (sbst !== 'upcoming' && sbst !== 'overdue') continue;
+        if (!paymentCountsForMonthlyOutflowDisplay(sbp)) continue;
+        var sbAmt = toNum(sbp.amount);
+        if (sbAmt <= 0) continue;
+        if (egIdPlan && String(sbp.goalId || '') === egIdPlan) schedBufPlan += sbAmt;
+        else if (geodePaymentNameLooksLikeBuffer(sbp.name)) schedBufPlan += sbAmt;
+        else if (!sbp.goalId && !sbp.debtId && !sbp.investId && String(sbp.payKind || '') === 'buffer') schedBufPlan += sbAmt;
+        else if (String(sbp.name || '').toLowerCase().indexOf('buffer') >= 0) schedBufPlan += sbAmt;
       }
-      if (tgtPlan > 0) {
-        var schedBufPlan = 0;
-        var payPlan = S.payments || [];
-        var egIdPlan = String(egPlan.id || '');
-        for (var sbi = 0; sbi < payPlan.length; sbi++) {
-          var sbp = payPlan[sbi];
-          if (!sbp || sbp.status === 'paid') continue;
-          var sbst = geodePaymentEffectiveStatus(sbp);
-          if (sbst !== 'upcoming' && sbst !== 'overdue') continue;
-          if (!paymentCountsForMonthlyOutflowDisplay(sbp)) continue;
-          if (egIdPlan && String(sbp.goalId || '') === egIdPlan) schedBufPlan += toNum(sbp.amount);
-          else if (geodePaymentNameLooksLikeBuffer(sbp.name)) schedBufPlan += toNum(sbp.amount);
-        }
-        remainingEmergencyNeeded = Math.max(0, tgtPlan - svPlan - schedBufPlan);
-      }
+      unscheduledGap = Math.max(0, actualRemainingNeed - schedBufPlan);
     }
     var budgetBeforeEf = budget;
     var emCap = stratCfg.emergencyCapRatio;
     if (memoryMods.bufferPreference === 'preserve') {
       emCap = Math.min(0.85, Math.max(emCap, emCap + 0.05));
     }
-    var ef = Math.min(Math.round(budget * emCap), remainingEmergencyNeeded, budget);
+    var ef = Math.min(Math.round(budget * emCap), unscheduledGap, budget);
     // Growth: reserve a small slice for goals when any goal exists so EF does not absorb everything.
     if (S.planStrategy === 'growth' && S.goals.length > 0) {
       var growthGoalReserve = Math.min(50, Math.round(budgetBeforeEf * 0.1));
       ef = Math.min(ef, Math.max(0, budget - growthGoalReserve));
     }
-    if (ef > 0) {
+    var bufferTargetOutstanding = actualRemainingNeed === Infinity || actualRemainingNeed > 0;
+    var bufferStepAmount = ef > 0 ? ef : schedBufPlan > 0 ? schedBufPlan : 0;
+    if (bufferTargetOutstanding && bufferStepAmount > 0) {
       steps.push({
         priority: 2,
         urgency: 'high',
         icon: 'shield',
         label: 'Build your emergency fund',
-        amount: ef,
+        amount: bufferStepAmount,
         note: 'Aim for 3 months of expenses',
         why: 'A small buffer reduces the chance of needing new debt after unexpected costs.',
         color: '#60a5fa'
       });
-      budget -= ef;
+      if (ef > 0) budget -= ef;
     }
   }
 
@@ -19455,13 +19514,16 @@ function getSuggestedActions(state) {
   for (si = 0; si < steps.length; si++) {
     var stp = steps[si];
     if (!stp || typeof stp.amount !== 'number' || stp.amount <= 0) continue;
+    var stpAction = geodePlanStepActionState(S, stp);
+    if (!stpAction.isActionable) continue;
+    var stpAmt = stpAction.actionAmount > 0 ? stpAction.actionAmount : stp.amount;
     if (stp.label.indexOf('Reduce high') === 0) {
       var dn = debtNameFromStep(stp);
       debtA = {
         type: 'debt_payment',
         title: 'Pay toward debt',
         subtitle: 'Plan an extra payment toward ' + (dn || 'debt'),
-        amount: stp.amount,
+        amount: stpAmt,
         targetId: findDebtIdByName(dn),
         targetName: dn
       };
@@ -19476,14 +19538,14 @@ function getSuggestedActions(state) {
           type: 'buffer_contribution',
           title: 'Plan a contribution',
           subtitle: 'Start with a suggested contribution toward your safety buffer',
-          amount: stp.amount
+          amount: stpAmt
         };
       } else {
         bufA = {
           type: 'buffer_contribution',
           title: 'Plan a contribution',
           subtitle: 'Plan a contribution toward your safety buffer',
-          amount: stp.amount
+          amount: stpAmt
         };
       }
     } else if (stp.label.indexOf('Restart progress on ') === 0 || stp.label.indexOf('Catch up on ') === 0) {
@@ -19492,7 +19554,7 @@ function getSuggestedActions(state) {
         type: 'goal_contribution',
         title: 'Contribute to goal',
         subtitle: 'Choose a contribution toward ' + (gn || 'your goal'),
-        amount: stp.amount,
+        amount: stpAmt,
         targetId: findGoalIdByName(gn),
         targetName: gn
       };
@@ -19503,7 +19565,7 @@ function getSuggestedActions(state) {
         type: 'investment_contribution',
         title: 'Plan a contribution',
         subtitle: 'Start with a suggested contribution toward your portfolio',
-        amount: stp.amount,
+        amount: stpAmt,
         targetId: inv0 ? inv0.id : '',
         targetName: inv0 ? inv0.name : ''
       };
@@ -19587,6 +19649,8 @@ function mergeFrozenSuggestedActionsWithPlan(frozen) {
     }
     var amt = toNum(fj.amount);
     if (match) {
+      var matchAction = geodePlanStepActionStateForSuggestedAction(S, fj);
+      if (matchAction && !matchAction.isActionable) continue;
       var matched = {
         type: fj.type,
         title: match.title,
@@ -19607,6 +19671,8 @@ function mergeFrozenSuggestedActionsWithPlan(frozen) {
       }
       out.push(matched);
     } else if (geodeSuggestedActionTargetlessFallbackOk(fj)) {
+      var fallbackAction = geodePlanStepActionStateForSuggestedAction(S, fj);
+      if (fallbackAction && !fallbackAction.isActionable) continue;
       var fallback = {
         type: fj.type,
         title:
@@ -20148,7 +20214,9 @@ function geodePlanPageBufferPriorityBodyHtml(step, bufDisp, prog) {
   prog = prog || geodePlanStepProgress(S, step);
   var st = geodeGetBufferReadinessState();
   var mo = geodeMonthlyExpenseTotal(S);
-  var threeMo = mo * 3;
+  var bufTarget = geodeResolveBufferTarget(S);
+  var egBufBody = getFirstEmergencyGoal(S);
+  var hasUserBufTarget = !!(egBufBody && toNum(egBufBody.amount) > 0);
   var sk = geodePlanStrategyKey();
   var h = '<div class="detail-section">';
 
@@ -20174,10 +20242,17 @@ function geodePlanPageBufferPriorityBodyHtml(step, bufDisp, prog) {
       '<div class="detail-fact-row"><span class="detail-label">Monthly expenses (basis)</span><span class="detail-value">' +
       escHtmlLite(fm(mo)) +
       '</span></div>';
-    h +=
-      '<div class="detail-fact-row"><span class="detail-label">Target window</span><span class="detail-value">~3 months of expenses (~' +
-      escHtmlLite(fm(threeMo)) +
-      ')</span></div>';
+    if (hasUserBufTarget) {
+      h +=
+        '<div class="detail-fact-row"><span class="detail-label">Buffer target</span><span class="detail-value">' +
+        escHtmlLite(fm(bufTarget)) +
+        '</span></div>';
+    } else {
+      h +=
+        '<div class="detail-fact-row"><span class="detail-label">Target window</span><span class="detail-value">~3 months of expenses (~' +
+        escHtmlLite(fm(bufTarget)) +
+        ')</span></div>';
+    }
     h += '</div></div>';
   }
 
@@ -20575,7 +20650,37 @@ function geodePlanPageOverviewHtml(plan) {
 }
 
 /** Plan tab row amount/caption display only; scheduled zero-complete rows keep the numeric plan amount. */
+/** Display-only: high/moderate debt plan rows (PLAN-STABILITY-C). */
+function geodePlanPageIsDebtStep(step) {
+  var lb = String(step && step.label || '');
+  return lb.indexOf('Reduce high') === 0 || lb.indexOf('Pay down ') === 0;
+}
+
+/** Display-only debt amount for Plan row/detail aligned with geodePlanStepActionState. */
+function geodePlanPageDebtStepAmountDisplay(step, actionState) {
+  step = step || null;
+  actionState = actionState || geodePlanStepActionState(S, step);
+  var sug = toNum(step && step.amount);
+  if (sug <= 0) return { amtShown: fm(0), capShown: '' };
+  if (actionState.isCompleted) {
+    return { amtShown: fm(sug), capShown: '' };
+  }
+  if (actionState.isNotStarted) {
+    return { amtShown: fm(sug), capShown: '' };
+  }
+  if (actionState.isScheduledOnly && actionState.scheduled > 0) {
+    return { amtShown: fm(actionState.scheduled), capShown: '' };
+  }
+  if (actionState.actionAmount >= 1) {
+    return { amtShown: fm(actionState.actionAmount), capShown: '' };
+  }
+  return { amtShown: fm(sug), capShown: '' };
+}
+
 function geodePlanPageStepRowAmountDisplay(step, prog, bufDisp, invDisp) {
+  if (geodePlanPageIsDebtStep(step)) {
+    return geodePlanPageDebtStepAmountDisplay(step, geodePlanStepActionState(S, step));
+  }
   var sug = toNum(step && step.amount);
   var amtShown =
     invDisp && invDisp.amountStr != null
@@ -21019,18 +21124,25 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     labelShown = invDisp.label;
   }
   var sug = toNum(step.amount);
-  var amtShown =
-    invDisp.amountStr != null
-      ? invDisp.amountStr
-      : bufDisp.amountStr != null
-        ? bufDisp.amountStr
-        : fm(step.amount);
-  if (sug > 0 && prog.phase === 'partial' && prog.remaining >= 1 && bufDisp.amountStr !== '\u2014') {
-    amtShown = fm(prog.remaining);
-  } else if (sug > 0 && prog.phase === 'done') {
-    amtShown = fm(step.amount);
-  }
+  var amtShown = fm(step.amount);
   var _rpaDetCap = '';
+  if (geodePlanPageIsDebtStep(step)) {
+    var _debtAmtDet = geodePlanPageDebtStepAmountDisplay(step, geodePlanStepActionState(S, step));
+    amtShown = _debtAmtDet.amtShown;
+    _rpaDetCap = _debtAmtDet.capShown || '';
+  } else {
+    amtShown =
+      invDisp.amountStr != null
+        ? invDisp.amountStr
+        : bufDisp.amountStr != null
+          ? bufDisp.amountStr
+          : fm(step.amount);
+    if (sug > 0 && prog.phase === 'partial' && prog.remaining >= 1 && bufDisp.amountStr !== '\u2014') {
+      amtShown = fm(prog.remaining);
+    } else if (sug > 0 && prog.phase === 'done') {
+      amtShown = fm(step.amount);
+    }
+  }
   var _rpaDetDisp = geodePlanStepRealityDisplay(S, step, prog, ix, amtShown, _rpaDetCap);
   if (_rpaDetDisp) {
     amtShown = _rpaDetDisp.amtShown;
@@ -21240,7 +21352,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     }
     if (bufEg) {
       var bufSaved = geodeGoalEffectiveSaved(bufEg);
-      var bufTgt = toNum(bufEg.amount);
+      var bufTgt = geodeResolveBufferTarget(S);
       h +=
         '<div class="geode-plan-detail-metricrow" data-geode-css="margin-top:10px"><span>Saved toward buffer</span><span>' +
         escHtmlLite(fm(bufSaved)) +
@@ -22274,65 +22386,83 @@ function geodeDebtIdFromPlanStepLabel(state, step) {
 /**
  * Compares paid linked contributions this month vs getMonthPlan step amount (display / Main Action only).
  */
+/** Read-only: unpaid scheduled amount this month toward a plan step (display / progress only). */
+function geodePlanStepScheduledAmount(state, step) {
+  state = state || S;
+  if (!step) return 0;
+  var lb = String(step.label || '');
+  var pay = (state && state.payments) ? state.payments : [];
+  if (!pay || !pay.length) return 0;
+  var wantDebt = '';
+  var wantGoal = '';
+  var wantInv = '';
+  var egBuf = null;
+  try {
+    if (lb.indexOf('Reduce high') === 0) {
+      wantDebt = geodeDebtIdFromPlanStepLabel(state, step);
+    } else if (lb.indexOf('Pay down ') === 0) {
+      var pdnm = lb.slice('Pay down '.length).trim();
+      var pdl = (state && state.debts) || [];
+      for (var pdi = 0; pdi < pdl.length; pdi++) {
+        if (pdl[pdi] && String(pdl[pdi].name || '').trim() === pdnm) {
+          wantDebt = pdl[pdi].id || '';
+          break;
+        }
+      }
+    } else if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
+      var gnm =
+        lb.indexOf('Restart') === 0
+          ? lb.slice('Restart progress on '.length).trim()
+          : lb.slice('Catch up on '.length).trim();
+      var gl = state.goals || [];
+      for (var gi = 0; gi < gl.length; gi++) {
+        if (gl[gi] && String(gl[gi].name || '').trim() === gnm) {
+          wantGoal = gl[gi].id || '';
+          break;
+        }
+      }
+    } else if (lb === 'Invest what remains') {
+      if (state.investments && state.investments.length) wantInv = state.investments[0].id || '';
+    } else if (lb === 'Build your emergency fund') {
+      egBuf = getFirstEmergencyGoal(state);
+    } else {
+      return 0;
+    }
+    var sum = 0;
+    for (var i = 0; i < pay.length; i++) {
+      var p = pay[i];
+      if (!p || p.status === 'paid') continue;
+      var st = geodePaymentEffectiveStatus(p);
+      if (st !== 'upcoming' && st !== 'overdue') continue;
+      if (!paymentCountsForMonthlyOutflowDisplay(p)) continue;
+      var amt = toNum(p.amount);
+      if (amt <= 0) continue;
+      if (lb.indexOf('Reduce high') === 0 || lb.indexOf('Pay down ') === 0) {
+        if (wantDebt) sum += geodeDebtScheduledExtraAmountForPlanProgress(state, wantDebt, p);
+      } else if (lb === 'Build your emergency fund') {
+        var egId = egBuf && egBuf.id ? String(egBuf.id) : '';
+        if (egId && String(p.goalId || '') === egId) sum += amt;
+        else if (geodePaymentNameLooksLikeBuffer(p.name)) sum += amt;
+        else if (!p.goalId && !p.debtId && !p.investId && String(p.payKind || '') === 'buffer') sum += amt;
+        else if (String(p.name || '').toLowerCase().indexOf('buffer') >= 0) sum += amt;
+      } else if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
+        if (wantGoal && String(p.goalId || '') === String(wantGoal)) sum += amt;
+      } else if (lb === 'Invest what remains') {
+        if (wantInv && String(p.investId || '') === String(wantInv)) sum += amt;
+      }
+    }
+    return sum;
+  } catch (_eSchedAmt) {
+    return 0;
+  }
+}
+
 function geodePlanStepProgress(state, step) {
   var sug = toNum(step && step.amount);
-  var out = { suggested: sug, applied: 0, remaining: Math.max(0, sug), ratio: 0, phase: 'none' };
+  var out = { suggested: sug, applied: 0, remaining: Math.max(0, sug), ratio: 0, phase: 'none', scheduled: 0 };
   if (!step || sug <= 0) return out;
   var lb = String(step.label || '');
   var applied = 0;
-  // Display-only: treat scheduled/overdue linked contributions as “in progress” intent (without marking done).
-  function hasScheduledLinked() {
-    try {
-      var pay = (state && state.payments) ? state.payments : [];
-      if (!pay || !pay.length) return false;
-      var wantDebt = '';
-      var wantGoal = '';
-      var wantInv = '';
-      if (lb.indexOf('Reduce high') === 0) {
-        wantDebt = geodeDebtIdFromPlanStepLabel(state, step);
-      } else if (lb.indexOf('Pay down ') === 0) {
-        var pdnm = lb.slice('Pay down '.length).trim();
-        var pdl = (state && state.debts) || [];
-        for (var pdi = 0; pdi < pdl.length; pdi++) {
-          if (pdl[pdi] && String(pdl[pdi].name || '').trim() === pdnm) { wantDebt = pdl[pdi].id || ''; break; }
-        }
-      } else if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
-        var gnm = lb.indexOf('Restart') === 0 ? lb.slice('Restart progress on '.length).trim() : lb.slice('Catch up on '.length).trim();
-        var gl = state.goals || [];
-        for (var gi = 0; gi < gl.length; gi++) {
-          if (gl[gi] && String(gl[gi].name || '').trim() === gnm) {
-            wantGoal = gl[gi].id || '';
-            break;
-          }
-        }
-      } else if (lb === 'Invest what remains') {
-        if (state.investments && state.investments.length) wantInv = state.investments[0].id || '';
-      } else if (lb === 'Build your emergency fund') {
-        // Buffer contributions are inferred by name/linking; any scheduled “Emergency buffer”/buffer-like payment counts as started.
-      } else {
-        return false;
-      }
-      for (var i = 0; i < pay.length; i++) {
-        var p = pay[i];
-        if (!p || p.status === 'paid') continue;
-        var st = geodePaymentEffectiveStatus(p);
-        if (st !== 'upcoming' && st !== 'overdue') continue;
-        if (!paymentCountsForMonthlyOutflowDisplay(p)) continue; // display-only month inclusion (respects derived overdue)
-        if (lb.indexOf('Reduce high') === 0 || lb.indexOf('Pay down ') === 0) {
-          if (wantDebt && geodeDebtScheduledExtraAmountForPlanProgress(state, wantDebt, p) > 0) return true;
-        } else if (lb === 'Build your emergency fund') {
-          if (geodePaymentNameLooksLikeBuffer(p.name)) return true;
-          if (!p.goalId && !p.debtId && !p.investId && String(p.payKind || '') === 'buffer') return true;
-          if (String(p.name || '').toLowerCase().indexOf('buffer') >= 0) return true;
-        } else if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
-          if (wantGoal && String(p.goalId || '') === String(wantGoal)) return true;
-        } else if (lb === 'Invest what remains') {
-          if (wantInv && String(p.investId || '') === String(wantInv)) return true;
-        }
-      }
-    } catch (e) {}
-    return false;
-  }
   if (lb.indexOf('Reduce high') === 0) {
     applied = geodeSumPaymentsForDebtThisMonth(state, geodeDebtIdFromPlanStepLabel(state, step));
   } else if (lb.indexOf('Pay down ') === 0) {
@@ -22364,13 +22494,57 @@ function geodePlanStepProgress(state, step) {
     applied = geodeSumPaymentsForInvestThisMonth(state, invId);
   }
   var remaining = Math.max(0, sug - applied);
+  var scheduled = geodePlanStepScheduledAmount(state, step);
   out.applied = applied;
   out.remaining = remaining;
+  out.scheduled = scheduled;
   out.ratio = sug > 0 ? Math.min(1, applied / sug) : 0;
-  if (applied <= 0) out.phase = hasScheduledLinked() ? 'partial' : 'none';
+  if (applied <= 0) out.phase = scheduled > 0 ? 'partial' : 'none';
   else if (remaining < 1) out.phase = 'done';
   else out.phase = 'partial';
   return out;
+}
+
+/**
+ * Stage PLAN-STABILITY-B: read-only plan step action/progress truth for Plan, Home, and Suggested Actions.
+ * Does not mutate state or change getMonthPlan sizing.
+ */
+function geodePlanStepActionState(state, step, opts) {
+  state = state || S;
+  step = step || null;
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var prog = geodePlanStepProgress(state, step);
+  var suggested = toNum(prog.suggested);
+  var applied = toNum(prog.applied);
+  var scheduled = toNum(prog.scheduled);
+  var remaining = toNum(prog.remaining);
+  var coverageGap = Math.max(0, suggested - applied - scheduled);
+  var isCompleted = prog.phase === 'done';
+  var isScheduledOnly = !isCompleted && applied <= 0 && scheduled > 0 && coverageGap < 1;
+  var isInProgress = !isCompleted && applied > 0 && remaining >= 1;
+  var isNotStarted = prog.phase === 'none';
+  var isActionable = !isCompleted && ((applied > 0 && remaining >= 1) || coverageGap >= 1);
+  var actionAmount = 0;
+  if (!isCompleted) {
+    if (applied > 0 && remaining >= 1) actionAmount = remaining;
+    else if (coverageGap >= 1) actionAmount = coverageGap;
+  }
+  return {
+    progress: prog,
+    suggested: suggested,
+    applied: applied,
+    scheduled: scheduled,
+    remaining: remaining,
+    coverageGap: coverageGap,
+    actionAmount: actionAmount,
+    phase: prog.phase,
+    displayStatus: geodePlanStepStatusDisplayLabel(prog),
+    isCompleted: isCompleted,
+    isScheduledOnly: isScheduledOnly,
+    isInProgress: isInProgress,
+    isNotStarted: isNotStarted,
+    isActionable: isActionable
+  };
 }
 
 /** Display-only plan row status (geodePlanStepProgress unchanged). */
@@ -22404,9 +22578,83 @@ function geodeFirstIncompletePlanStep(plan, state) {
   for (var i = 0; i < steps.length; i++) {
     var step = steps[i];
     if (!step || toNum(step.amount) <= 0) continue;
-    var progress = geodePlanStepProgress(state, step);
-    if (progress.phase !== 'done') {
-      return { step: step, index: i, progress: progress };
+    var action = geodePlanStepActionState(state, step);
+    if (!action.isCompleted) {
+      return { step: step, index: i, progress: action.progress, action: action };
+    }
+  }
+  return null;
+}
+
+/** First plan row that still needs scheduling or payment follow-through (Home Main Action / Suggested Actions). */
+function geodeFirstActionablePlanStep(plan, state) {
+  plan = plan || {};
+  state = state || S;
+  var steps = plan.steps || [];
+  for (var i = 0; i < steps.length; i++) {
+    var step = steps[i];
+    if (!step || toNum(step.amount) <= 0) continue;
+    var action = geodePlanStepActionState(state, step);
+    if (action.isActionable) {
+      return { step: step, index: i, progress: action.progress, action: action };
+    }
+  }
+  return null;
+}
+
+/** Read-only: action state for a suggested-action row vs current plan steps. */
+function geodePlanStepActionStateForSuggestedAction(state, action) {
+  state = state || S;
+  if (!action || !action.type) return null;
+  var plan = getMonthPlan();
+  var steps = (plan && plan.steps) || [];
+  var si;
+  for (si = 0; si < steps.length; si++) {
+    var stp = steps[si];
+    if (!stp || toNum(stp.amount) <= 0) continue;
+    var lb = String(stp.label || '');
+    if (action.type === 'debt_payment' && lb.indexOf('Reduce high') === 0) {
+      var dn = lb.replace(/^Reduce high[\u2011\u2010\-]interest /, '').trim();
+      if (action.targetId) {
+        var did = '';
+        var dlist = state.debts || [];
+        for (var di = 0; di < dlist.length; di++) {
+          if (dlist[di] && String(dlist[di].id || '') === String(action.targetId)) {
+            did = dlist[di].id || '';
+            break;
+          }
+        }
+        if (!did) continue;
+      } else if (action.targetName && dn !== String(action.targetName).trim()) continue;
+      return geodePlanStepActionState(state, stp);
+    }
+    if (action.type === 'buffer_contribution' && lb === 'Build your emergency fund') {
+      return geodePlanStepActionState(state, stp);
+    }
+    if (action.type === 'goal_contribution' && (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0)) {
+      var gnm =
+        lb.indexOf('Restart progress on ') === 0
+          ? lb.slice('Restart progress on '.length).trim()
+          : lb.slice('Catch up on '.length).trim();
+      if (action.targetId) {
+        var gok = false;
+        var gl = state.goals || [];
+        for (var gi = 0; gi < gl.length; gi++) {
+          if (
+            gl[gi] &&
+            String(gl[gi].id || '') === String(action.targetId) &&
+            String(gl[gi].name || '').trim() === gnm
+          ) {
+            gok = true;
+            break;
+          }
+        }
+        if (!gok) continue;
+      } else if (action.targetName && gnm !== String(action.targetName).trim()) continue;
+      return geodePlanStepActionState(state, stp);
+    }
+    if (action.type === 'investment_contribution' && lb === 'Invest what remains') {
+      return geodePlanStepActionState(state, stp);
     }
   }
   return null;
@@ -22426,7 +22674,12 @@ function geodeHomeMonthlyPlanStepsComplete(state) {
       }
     }
     if (!hasMeaningful) return false;
-    return !geodeFirstIncompletePlanStep(plan, state);
+    for (var j = 0; j < steps.length; j++) {
+      if (steps[j] && toNum(steps[j].amount) > 0) {
+        if (!geodePlanStepActionState(state, steps[j]).isCompleted) return false;
+      }
+    }
+    return true;
   } catch (_eMpc) {
     return false;
   }
@@ -22582,11 +22835,23 @@ function geodeMainActionSubForStep(step, prog, mainKind) {
   return '';
 }
 
-function geodeMainActionFromPriorityStep(state, p1, prog) {
+function geodeMainActionFromPriorityStep(state, p1, prog, actionState) {
+  actionState = actionState || geodePlanStepActionState(state, p1);
+  prog = prog || actionState.progress;
+  var payAmt = actionState.actionAmount;
   var lb = String(p1.label || '');
-  var sk = geodePlanStrategyKey();
-  var payAmt = prog && prog.phase === 'partial' && prog.remaining >= 1 ? prog.remaining : toNum(p1.amount);
-  if (prog && prog.phase === 'done') payAmt = toNum(p1.amount);
+
+  function geodeMainActionScheduledView(title, sub) {
+    return {
+      title: title,
+      amount: null,
+      cta: 'View plan',
+      sub: sub,
+      run: function () {
+        goTab('plan');
+      }
+    };
+  }
 
   function debtNameFromStep(step) {
     if (!step || step.label.indexOf('Reduce high') !== 0) return '';
@@ -22632,6 +22897,9 @@ function geodeMainActionFromPriorityStep(state, p1, prog) {
         }
       };
     }
+    if (!actionState.isActionable && actionState.isScheduledOnly) {
+      return geodeMainActionScheduledView(title, sub);
+    }
     return {
       title: title,
       amount: payAmt,
@@ -22672,6 +22940,9 @@ function geodeMainActionFromPriorityStep(state, p1, prog) {
         }
       };
     }
+    if (!actionState.isActionable && actionState.isScheduledOnly) {
+      return geodeMainActionScheduledView(bufTitle, bufSub);
+    }
     return {
       title: bufTitle,
       amount: payAmt,
@@ -22708,6 +22979,9 @@ function geodeMainActionFromPriorityStep(state, p1, prog) {
           goTab('plan');
         }
       };
+    }
+    if (!actionState.isActionable && actionState.isScheduledOnly) {
+      return geodeMainActionScheduledView(gTitle, gSub);
     }
     return {
       title: gTitle,
@@ -22753,6 +23027,9 @@ function geodeMainActionFromPriorityStep(state, p1, prog) {
           goTab('plan');
         }
       };
+    }
+    if (!actionState.isActionable && actionState.isScheduledOnly) {
+      return geodeMainActionScheduledView(iTitle, iSub);
     }
     if (!invId) {
       return {
@@ -22945,7 +23222,8 @@ function geodeGetMainAction(state) {
       }
     };
   }
-  var firstInc = geodeFirstIncompletePlanStep(plan, state);
+  var firstAct = geodeFirstActionablePlanStep(plan, state);
+  var firstInc = firstAct || geodeFirstIncompletePlanStep(plan, state);
   if (!firstInc) {
     return {
       title: 'Your monthly plan is complete',
@@ -22960,7 +23238,7 @@ function geodeGetMainAction(state) {
   }
   var activeStep = firstInc.step;
   var prog = firstInc.progress;
-  var _act1 = geodeMainActionFromPriorityStep(state, activeStep, prog);
+  var _act1 = geodeMainActionFromPriorityStep(state, activeStep, prog, firstInc.action);
   if (_act1 && (_act1.cta === 'View plan' || _act1.cta === 'Review plan') && typeof _act1.run === 'function') {
     _act1.run = geodeOpenPlanMonthlyFromHome;
   }
@@ -23252,9 +23530,10 @@ function geodeActivePriorityStepForHome(state) {
     } catch (_eMu) {}
     if (!geodeHasMeaningfulMonthlyExpenses(state) && !_mu) return null;
     var plan = getMonthPlan();
-    var firstInc = geodeFirstIncompletePlanStep(plan, state);
+    var firstInc = geodeFirstActionablePlanStep(plan, state);
+    if (!firstInc) firstInc = geodeFirstIncompletePlanStep(plan, state);
     if (!firstInc || !firstInc.step) return null;
-    return { step: firstInc.step, prog: firstInc.progress };
+    return { step: firstInc.step, prog: firstInc.progress, action: firstInc.action };
   } catch (_eAps) {
     return null;
   }
@@ -30665,8 +30944,11 @@ function rPlan() {
       var _iCtx = geodeGetIncomeContext(S);
       var _hD = !!selectWorstHighAprDebt(S.debts, 10) && calcMonthlyLeftover(S) > 50;
       var _lft = calcMonthlyLeftover(S);
-      var _bT = Number(S.emergencyBuffer||0);
-      var _bS = Number(S.bufferSaved||0);
+      var _bT = geodeResolveBufferTarget(S);
+      var _egBufIntro = getFirstEmergencyGoal(S);
+      var _bS = _egBufIntro
+        ? geodeGoalEffectiveSavedFromState(S, _egBufIntro)
+        : Number(S.bufferSaved || 0);
       var _bSh = _bT>0 && _bS<_bT*0.9;
       if (_iCtx==='IRREGULAR') { _sL='Variable income: buffer sits before goals so a quieter month doesn\u2019t knock the rest off course.'; }
       else if (_lft<0) { _sL=''; }
