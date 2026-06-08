@@ -19708,16 +19708,11 @@ function getSuggestedActions(state) {
       };
       carryPlanSofteningMeta(goalA, stp);
     } else if (stp.label === 'Invest what remains') {
-      var inv0 = (S.investments && S.investments[0]) || null;
-      invA = {
-        type: 'investment_contribution',
-        title: 'Plan a contribution',
-        subtitle: 'Start with a suggested contribution toward your portfolio',
-        amount: stpAmt,
-        targetId: inv0 ? inv0.id : '',
-        targetName: inv0 ? inv0.name : ''
-      };
-      carryPlanSofteningMeta(invA, stp);
+      var invRow = geodeSuggestedActionInvestRow(S, stp, stpAction);
+      if (invRow) {
+        invA = invRow;
+        carryPlanSofteningMeta(invA, stp);
+      }
     }
   }
 
@@ -19787,6 +19782,12 @@ function mergeFrozenSuggestedActionsWithPlan(frozen) {
     fj = frozen[bi];
     if (!fj || !fj.type) continue;
     if (!geodeSuggestedActionTargetExists(S, fj)) continue;
+    if (fj.type === 'investment_contribution') {
+      var _invFrozenStep = geodePlanInvestStepFromPlan(S);
+      if (_invFrozenStep && geodePlanInvestCommittedBasisForStep(S, _invFrozenStep).hasCommitted) {
+        continue;
+      }
+    }
     match = null;
     for (i = 0; i < fresh.length; i++) {
       f = fresh[i];
@@ -19799,11 +19800,15 @@ function mergeFrozenSuggestedActionsWithPlan(frozen) {
     if (match) {
       var matchAction = geodePlanStepActionStateForSuggestedAction(S, fj);
       if (matchAction && !matchAction.isActionable) continue;
+      if (fj.type === 'investment_contribution' && matchAction) {
+        var _invMatchBasis = geodePlanInvestCommittedBasisForStep(S, geodePlanInvestStepFromPlan(S));
+        if (_invMatchBasis.hasCommitted) continue;
+      }
       var matched = {
         type: fj.type,
         title: match.title,
         subtitle: match.subtitle,
-        amount: amt,
+        amount: match.amount != null ? match.amount : amt,
         targetId: fj.targetId || '',
         targetName: match.targetName || ''
       };
@@ -22608,6 +22613,95 @@ function geodePlanInvestPageAmountDisplay(step, invDisp) {
   return { amtShown: suggested > 0 ? fm(suggested) : fm(0), capShown: '' };
 }
 
+/**
+ * F.2 display-only: Home / Suggested Actions investment truth aligned with Plan committed basis.
+ * Does not change getMonthPlan, geodePlanStepActionState, or payment flow.
+ */
+function geodePlanInvestStepFromPlan(state) {
+  state = state || S;
+  try {
+    var plan = getMonthPlan();
+    var steps = (plan && plan.steps) || [];
+    for (var i = 0; i < steps.length; i++) {
+      if (steps[i] && String(steps[i].label || '') === 'Invest what remains' && toNum(steps[i].amount) > 0) {
+        return steps[i];
+      }
+    }
+  } catch (_eInvStp) {}
+  return null;
+}
+
+function geodePlanInvestCommittedBasisForStep(state, step) {
+  state = state || S;
+  step = step || null;
+  var inv0 = geodePrimaryInvestment(state);
+  var invId = inv0 && inv0.id ? String(inv0.id) : '';
+  var basis = geodeInvestCommittedThisMonth(state, invId);
+  var suggested = toNum(step && step.amount);
+  var prog = step ? geodePlanStepProgress(state, step) : { phase: 'none', applied: 0, scheduled: 0 };
+  var isDone = prog.phase === 'done';
+  var hasCommitted = basis.committed > 0;
+  var displayMode = 'suggestion';
+  if (isDone) {
+    displayMode = 'complete';
+  } else if (hasCommitted) {
+    displayMode = basis.paid > 0 ? 'paid_partial' : 'scheduled';
+  }
+  var displayAmount = null;
+  if (displayMode === 'suggestion' && suggested > 0) {
+    displayAmount = suggested;
+  } else if (hasCommitted && !isDone) {
+    displayAmount = basis.committed;
+  }
+  return {
+    scheduled: basis.scheduled,
+    paid: basis.paid,
+    committed: basis.committed,
+    hasCommitted: hasCommitted,
+    displayAmount: displayAmount,
+    displayMode: displayMode,
+    suggested: suggested,
+    isDone: isDone
+  };
+}
+
+function geodePlanInvestHomeDisplayCopy(state, step, prog) {
+  state = state || S;
+  var basis = geodePlanInvestCommittedBasisForStep(state, step);
+  if (basis.isDone) {
+    return { title: geodePlanStepDisplayTitle(step, prog), sub: '', cta: 'View plan', viewOnly: true };
+  }
+  if (basis.hasCommitted) {
+    return {
+      title: 'Review investment step',
+      sub:
+        basis.paid > 0
+          ? 'You have already added to this investment this month.'
+          : 'Investment step started.',
+      cta: 'View plan',
+      viewOnly: true,
+      amount: basis.displayAmount
+    };
+  }
+  return null;
+}
+
+function geodeSuggestedActionInvestRow(state, step, stpAction) {
+  state = state || S;
+  var inv0 = (state.investments && state.investments[0]) || null;
+  var basis = geodePlanInvestCommittedBasisForStep(state, step);
+  if (basis.hasCommitted) return null;
+  var stpAmt = stpAction.actionAmount > 0 ? stpAction.actionAmount : step.amount;
+  return {
+    type: 'investment_contribution',
+    title: 'Plan a contribution',
+    subtitle: 'Start with a suggested contribution toward your portfolio',
+    amount: stpAmt,
+    targetId: inv0 ? inv0.id : '',
+    targetName: inv0 ? inv0.name : ''
+  };
+}
+
 function geodeSumBufferContributionsThisMonth(state) {
   var eg = getFirstEmergencyGoal(state);
   var sum = 0;
@@ -23059,6 +23153,9 @@ function geodeMainActionSubForStep(step, prog, mainKind) {
     return '';
   }
   if (prog && prog.phase === 'partial' && prog.applied > 0 && toNum(prog.remaining) >= 1) {
+    if (lb === 'Invest what remains') {
+      return geodeHomeInsightShortLine('You have already added to this investment this month.', 88);
+    }
     return geodeHomeInsightShortLine(
       fm(prog.applied) + ' marked complete \u00b7 ' + fm(prog.remaining) + ' left on plan target',
       88
@@ -23071,6 +23168,12 @@ function geodeMainActionSubForStep(step, prog, mainKind) {
     return geodeBufferActionCopy(S).mainSub;
   }
   if (lb === 'Invest what remains') {
+    var _invSubBasis = geodePlanInvestCommittedBasisForStep(S, step);
+    if (_invSubBasis.hasCommitted) {
+      return _invSubBasis.paid > 0
+        ? 'You have already added to this investment this month.'
+        : 'Investment step started.';
+    }
     return 'After earlier plan steps, review what is left.';
   }
   if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
@@ -23267,6 +23370,19 @@ function geodeMainActionFromPriorityStep(state, p1, prog, actionState) {
     }
     var iTitle = geodePlanStepDisplayTitle(p1, prog);
     var iSub = geodeMainActionSubForStep(p1, prog, 'invest');
+    var invDisplay = geodePlanInvestHomeDisplayCopy(state, p1, prog);
+    if (invDisplay) {
+      return {
+        title: invDisplay.title || iTitle,
+        amount: invDisplay.viewOnly ? invDisplay.amount : null,
+        cta: invDisplay.cta || 'View plan',
+        sub: invDisplay.sub || iSub,
+        _geodeHomeMainActionNoRibbon: !!invDisplay.viewOnly,
+        run: function () {
+          goTab('plan');
+        }
+      };
+    }
     if (prog && prog.phase === 'done') {
       return {
         title: iTitle,
@@ -25135,7 +25251,17 @@ function openSuggestedAction(idx) {
     } catch (_eRpaPrepSa) {}
     return;
   }
-  if (typeof a.amount !== 'number' || a.amount <= 0) return;
+  if (typeof a.amount !== 'number' || a.amount <= 0) {
+    if (a.type !== 'investment_contribution') return;
+  }
+  if (a.type === 'investment_contribution') {
+    var _invSaStep = geodePlanInvestStepFromPlan(S);
+    if (_invSaStep && geodePlanInvestCommittedBasisForStep(S, _invSaStep).hasCommitted) {
+      goTab('plan');
+      return;
+    }
+    if (typeof a.amount !== 'number' || a.amount <= 0) return;
+  }
   var today = geodeTodayLocalISO();
   var prefill = { name: '', amount: a.amount, date: today, status: 'upcoming', rec: false, goalId: '', investId: '', debtId: '' };
   if (a.type === 'debt_payment') {
