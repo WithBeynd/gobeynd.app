@@ -5855,6 +5855,151 @@ function geodeHasPlanContext() {
   );
 }
 
+/**
+ * F.1 display-only: behavioural readiness for copy gating (not engine state).
+ * Returns blank | setup | baseline | preview | active.
+ * Pass opts.plan to avoid a second getMonthPlan() when the caller already has it.
+ * Pass opts.skipPlanFetch for lightweight checks without plan generation.
+ */
+function geodePlanReadinessIsEmptyForState(state) {
+  if (!state) return true;
+  if (state.incomeExplicitlySet) return false;
+  if ((state.debts || []).length > 0) return false;
+  if ((state.goals || []).length > 0) return false;
+  if ((state.expenses || []).length > 0) return false;
+  if ((state.payments || []).length > 0) return false;
+  if ((state.investments || []).length > 0) return false;
+  return true;
+}
+
+function geodePlanReadinessHasPlanContextForState(state) {
+  state = state || S;
+  if (state === S) return geodeHasPlanContext();
+  return (
+    (state.debts && state.debts.length > 0) ||
+    (state.goals && state.goals.length > 0) ||
+    (state.payments && state.payments.length > 0) ||
+    (state.expenses && state.expenses.length > 0)
+  );
+}
+
+function geodePlanReadinessHasPositiveIncomeForState(state) {
+  state = state || S;
+  return !!state.incomeExplicitlySet && toNum(state.income) > 0;
+}
+
+function geodePlanReadinessMeaningfulStep(plan) {
+  if (!plan || !plan.steps) return false;
+  var steps = plan.steps;
+  for (var i = 0; i < steps.length; i++) {
+    if (steps[i] && toNum(steps[i].amount) > 0) return true;
+  }
+  return false;
+}
+
+function geodePlanReadinessState(state, opts) {
+  state = state || S;
+  opts = opts || {};
+  var empty =
+    state === S ? geodeIsEmptyState() : geodePlanReadinessIsEmptyForState(state);
+  if (empty) return 'blank';
+  var hasIncome =
+    state === S
+      ? geodeHasPositiveIncome()
+      : geodePlanReadinessHasPositiveIncomeForState(state);
+  var hasCtx =
+    state === S
+      ? geodeHasPlanContext()
+      : geodePlanReadinessHasPlanContextForState(state);
+  if (!hasIncome || !hasCtx) return 'setup';
+  if (opts.skipPlanFetch) return 'baseline';
+  var plan = opts.plan || null;
+  if (!plan && state === S) {
+    try {
+      plan = getMonthPlan();
+    } catch (_ePrsPlan) {
+      plan = null;
+    }
+  }
+  if (!plan) return 'baseline';
+  if (!geodePlanReadinessMeaningfulStep(plan)) {
+    if (plan.steps && plan.steps.length > 0) return 'preview';
+    return 'baseline';
+  }
+  return 'active';
+}
+
+function geodePlanReadinessAllowsPlanLanguage(readiness) {
+  return readiness === 'preview' || readiness === 'active';
+}
+
+function geodePlanReadinessAllowsReviewLanguage(readiness) {
+  return readiness === 'baseline' || readiness === 'preview' || readiness === 'active';
+}
+
+/** F.1 display-only: Plan tab header copy from readiness (behavioural truth). */
+function geodePlanPageHeaderCopy(state, opts) {
+  state = state || S;
+  opts = opts || {};
+  var readiness = geodePlanReadinessState(state, opts);
+  if (readiness === 'blank') {
+    return {
+      title: 'Build your starting picture',
+      subtitle: 'Add a few details so Beynd can guide you properly.'
+    };
+  }
+  if (readiness === 'setup') {
+    return {
+      title: 'Your month is still taking shape',
+      subtitle: 'Beynd is still learning your month. You can add the basics first and refine later.'
+    };
+  }
+  if (readiness === 'baseline') {
+    return {
+      title: 'A starting point for this month',
+      subtitle: 'Beynd can start shaping guidance from what you entered.'
+    };
+  }
+  if (readiness === 'preview') {
+    return {
+      title: 'Suggested priorities this month',
+      subtitle: 'This is a suggested sequence, not a commitment. You can adjust before taking action.'
+    };
+  }
+  return {
+    title: 'Your monthly plan',
+    subtitle: 'Your plan for what to do with this month\u2019s money.'
+  };
+}
+
+/** F.1 display-only: Home anticipatory card label from readiness. */
+function geodeHomeAnticipatoryCardLabel(readiness) {
+  if (readiness === 'baseline') return 'This month';
+  if (readiness === 'preview') return 'Suggested priorities';
+  return 'Worth a quick look';
+}
+
+/** F.1 display-only: fallback main-action title when plan steps are thin. */
+function geodePlanReadinessMainActionFallbackTitle(state, opts) {
+  var readiness = geodePlanReadinessState(state, opts);
+  if (readiness === 'setup') return 'Finish your setup';
+  if (readiness === 'baseline') return 'Review your setup';
+  if (readiness === 'preview') return 'See suggested priorities';
+  return 'Review your plan';
+}
+
+/** F.1 display-only: Reality compare intro note from readiness. */
+function geodePlanReadinessRealityCompareNote(state) {
+  var readiness = geodePlanReadinessState(state);
+  if (readiness === 'active' || readiness === 'preview') {
+    return 'Based on your plan for this month.';
+  }
+  if (readiness === 'baseline') {
+    return 'Based on what you entered for this month.';
+  }
+  return 'Based on what you entered so far.';
+}
+
 function goToSettings() {
   geodeNavigateToSettingsSubpage('');
 }
@@ -20729,7 +20874,7 @@ function geodePlanPageStatusSectionHtml(optSkipNegDup) {
       escHtmlLite('Plan status') +
       '</div>' +
       '<div class="plan-status-copy">' +
-      escHtmlLite('Add debts, expenses, goals, or payments to see whether you\u2019re on track.') +
+    escHtmlLite('Add debts, expenses, goals, or payments so Beynd can understand this month.') +
       '</div></div>'
     );
   }
@@ -23317,10 +23462,13 @@ function geodeGetMainAction(state) {
   }
   if (!steps.length || !hasMeaningfulStep) {
     if (geodeHomePersistentOverBudgetCardVisible(state)) return null;
+    var _maFbOpts = { plan: plan };
     return {
-      title: 'Review your plan',
+      title: geodePlanReadinessMainActionFallbackTitle(state, _maFbOpts),
       amount: null,
-      cta: 'Review plan',
+      cta: geodePlanReadinessAllowsPlanLanguage(geodePlanReadinessState(state, _maFbOpts))
+        ? 'Review plan'
+        : 'Open plan',
       sub: '',
       run: function () {
         geodeOpenPlanMonthlyFromHome();
@@ -25992,7 +26140,7 @@ function geodeRealityPageHtml() {
     '</span></div>';
   cmp +=
     '<div class="reality-note reality-note--intro">' +
-    escHtmlLite('Based on your plan for this month.') +
+    escHtmlLite(geodePlanReadinessRealityCompareNote(S)) +
     '</div>';
   cmp +=
     '<div class="reality-divider"></div>';
@@ -30380,9 +30528,14 @@ function geodeHomeAnticipatoryUpcomingContributionDays(state) {
 
 function geodeHomeAnticipatoryLine(state) {
   state = state || S;
+  var readiness = geodePlanReadinessState(state);
+  var allowsPlan = geodePlanReadinessAllowsPlanLanguage(readiness);
   try {
     if (geodeHasOverdue(state)) {
-      return 'A payment may need attention today. A quick review can help keep the rest of your plan steady.';
+      if (allowsPlan) {
+        return 'A payment may need attention today. A quick review can help keep the rest of your plan steady.';
+      }
+      return 'A payment may need attention today. Check it when you have a moment.';
     }
   } catch (_eAaaOverdue) {}
   try {
@@ -30392,7 +30545,10 @@ function geodeHomeAnticipatoryLine(state) {
   } catch (_eAaaPastContrib) {}
   try {
     if (calcMonthlyLeftover(state) < 0) {
-      return 'Your plan is under pressure this month. A quick review can help you choose the next steady move.';
+      if (allowsPlan) {
+        return 'Your plan is under pressure this month. A quick review can help you choose the next steady move.';
+      }
+      return 'Spending looks tight this month. A quick look at what you entered may help.';
     }
   } catch (_eAaaLeft) {}
   try {
@@ -30401,23 +30557,41 @@ function geodeHomeAnticipatoryLine(state) {
       if (dueIn === 0) {
         return 'You have a planned contribution today. A quick check can help keep the month grounded.';
       }
-      return 'A planned contribution is coming up soon. Your plan may be worth a quick look.';
+      if (allowsPlan) {
+        return 'A planned contribution is coming up soon. Your plan may be worth a quick look.';
+      }
+      return 'A planned contribution is coming up soon. Worth a quick check when you are ready.';
     }
   } catch (_eAaaUpcoming) {}
   try {
     var latest = geodeGetLatestActivity(state);
     if (geodeLatestActivityIsRecent(latest, 72)) {
-      return 'Your plan has fresh activity. A quick look can keep your next move grounded.';
+      if (allowsPlan) {
+        return 'Your plan has fresh activity. A quick look can keep your next move grounded.';
+      }
+      return 'You added something recently. A quick look can keep your month grounded.';
     }
   } catch (_eAaaActivity) {}
-  return 'Based on your plan today, a quick review can help you stay aligned without overthinking it.';
+  if (readiness === 'setup') {
+    return 'Your month is still taking shape. Add a few details when you have a moment.';
+  }
+  if (readiness === 'baseline') {
+    return 'Here\u2019s a starting point for this month. You can review the picture before acting.';
+  }
+  if (readiness === 'preview') {
+    return 'Here\u2019s what may need attention first. You can adjust before taking action.';
+  }
+  return 'Here\u2019s what looks most important now. A quick look can keep your next move grounded.';
 }
 
-function geodeHomeAnticipatoryHtml(body) {
+function geodeHomeAnticipatoryHtml(body, cardLabel) {
   if (!body) return '';
+  var label = cardLabel || 'Worth a quick look';
   return (
     '<div id="geode-home-anticipatory" class="geode-soft-enter geode-home-anticipatory" data-geode-home-anticipatory="1" role="status" aria-live="polite">' +
-    '<div data-geode-css="font-size:9px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--gem-l);margin-bottom:5px">Worth a quick look</div>' +
+    '<div data-geode-css="font-size:9px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--gem-l);margin-bottom:5px">' +
+    escHtmlLite(label) +
+    '</div>' +
     '<div data-geode-css="font-size:12px;color:rgba(237,234,255,0.84);line-height:1.5">' +
     escHtmlLite(body) +
     '</div></div>'
@@ -30433,10 +30607,11 @@ function geodeHomeAnticipatoryMaybeHtml(state) {
     if (String(state.homeFirstOpenDay || '') === today) return '';
     state.homeFirstOpenDay = today;
     if (String(state.homeAnticipatoryShownDay || '') === today) return '';
+    var readiness = geodePlanReadinessState(state);
     var body = geodeHomeAnticipatoryLine(state);
     if (!body) return '';
     state.homeAnticipatoryShownDay = today;
-    return geodeHomeAnticipatoryHtml(body);
+    return geodeHomeAnticipatoryHtml(body, geodeHomeAnticipatoryCardLabel(readiness));
   } catch (_eAaaMaybe) {
     return '';
   }
@@ -30687,12 +30862,23 @@ function rHome() {
           '</div>' +
           '</div>';
       } else {
+        var _qsReadiness = geodePlanReadinessState(S);
+        var _qsCompleteNote =
+          _qsReadiness === 'active' || _qsReadiness === 'preview'
+            ? 'Beynd has a suggested sequence for this month. Adjust spending or add more detail anytime.'
+            : 'Setup saved. Beynd can start shaping guidance from what you entered.';
         h +=
           '<div class="card" data-geode-css="margin-bottom:12px;border:1px solid rgba(155,127,232,0.22);background:rgba(155,127,232,0.06)">' +
           '<div class="card-title">Setup complete \u2714</div>' +
-          '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.35;margin-top:4px">Your plan is live. Adjust spending or add more detail anytime.</div>' +
+          '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.35;margin-top:4px">' +
+          escHtmlLite(_qsCompleteNote) +
+          '</div>' +
           '<div data-geode-css="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">' +
-          '<button type="button" class="btn-sm" onclick="goTab(\'plan\')">See my plan</button>' +
+          '<button type="button" class="btn-sm" onclick="goTab(\'plan\')">' +
+          escHtmlLite(
+            _qsReadiness === 'active' || _qsReadiness === 'preview' ? 'See my plan' : 'See this month'
+          ) +
+          '</button>' +
           '<button type="button" class="btn-sm" onclick="msub=\'expenses\';goTab(\'money\')">Adjust spending</button>' +
           '</div></div>';
       }
@@ -30999,16 +31185,22 @@ function rPlan() {
     h += _seg;
 
     if (geodeIsEmptyState()) {
-      h += '<div data-geode-css="font-size:22px;font-weight:800;color:var(--tx-1);letter-spacing:-0.3px;margin-bottom:6px">Your monthly plan</div>';
+      var _planHdrBlank = geodePlanPageHeaderCopy(S);
       h +=
-        '<div data-geode-css="font-size:12px;color:var(--tx-3);margin-bottom:16px;line-height:1.45">Your plan for what to do with this month\u2019s money.</div>';
+        '<div data-geode-css="font-size:22px;font-weight:800;color:var(--tx-1);letter-spacing:-0.3px;margin-bottom:6px">' +
+        escHtmlLite(_planHdrBlank.title) +
+        '</div>';
+      h +=
+        '<div data-geode-css="font-size:12px;color:var(--tx-3);margin-bottom:16px;line-height:1.45">' +
+        escHtmlLite(_planHdrBlank.subtitle) +
+        '</div>';
       h +=
         '<div data-geode-css="padding:16px;border-radius:14px;background:rgba(155,127,232,0.06);border:1px solid rgba(155,127,232,0.18);margin-bottom:14px">' +
         '<div data-geode-css="font-size:13px;font-weight:700;color:var(--tx-1);margin-bottom:10px">Three steps to your first plan</div>' +
         '<div data-geode-css="font-size:12px;color:var(--tx-2);line-height:1.7">' +
-        '<div data-geode-css="margin-bottom:6px"><span data-geode-css="color:var(--gem);font-weight:700">1.</span> Set your monthly income \u2014 tap the income pill at the top of Home</div>' +
+        '<div data-geode-css="margin-bottom:6px"><span data-geode-css="color:var(--gem);font-weight:700">1.</span> Set your monthly income. Tap the income pill at the top of Home.</div>' +
         '<div data-geode-css="margin-bottom:6px"><span data-geode-css="color:var(--gem);font-weight:700">2.</span> Add your regular expenses in Money \u2192 Spending</div>' +
-        '<div><span data-geode-css="color:var(--gem);font-weight:700">3.</span> Come back here \u2014 your plan builds automatically</div>' +
+        '<div><span data-geode-css="color:var(--gem);font-weight:700">3.</span> Come back here. Your plan builds automatically.</div>' +
         '</div></div>';
       h +=
         '<button type="button" class="btn btn-p" onclick="geodeOpenQuickSetupWizard()" data-geode-css="width:100%;margin-bottom:10px">Quick setup (2 mins)</button>';
@@ -31021,9 +31213,15 @@ function rPlan() {
     }
 
     if (geodeIsNoIncomeMode()) {
-      h += '<div data-geode-css="font-size:22px;font-weight:800;color:var(--tx-1);letter-spacing:-0.3px;margin-bottom:6px">Your monthly plan</div>';
+      var _planHdrNoInc = geodePlanPageHeaderCopy(S);
       h +=
-        '<div data-geode-css="font-size:12px;color:var(--tx-3);margin-bottom:18px;line-height:1.45">Your plan for what to do with this month\u2019s money.</div>';
+        '<div data-geode-css="font-size:22px;font-weight:800;color:var(--tx-1);letter-spacing:-0.3px;margin-bottom:6px">' +
+        escHtmlLite(_planHdrNoInc.title) +
+        '</div>';
+      h +=
+        '<div data-geode-css="font-size:12px;color:var(--tx-3);margin-bottom:18px;line-height:1.45">' +
+        escHtmlLite(_planHdrNoInc.subtitle) +
+        '</div>';
       h +=
         '<div data-geode-css="padding:18px;border-radius:16px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.25)">';
       h += '<div data-geode-css="font-size:15px;font-weight:700;color:#93c5fd;margin-bottom:12px">Your current focus</div>';
@@ -31041,9 +31239,16 @@ function rPlan() {
       return;
     }
 
-    h += '<div data-geode-css="font-size:22px;font-weight:800;color:var(--tx-1);letter-spacing:-0.3px;margin-bottom:6px">Your monthly plan</div>';
+    var plan = getMonthPlan();
+    var _planHdrMain = geodePlanPageHeaderCopy(S, { plan: plan });
     h +=
-      '<div data-geode-css="font-size:12px;color:var(--tx-3);margin-bottom:10px;line-height:1.45">Your plan for what to do with this month\u2019s money.</div>';
+      '<div data-geode-css="font-size:22px;font-weight:800;color:var(--tx-1);letter-spacing:-0.3px;margin-bottom:6px">' +
+      escHtmlLite(_planHdrMain.title) +
+      '</div>';
+    h +=
+      '<div data-geode-css="font-size:12px;color:var(--tx-3);margin-bottom:10px;line-height:1.45">' +
+      escHtmlLite(_planHdrMain.subtitle) +
+      '</div>';
     try {
       var _sL = '';
       var _iCtx = geodeGetIncomeContext(S);
@@ -31078,7 +31283,6 @@ function rPlan() {
       return;
     }
 
-    var plan = getMonthPlan();
     if (!geodeHasPlanContext()) {
       h += geodePlanPageStatusSectionHtml();
       h += geodePlanPageStyleSectionHtml();
@@ -32847,7 +33051,13 @@ function geodeQsDone(){
   try{closeModal();}catch(e){}
   try{syncPills();}catch(eSyncQs){}
   try{goTab('home');render();}catch(e){}
-  toast('Your first plan is saved.', 'ok');
+  var _qsToastReadiness = geodePlanReadinessState(S);
+  toast(
+    _qsToastReadiness === 'active' || _qsToastReadiness === 'preview'
+      ? 'Your setup is saved.'
+      : 'Setup saved. Beynd can start shaping guidance.',
+    'ok'
+  );
 }
 
 /** Session-only: dismiss post\u2011Quick Setup Reality nudge on Home. */
