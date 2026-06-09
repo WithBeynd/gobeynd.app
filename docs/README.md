@@ -14,11 +14,11 @@ Project documentation for audits, builds, handovers, and architecture memory.
 
 ## Plan stabilisation (June 2026)
 
-**Stable HEAD:** `ee4e85a`
+**Stable HEAD:** `9796f2e`
 
 | Document | Purpose |
 |----------|---------|
-| [**Handover — Plan stabilisation**](./handover.md) | **Primary reference** — audit-first model, protected functions, next stages F.1–F.3 |
+| [**Handover — Plan stabilisation**](./handover.md) | **Primary reference** — audit-first model, protected functions, F.1–F.3 shipped |
 | [Plan stabilisation completed](./plan-stabilisation-completed.md) | Stages B, C, D, D.2, INV-B — goals, principles, QA |
 | [Allowed language by readiness state](./allowed-language-by-readiness-state.md) | F.1-PRE copy contract — what Beynd may say before a plan truly exists |
 | [Plan backlog](./plan-backlog.md) | Open items, dependency order, trust/regression notes |
@@ -38,7 +38,7 @@ Project documentation for audits, builds, handovers, and architecture memory.
 
 | Document | Series | Status |
 |----------|--------|--------|
-| [**Plan stabilisation handover**](./handover.md) | Post-81F / Plan | **Primary reference** — read before F.1–F.3 |
+| [**Plan stabilisation handover**](./handover.md) | Post-81F / Plan | **Primary reference** — F.3 shipped at `9796f2e` |
 | [**Stage 76–77 — Ask Beynd evolution**](./handovers/handover-stage-76-77-ask-beynd-evolution.md) | 76–77 | Primary reference for Ask Beynd work |
 | [Stage 55C — Reality-to-Plan alignment](./handover-stage-55c-reality-to-plan-alignment.md) | 55C | Complete |
 | [Stage 53 mini milestone](./handover-stage-53-mini-milestone.md) | 53 | Reference |
