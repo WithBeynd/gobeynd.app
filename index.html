@@ -6499,33 +6499,106 @@ function geodeDebtShouldShowProgressBridge(debt, state) {
   return geodeDebtPaidPaymentsSinceProviderReviewAmount(debt, state) > 0;
 }
 
-/** Money debt card: calm progress bridge between recorded payments and confirmed balance. */
-function geodeDebtProgressBridgeHtml(debt, state) {
-  if (!geodeDebtShouldShowProgressBridge(debt, state)) return '';
+/** Display-only: adaptive debt review state for Money card disclosure. */
+function geodeDebtReviewDisclosureState(debt, state) {
+  debt = debt || {};
   state = state || (typeof S !== 'undefined' ? S : null);
-  var totalPaid = geodeDebtPaidPaymentsSinceProviderReviewAmount(debt, state);
-  var confirmedBal = toNum(debt.balance);
-  var approximate = Math.max(0, Math.round((confirmedBal - totalPaid) * 100) / 100);
-  var html =
-    '<div data-geode-css="margin-top:10px;padding:10px 11px;border-radius:10px;background:rgba(124,92,191,0.08);border:1px solid rgba(124,92,191,0.14)">' +
-    '<div data-geode-css="font-size:10px;color:var(--tx-2);line-height:1.4">Payments recorded since last check: ' +
-    fm(totalPaid) +
-    '</div>' +
-    '<div data-geode-css="font-size:10px;color:rgba(237,234,255,0.82);margin-top:4px;line-height:1.4">Your balance may now be lower than the ' +
-    fm(confirmedBal) +
-    ' you last confirmed.</div>';
-  if (totalPaid > 0 && approximate < confirmedBal) {
-    html +=
-      '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:3px;line-height:1.35">About ' +
-      fm(approximate) +
-      ' before interest and fees.</div>';
+  if (!debt.id) return 'hidden';
+  if (!String(debt.lastProviderReviewAt || '').slice(0, 10)) return 'unconfirmed';
+  if (geodeDebtShouldShowProgressBridge(debt, state)) return 'reconcile';
+  var days = geodeDebtDaysSinceProviderReview(debt);
+  var staleAfter = geodeDebtProviderReviewStaleAfterDays(debt);
+  if (days != null && days > staleAfter) return 'stale';
+  return 'hidden';
+}
+
+/** Display-only: whether Edit Debt should show reconciliation guidance copy. */
+function geodeDebtNeedsReconciliationGuidance(debt, state) {
+  if (!debt) return true;
+  return geodeDebtReviewDisclosureState(debt, state) !== 'hidden';
+}
+
+/** Display-only: compact label/value row for debt review disclosure. */
+function geodeDebtReviewMetricRow(label, value) {
+  return (
+    '<div data-geode-css="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:3px;line-height:1.3">' +
+    '<span data-geode-css="color:var(--tx-3)">' +
+    escHtmlLite(label) +
+    '</span>' +
+    '<span data-geode-css="font-weight:600;color:rgba(237,234,255,0.88);text-align:right;white-space:nowrap">' +
+    escHtmlLite(value) +
+    '</span></div>'
+  );
+}
+
+/** Money debt card: adaptive review summary for Payments vs balance disclosure. */
+function geodeDebtReviewDisclosureSummaryCopy(debt, state) {
+  var st = geodeDebtReviewDisclosureState(debt, state);
+  if (st === 'hidden') return '';
+  if (st === 'unconfirmed') return 'Balance not confirmed yet';
+  if (st === 'reconcile') {
+    var totalPaidR = geodeDebtPaidPaymentsSinceProviderReviewAmount(debt, state);
+    if (totalPaidR > 0) return fm(totalPaidR) + ' recorded since last check';
+    return 'Review balance';
   }
-  html +=
-    '<button type="button" class="btn btn-s" data-geode-css="width:100%;margin-top:8px;font-size:11px;padding:8px 10px" onclick="openDebtModal(\'' +
+  if (st === 'stale') {
+    var days = geodeDebtDaysSinceProviderReview(debt);
+    if (days != null && days >= 0) return 'Balance last confirmed ' + days + 'd ago';
+    return 'Balance last confirmed';
+  }
+  return '';
+}
+
+/** Money debt card: adaptive review disclosure (replaces standalone bridge block). */
+function geodeDebtReviewDisclosureHtml(debt, state) {
+  debt = debt || {};
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var st = geodeDebtReviewDisclosureState(debt, state);
+  if (st === 'hidden') return '';
+  var summary = geodeDebtReviewDisclosureSummaryCopy(debt, state);
+  if (!summary) return '';
+  var body = '';
+  var confirmedBal = toNum(debt.balance);
+  var reviewNote =
+    '<div data-geode-css="margin-top:5px;font-size:9px;color:var(--tx-3);line-height:1.3">Check your provider before updating.</div>';
+  var updateBtn =
+    '<button type="button" class="btn btn-s" data-geode-css="width:100%;margin-top:8px;font-size:10px;padding:7px 10px" onclick="openDebtModal(\'' +
     debt.id +
-    '\')">Update balance</button>' +
-    '</div>';
-  return html;
+    '\')">Update balance</button>';
+  if (st === 'reconcile') {
+    var totalPaid = geodeDebtPaidPaymentsSinceProviderReviewAmount(debt, state);
+    var approximate = Math.max(0, Math.round((confirmedBal - totalPaid) * 100) / 100);
+    body += '<div data-geode-css="margin-top:4px">';
+    body += geodeDebtReviewMetricRow('Recorded payments', fm(totalPaid));
+    body += geodeDebtReviewMetricRow('Last confirmed', fm(confirmedBal));
+    if (totalPaid > 0 && approximate < confirmedBal) {
+      body += geodeDebtReviewMetricRow('Rough guide', fm(approximate));
+    }
+    body += '</div>' + reviewNote + updateBtn;
+  } else if (st === 'stale') {
+    var staleDays = geodeDebtDaysSinceProviderReview(debt);
+    body += '<div data-geode-css="margin-top:4px">';
+    body += geodeDebtReviewMetricRow('Last confirmed', fm(confirmedBal));
+    if (staleDays != null && staleDays >= 0) {
+      body += geodeDebtReviewMetricRow('Confirmed', staleDays === 0 ? 'today' : staleDays + 'd ago');
+    }
+    body += '</div>' + reviewNote + updateBtn;
+  } else if (st === 'unconfirmed') {
+    body += '<div data-geode-css="margin-top:4px">' + geodeDebtReviewMetricRow('Last confirmed', 'Not yet') + '</div>' + reviewNote + updateBtn;
+  }
+  return (
+    '<details data-geode-css="margin-top:4px;font-size:9px;color:rgba(189,183,220,0.8);line-height:1.25">' +
+    '<summary data-geode-css="cursor:pointer;font-weight:700;list-style-position:inside">' +
+    escHtmlLite(summary) +
+    '</summary>' +
+    body +
+    '</details>'
+  );
+}
+
+/** Deprecated standalone bridge; review content lives in geodeDebtReviewDisclosureHtml. */
+function geodeDebtProgressBridgeHtml(debt, state) {
+  return '';
 }
 
 /** Stage 81B-2.2: paid debt-linked payment after last provider save (existing state only). */
@@ -6547,13 +6620,10 @@ function geodeDebtPaidPaymentSinceProviderReview(debt, state) {
 function geodeDebtShouldShowHealthOnCard(debt, state) {
   if (!debt) return false;
   state = state || (typeof S !== 'undefined' ? S : null);
-  if (!String(debt.lastProviderReviewAt || '').slice(0, 10)) return true;
-  var days = geodeDebtDaysSinceProviderReview(debt);
-  var staleAfter = geodeDebtProviderReviewStaleAfterDays(debt);
-  if (days != null && days > staleAfter) return true;
+  if (geodeDebtReviewDisclosureState(debt, state) !== 'hidden') return false;
   var it = String(debt.interestType || 'unknown').toLowerCase();
   if (it === 'unknown' || it === 'variable') return true;
-  if (geodeDebtPaidPaymentSinceProviderReview(debt, state) && !geodeDebtShouldShowProgressBridge(debt, state)) return true;
+  if (geodeDebtPaidPaymentSinceProviderReview(debt, state)) return true;
   return false;
 }
 
@@ -6562,15 +6632,7 @@ function geodeDebtHealthCardMinimalCopy(debt, state) {
   debt = debt || {};
   state = state || (typeof S !== 'undefined' ? S : null);
   if (geodeDebtPaidPaymentSinceProviderReview(debt, state)) {
-    if (geodeDebtShouldShowProgressBridge(debt, state)) return '';
     return 'Payment recorded. Balance stays as last confirmed.';
-  }
-  var at = String(debt.lastProviderReviewAt || '').slice(0, 10);
-  var days = geodeDebtDaysSinceProviderReview(debt);
-  var staleAfter = geodeDebtProviderReviewStaleAfterDays(debt);
-  if (!at) return 'Balance not confirmed with your provider yet';
-  if (days != null && days > staleAfter) {
-    return 'Balance last confirmed ' + days + 'd ago';
   }
   var it = String(debt.interestType || 'unknown').toLowerCase();
   if (it === 'variable') return 'Variable APR';
@@ -33211,9 +33273,9 @@ function rDebts(el) {
     }
     var lastDebtAmt = geodeLastLinkedContributionAmount('debt', d.id);
     var lastDebtLine = lastDebtAmt ? '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:6px;line-height:1.2">Last payment: ' + fm(lastDebtAmt) + '</div>' : '';
-    var progressBridge = geodeDebtProgressBridgeHtml(d, S);
+    var reviewDisclosure = geodeDebtReviewDisclosureHtml(d, S);
     var healthCard = geodeDebtHealthCardHtml(d, S);
-    e.innerHTML='<div data-geode-css="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div data-geode-css="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:#f07070">'+geodeSvg(catIc)+'</span><span>'+d.name+'</span></div><div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:2px;text-transform:uppercase;letter-spacing:1px">'+d.cat+'</div></div><div data-geode-css="display:flex;gap:5px"><button class="btn-sm" onclick="openDebtModal(\''+d.id+'\')">Edit</button><button class="btn-del" onclick="delDebt(\''+d.id+'\')">Remove</button></div></div><div data-geode-css="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"><div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Balance</div><div data-geode-css="font-size:17px;font-weight:700;color:#f07070">'+fm(d.balance)+'</div>'+(showFocus?'<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:4px;line-height:1.2">Often the first focus in your plan</div>':'')+'<details data-geode-css="margin-top:4px;font-size:9px;color:rgba(189,183,220,0.8);line-height:1.25"><summary data-geode-css="cursor:pointer;font-weight:700;list-style-position:inside">Payments vs balance</summary><div data-geode-css="margin-top:4px;color:rgba(237,234,255,0.78)">This balance is what you last confirmed with your provider. Payments count for this month and your plan. They do not change this balance until you save a new figure in Edit.</div></details></div>'+(d.apr?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">APR</div><div data-geode-css="font-size:17px;font-weight:700;color:#f5c234">'+d.apr+'%</div></div>':'<div></div>')+(mi>0?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Interest</div><div data-geode-css="font-size:12px;font-weight:600;color:rgba(240,112,112,0.72)">~'+fm(mi)+'/mo</div></div>':'<div></div>')+'</div>'+progressBridge+healthCard+'<button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:10px" onclick="geodePayFromDebt(\''+d.id+'\')">Schedule extra payment</button>'+lastDebtLine;
+    e.innerHTML='<div data-geode-css="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div data-geode-css="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:#f07070">'+geodeSvg(catIc)+'</span><span>'+d.name+'</span></div><div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:2px;text-transform:uppercase;letter-spacing:1px">'+d.cat+'</div></div><div data-geode-css="display:flex;gap:5px"><button class="btn-sm" onclick="openDebtModal(\''+d.id+'\')">Edit</button><button class="btn-del" onclick="delDebt(\''+d.id+'\')">Remove</button></div></div><div data-geode-css="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"><div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Balance</div><div data-geode-css="font-size:17px;font-weight:700;color:#f07070">'+fm(d.balance)+'</div>'+(showFocus?'<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:4px;line-height:1.2">Often the first focus in your plan</div>':'')+reviewDisclosure+'</div>'+(d.apr?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">APR</div><div data-geode-css="font-size:17px;font-weight:700;color:#f5c234">'+d.apr+'%</div></div>':'<div></div>')+(mi>0?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Interest</div><div data-geode-css="font-size:12px;font-weight:600;color:rgba(240,112,112,0.72)">~'+fm(mi)+'/mo</div></div>':'<div></div>')+'</div>'+healthCard+'<button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:10px" onclick="geodePayFromDebt(\''+d.id+'\')">Schedule extra payment</button>'+lastDebtLine;
     list.appendChild(e);
   }
 }
@@ -33222,13 +33284,18 @@ function openDebtModal(id) {
   if (d) geodeNormalizeDebtHealthFields(S);
   var intType = d && d.interestType ? String(d.interestType).toLowerCase() : 'unknown';
   if (intType !== 'fixed' && intType !== 'variable') intType = 'unknown';
+  var needsGuidance = geodeDebtNeedsReconciliationGuidance(d, S);
   var h=mh(d?'Edit Debt':'Add Debt');
   h+='<div class="field"><label>Name</label><input id="dn" class="fi" placeholder="Visa Card, Student Loan..." value="'+(d?d.name:'')+'" /></div>';
   h+='<div class="field"><label>Balance</label><input type="number" id="db" class="fi" placeholder="5000" value="'+(d?d.balance:'')+'" /></div>';
   h+=
-    '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:-4px 0 6px;line-height:1.45">Use the balance your provider shows today. Beynd does not pull live balances. Saving confirms what you owe for net worth.</div>';
-  h+=
-    '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:0 0 10px;line-height:1.45">Payments count for your month and plan. They do not change this balance until you save here.</div>';
+    '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:-4px 0 4px;line-height:1.4">Use the balance your provider shows today.</div>';
+  if (!d || needsGuidance) {
+    h+=
+      '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:0 0 10px;line-height:1.4">Beynd does not pull live balances.</div>';
+  } else {
+    h += '<div data-geode-css="margin:0 0 10px"></div>';
+  }
   h+='<div class="field"><label>Category</label><select id="dcat" class="fi">';
   var dkeys=Object.keys(DEBT_LABELS); for(var i=0;i<dkeys.length;i++) h+='<option value="'+dkeys[i]+'"'+(d&&d.cat===dkeys[i]?' selected':'')+'>'+DEBT_LABELS[dkeys[i]]+'</option>';
   h+='</select></div>';
@@ -33241,8 +33308,10 @@ function openDebtModal(id) {
   h+='<option value="fixed"'+(intType==='fixed'?' selected':'')+'>Mostly fixed</option>';
   h+='<option value="variable"'+(intType==='variable'?' selected':'')+'>Variable or promotional</option>';
   h+='</select></div>';
-  h+=
-    '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:-4px 0 8px;line-height:1.45">Variable APR can change what you owe between checks. Saving updates when you last confirmed this balance with your provider.</div>';
+  if (intType === 'variable' || intType === 'unknown') {
+    h+=
+      '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:-4px 0 8px;line-height:1.4">APR may change what you owe between checks.</div>';
+  }
   if (d && d.lastProviderReviewAt) {
     h+=
       '<div data-geode-css="font-size:10px;color:rgba(237,234,255,0.78);margin:0 0 10px;line-height:1.45">' +
