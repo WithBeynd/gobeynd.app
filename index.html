@@ -27014,6 +27014,15 @@ function geodeRealityPageHtml() {
     '<button type="button" class="btn btn-p" onclick="geodeSaveRealityCheckFromPage()">' +
     escHtmlLite('Save balance check') +
     '</button>';
+  if (rs.hasData) {
+    var _rcDaysOldQuick = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
+    if (_rcDaysOldQuick > 3 || !!rs.activitySinceCheck) {
+      h +=
+        '<button type="button" class="btn btn-s" data-geode-css="width:100%;margin-top:8px" onclick="geodeQuickConfirmRealityCheck()">' +
+        escHtmlLite('Confirm still accurate') +
+        '</button>';
+    }
+  }
   if (rs.hasData && S.realityCheck && S.realityCheck.date) {
     var _rcDaysOld = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
     var _rcStale = _rcDaysOld > 7;
@@ -27097,8 +27106,11 @@ function geodeRealityPageHtml() {
 }
 
 function geodeRealityMonthContextCollapsedRowHtml(mc) {
+  mc = mc || {};
   var summary = geodeRealityMonthContextCompactSummary(mc);
   var action = mc.hasAny ? 'Edit' : 'Add';
+  var carry = geodeGetMonthContextCarry(S);
+  var showCarryHint = !mc.hasAny && carry.hasAny;
   var reflectionFooter = geodeRealityReflectionEntryHtml();
   var h = '';
   h += '<div class="geode-expand-wrap geode-month-context">';
@@ -27124,6 +27136,12 @@ function geodeRealityMonthContextCollapsedRowHtml(mc) {
     '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.52);line-height:1.4;margin-bottom:4px">' +
     escHtmlLite('Optional. Helps Beynd coach this month. Income, payments, and expenses stay the same.') +
     '</div>';
+  if (showCarryHint) {
+    h +=
+      '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.52);line-height:1.4;margin-bottom:6px">' +
+      escHtmlLite('Last month\u2019s context is available if it still fits.') +
+      '</div>';
+  }
   h +=
     '<div data-geode-css="font-size:12px;color:rgba(237,234,255,0.78);line-height:1.45">' +
     escHtmlLite(summary) +
@@ -27263,10 +27281,18 @@ function geodeRealityCheckCardHtml() {
       '</div>';
     if (isStale) {
       var staleMb = rs.activitySinceCheck ? '4' : '10';
-      h += '<div data-geode-css="font-size:9px;color:rgba(245,194,52,0.55);margin-bottom:' + staleMb + 'px">Update your balance if anything has changed</div>';
+      h +=
+        '<div data-geode-css="font-size:9px;color:rgba(189,183,220,0.52);margin-bottom:' +
+        staleMb +
+        'px">' +
+        escHtmlLite('This check may be from earlier in the month.') +
+        '</div>';
     }
     if (rs.activitySinceCheck) {
-      h += '<div data-geode-css="font-size:9px;color:rgba(189,183,220,0.45);margin-bottom:10px">Recent activity may affect this balance</div>';
+      h +=
+        '<div data-geode-css="font-size:9px;color:rgba(189,183,220,0.45);margin-bottom:10px">' +
+        escHtmlLite('Your month may have shifted a little since this check.') +
+        '</div>';
     }
   } else {
     h += '<div data-geode-css="margin-bottom:10px"></div>';
