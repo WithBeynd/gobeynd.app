@@ -676,7 +676,9 @@ canvas{display:block}
 .geode-plan-detail-title{font-size:18px;font-weight:800;color:var(--tx-1);line-height:1.3;margin-bottom:var(--sp-2);letter-spacing:-0.02em}
 .geode-plan-detail-amount{font-size:22px;font-weight:800;line-height:1.2;margin-bottom:var(--sp-2);letter-spacing:-0.025em}
 .geode-plan-detail-status{margin-bottom:var(--sp-3)}
-.geode-plan-detail-trust{font-size:11px;color:var(--tx-3);line-height:1.45}
+.geode-plan-detail-trust{font-size:10px;color:var(--tx-3);line-height:1.4;margin-top:2px;opacity:0.9}
+.geode-plan-detail-continuity{font-size:10px;color:var(--tx-3);line-height:1.4;margin-top:6px}
+.geode-plan-detail-pace-note{font-size:11px;color:var(--tx-2);line-height:1.45;margin-top:4px}
 .geode-plan-detail-card-h{font-size:11px;font-weight:800;color:var(--tx-3);letter-spacing:1px;text-transform:uppercase;margin-bottom:var(--sp-3)}
 .geode-plan-detail-metricrow{display:flex;justify-content:space-between;gap:var(--sp-3);flex-wrap:wrap;font-size:12px;color:var(--tx-1);margin-bottom:var(--sp-2)}
 .geode-plan-detail-metricrow span:first-child{color:var(--tx-3)}
@@ -21535,8 +21537,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     if (goalWhyMerged) {
       whyShort = geodeHomeInsightShortLine(goalWhyMerged, 160);
     } else {
-      whyShort =
-        'This step helps close the gap on this goal from this month\u2019s plan room \u2014 based on what Beynd is reading from your setup.';
+      whyShort = 'This step helps close the gap on this goal from this month\u2019s plan room.';
     }
   } else if (detailInvest) {
     whyShort =
@@ -21591,10 +21592,10 @@ function geodePlanStepDetailPageHtml(plan, ix) {
       '</div>';
   }
   h += '<div class="geode-plan-detail-status"><span class="' + statusCls + '">' + escHtmlLite(statusLb) + '</span></div>';
-  h +=
-    '<div class="geode-plan-detail-trust">' +
-    escHtmlLite('Beynd is reading this as the next useful move from your current setup.') +
-    '</div>';
+  var trustLine = geodePlanDetailSummaryContinuityLine(step, prog, { realityCap: _rpaDetCap });
+  if (trustLine) {
+    h += '<div class="geode-plan-detail-trust">' + escHtmlLite(trustLine) + '</div>';
+  }
   h += '</div>';
 
   h += '<div class="geode-plan-detail-card">';
@@ -21605,6 +21606,12 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
         escHtmlLite(fm(prog.suggested)) +
         '</span></div>';
+      if (toNum(prog.scheduled) > 0 && prog.phase !== 'done') {
+        h +=
+          '<div class="geode-plan-detail-metricrow"><span>Scheduled this month</span><span>' +
+          escHtmlLite(fm(prog.scheduled)) +
+          '</span></div>';
+      }
       h +=
         '<div class="geode-plan-detail-metricrow"><span>Marked complete this month</span><span>' +
         escHtmlLite(fm(prog.applied)) +
@@ -21632,6 +21639,12 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
         escHtmlLite(fm(prog.suggested)) +
         '</span></div>';
+      if (toNum(prog.scheduled) > 0 && prog.phase !== 'done') {
+        h +=
+          '<div class="geode-plan-detail-metricrow"><span>Scheduled this month</span><span>' +
+          escHtmlLite(fm(prog.scheduled)) +
+          '</span></div>';
+      }
       h +=
         '<div class="geode-plan-detail-metricrow"><span>Marked complete this month</span><span>' +
         escHtmlLite(fm(prog.applied)) +
@@ -21693,6 +21706,12 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
         escHtmlLite(fm(prog.suggested)) +
         '</span></div>';
+      if (toNum(prog.scheduled) > 0 && prog.phase !== 'done') {
+        h +=
+          '<div class="geode-plan-detail-metricrow"><span>Scheduled this month</span><span>' +
+          escHtmlLite(fm(prog.scheduled)) +
+          '</span></div>';
+      }
       h +=
         '<div class="geode-plan-detail-metricrow"><span>Marked complete this month</span><span>' +
         escHtmlLite(fm(prog.applied)) +
@@ -21764,6 +21783,10 @@ function geodePlanStepDetailPageHtml(plan, ix) {
           '<div class="geode-plan-detail-metricrow"><span>Plan amount</span><span>' +
           escHtmlLite(fm(invSugDet)) +
           '</span></div>';
+        var invAdaptCue = geodePlanDetailInvestAdaptiveContinuityCue(step, prog);
+        if (invAdaptCue) {
+          h += '<div class="geode-plan-detail-continuity">' + escHtmlLite(invAdaptCue) + '</div>';
+        }
       }
       if (invSchedDet > 0) {
         h +=
@@ -21780,12 +21803,12 @@ function geodePlanStepDetailPageHtml(plan, ix) {
           '<div class="geode-plan-detail-metricrow"><span>Next step</span><span>' +
           escHtmlLite('Mark complete when money moves') +
           '</span></div>';
-      } else if (prog.phase === 'done') {
+      } else if (prog.phase === 'done' && invSchedDet <= 0) {
         h +=
           '<div class="geode-plan-detail-metricrow"><span>Remaining on this step</span><span>' +
           escHtmlLite(fm(0)) +
           '</span></div>';
-      } else if (invSugDet > 0) {
+      } else if (invSugDet > 0 && prog.phase !== 'done') {
         h +=
           '<div class="geode-plan-detail-metricrow"><span>Remaining on this step</span><span>' +
           escHtmlLite(fm(Math.max(0, prog.remaining))) +
@@ -21910,22 +21933,22 @@ function geodePlanStepDetailPageHtml(plan, ix) {
           '</span></div>';
       }
       if (goalIntel && gfTgt > 0) {
-        var paceLine = '';
+        var paceLabel = '';
+        var paceNote = '';
         if (goalObj.targetDate && goalIntel.remaining <= 0) {
-          paceLine =
-            'Beynd\u2019s simple check: based on what you entered, the target amount may already be covered — progress can still move if balances change.';
+          paceLabel = 'Target may be covered';
+          paceNote = 'Progress can still move if balances change.';
         } else if (goalObj.targetDate && goalIntel.status === 'overdue') {
-          paceLine =
-            'Beynd\u2019s simple check: Beynd is reading this goal as past its target date with amount still open — based on what you entered.';
+          paceLabel = 'Past target date';
+          paceNote = 'Amount is still open on this goal.';
         } else if (goalObj.targetDate && goalIntel.status === 'on track') {
-          paceLine =
-            'Beynd\u2019s simple check: based on what you entered, this goal looks roughly on pace.';
+          paceLabel = 'Roughly on pace';
         } else if (goalObj.targetDate && goalIntel.status === 'at risk') {
-          paceLine =
-            'Beynd\u2019s simple check: this goal may need more room to stay on pace based on what you entered.';
+          paceLabel = 'May need more room';
+          paceNote = 'Pace may slip without more monthly room.';
         } else if (goalObj.targetDate && goalIntel.status === 'off track') {
-          paceLine =
-            'Beynd\u2019s simple check: Beynd reads this goal as needing attention based on what you entered.';
+          paceLabel = 'Needs attention';
+          paceNote = 'This goal looks behind its target date.';
         } else if (
           goalObj.targetDate &&
           goalIntel.remaining > 0 &&
@@ -21933,16 +21956,17 @@ function geodePlanStepDetailPageHtml(plan, ix) {
           isFinite(goalIntel.requiredMonthly) &&
           goalIntel.requiredMonthly > 0
         ) {
-          paceLine =
-            'Beynd\u2019s simple check: about ' +
-            fm(goalIntel.requiredMonthly) +
-            '/month toward the remaining gap based on what you entered — a guide, not a promise about finishing.';
+          paceLabel = 'About ' + fm(goalIntel.requiredMonthly) + '/month';
+          paceNote = 'A simple guide toward the remaining gap, not a promise.';
         }
-        if (paceLine) {
+        if (paceLabel) {
           h +=
             '<div class="geode-plan-detail-metricrow"><span>Pace check</span><span>' +
-            escHtmlLite(paceLine) +
+            escHtmlLite(paceLabel) +
             '</span></div>';
+          if (paceNote) {
+            h += '<div class="geode-plan-detail-pace-note">' + escHtmlLite(paceNote) + '</div>';
+          }
         }
       }
     }
@@ -22062,10 +22086,6 @@ function geodePlanStepDetailPageHtml(plan, ix) {
       '<div class="geode-plan-detail-muted" data-geode-css="margin-top:8px">' +
       escHtmlLite('Use this as direction, not a lender payoff quote.') +
       '</div>';
-    h +=
-      '<div class="geode-plan-detail-muted" data-geode-css="margin-top:8px">' +
-      escHtmlLite('Beynd used your income, spending, debt details, and plan style.') +
-      '</div>';
     h += '</div>';
   } else if (detailBuffer) {
     h += '<div class="geode-plan-detail-card geode-plan-detail-card-assume">';
@@ -22084,10 +22104,6 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         ) +
         '</div>';
     }
-    h +=
-      '<div class="geode-plan-detail-muted" data-geode-css="margin-top:8px">' +
-      escHtmlLite('Beynd used your spending, buffer details, and plan style.') +
-      '</div>';
     h += '</div>';
   } else if (detailGoal) {
     h += '<div class="geode-plan-detail-card geode-plan-detail-card-assume">';
@@ -22114,10 +22130,6 @@ function geodePlanStepDetailPageHtml(plan, ix) {
         ) +
         '</div>';
     }
-    h +=
-      '<div class="geode-plan-detail-muted" data-geode-css="margin-top:8px">' +
-      escHtmlLite('Beynd used your goal details, saved progress, linked progress, and plan style.') +
-      '</div>';
     h += '</div>';
   } else if (detailInvest) {
     h += '<div class="geode-plan-detail-card geode-plan-detail-card-assume">';
@@ -22131,12 +22143,6 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     h +=
       '<div class="geode-plan-detail-muted" data-geode-css="margin-top:8px">' +
       escHtmlLite('Review your situation before acting.') +
-      '</div>';
-    h +=
-      '<div class="geode-plan-detail-muted" data-geode-css="margin-top:8px">' +
-      escHtmlLite(
-        'Beynd used your income, spending, debts, goals, investments, and plan style.'
-      ) +
       '</div>';
     h += '</div>';
   }
@@ -23388,6 +23394,82 @@ function geodePlanStepActionState(state, step, opts) {
     isNotStarted: isNotStarted,
     isActionable: isActionable
   };
+}
+
+/** Display-only Plan detail summary continuity line (state and step type aware). */
+function geodePlanDetailSummaryContinuityLine(step, prog, opts) {
+  step = step || null;
+  prog = prog || { phase: 'none', applied: 0, scheduled: 0, remaining: 0, suggested: 0 };
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var applied = toNum(prog.applied);
+  var scheduled = toNum(prog.scheduled);
+  var suggested = toNum(prog.suggested);
+  var lb = String(step && step.label ? step.label : '');
+  var isInvest = lb === 'Invest what remains';
+  var isBuffer = lb === 'Build your emergency fund';
+  var isDebt = lb.indexOf('Reduce high') === 0 || lb.indexOf('Pay down ') === 0;
+  var isGoal = lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0;
+  var realityCap = String(opts.realityCap || '');
+  if (realityCap && /\b(paus|soften|reduc)/i.test(realityCap)) {
+    return 'This step softened after your Reality check.';
+  }
+  if (prog.phase === 'done') {
+    if (isInvest) {
+      if (scheduled > 0) return 'Optional this month, with a scheduled payment still waiting.';
+      return 'Optional this month, and you already acted on it.';
+    }
+    if (scheduled > 0) return 'Complete for the month, with a scheduled payment still waiting.';
+    return 'You already marked this step complete for the month.';
+  }
+  if (prog.phase === 'partial') {
+    if (applied <= 0 && scheduled > 0) {
+      return 'Waiting for the scheduled payment this month.';
+    }
+    if (applied > 0) {
+      if (isInvest) return 'You already started on this optional step.';
+      return 'You already started this step this month.';
+    }
+  }
+  if (isInvest) {
+    if (suggested <= 0) return 'Optional when spare cash appears this month.';
+    return 'Optional spare-cash guidance for this month.';
+  }
+  if (isBuffer) return 'Buffer room for this month.';
+  if (isGoal) return 'Goal progress from this month\u2019s plan room.';
+  if (isDebt) return 'Next debt move in your plan for the month.';
+  return 'Part of this month\u2019s plan.';
+}
+
+/** Display-only numeric headline amount for invest adaptive cue comparison (mirrors F.3B priority). */
+function geodePlanDetailInvestHeadlineAmountNum(step) {
+  step = step || null;
+  var inv0 = geodePrimaryInvestment(S);
+  var basis = geodeInvestCommittedThisMonth(S, inv0 && inv0.id ? inv0.id : '');
+  var suggested = toNum(step && step.amount);
+  var actionState = geodePlanStepActionState(S, step);
+  if (basis.scheduled > 0) return basis.scheduled;
+  if (!actionState.isCompleted) {
+    if (actionState.isScheduledOnly && actionState.scheduled > 0) return actionState.scheduled;
+    if (actionState.actionAmount >= 1) return actionState.actionAmount;
+  }
+  if (actionState.isCompleted && basis.paid > 0) return basis.paid;
+  if (suggested > 0) return suggested;
+  return 0;
+}
+
+/** Display-only invest continuity cue when scheduled headline and plan amount diverge. */
+function geodePlanDetailInvestAdaptiveContinuityCue(step, prog) {
+  step = step || null;
+  prog = prog || {};
+  if (!step || String(step.label || '') !== 'Invest what remains') return '';
+  var suggested = toNum(prog.suggested);
+  if (suggested < 1) return '';
+  var inv0 = geodePrimaryInvestment(S);
+  var basis = geodeInvestCommittedThisMonth(S, inv0 && inv0.id ? inv0.id : '');
+  if (toNum(basis.scheduled) < 1) return '';
+  var headNum = geodePlanDetailInvestHeadlineAmountNum(step);
+  if (Math.abs(suggested - headNum) < 1) return '';
+  return 'This suggestion shifted a little after your earlier activity.';
 }
 
 /** Display-only plan row status (geodePlanStepProgress unchanged). */
@@ -26737,8 +26819,14 @@ function geodeRealityPageHtml() {
     statusDetail =
       'Your balance today and monthly estimate look meaningfully different. Beynd won\u2019t change anything unless you choose to.';
   } else if (rs.activitySinceCheck || (typeof rs.daysOld === 'number' && rs.daysOld > 3) || rs.confidence === 'moderate') {
-    statusLabel = 'Needs caution';
-    statusDetail = 'Your balance today reads tighter than your monthly estimate. A lighter next step may fit this month.';
+    statusLabel = 'A quick refresh may help';
+    if (rs.activitySinceCheck) {
+      statusDetail = 'Your month may have shifted a little since this check.';
+    } else if (typeof rs.daysOld === 'number' && rs.daysOld > 7) {
+      statusDetail = 'This check is from earlier in the month.';
+    } else {
+      statusDetail = 'Your month may have shifted a little since you saved this check.';
+    }
   } else {
     statusLabel = 'Broadly aligned';
     statusDetail = 'Your balance today is close to your monthly estimate.';
@@ -26794,7 +26882,7 @@ function geodeRealityPageHtml() {
     cmp += '<div class="reality-divider"></div>';
     var diffAbs = Math.abs(diffNum);
     var diffCol =
-      diffNum === 0 ? 'rgba(237,234,255,0.88)' : diffNum > 0 ? '#34d5a0' : '#f07070';
+      diffNum === 0 ? 'rgba(237,234,255,0.88)' : diffNum > 0 ? '#34d5a0' : 'var(--guide)';
     var diffPrefix = diffNum > 0 ? '+' : diffNum < 0 ? '\u2212' : '';
     var diffMag = diffNum === 0 ? fm(0) : fm(diffAbs);
     cmp +=
@@ -26938,15 +27026,23 @@ function geodeRealityPageHtml() {
       escHtmlLite(geodeRealityLastCheckedLabel(_rcDaysOld)) +
       '</div>';
     if (_rcStale) {
+      var _rcAgeLbl = geodeRealityLastCheckedLabel(_rcDaysOld);
+      var _rcAgeShort = String(_rcAgeLbl || '')
+        .replace(/^Last checked /i, '')
+        .toLowerCase();
       h +=
-        '<div class="reality-warning">' +
-        escHtmlLite('This check may be out of date.') +
+        '<div class="reality-muted-line">' +
+        escHtmlLite(
+          _rcAgeShort
+            ? 'This check was saved ' + _rcAgeShort + '.'
+            : 'This is your check from earlier in the month.'
+        ) +
         '</div>';
     }
     if (_rcAct) {
       h +=
         '<div class="reality-muted-line">' +
-        escHtmlLite('Your plan has moved since this check.') +
+        escHtmlLite('Your month may have shifted a little since this check.') +
         '</div>';
     }
   }
