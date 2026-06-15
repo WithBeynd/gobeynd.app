@@ -584,12 +584,12 @@ textarea.fi{min-height:70px}
 .tip-txt{font-size:12px;color:#edeaff;line-height:1.5;font-style:italic}
 
 /* TOAST — below notch / status bar, full width on narrow screens */
-.toast{position:fixed;top:max(12px,env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);width:min(430px,calc(100% - 24px));max-width:100%;padding:11px 12px;border-radius:var(--radius-sm);font-size:13px;font-weight:700;z-index:999;white-space:normal;word-break:break-word;overflow-wrap:anywhere;box-sizing:border-box;text-align:left;opacity:0;transition:opacity var(--motion-standard) var(--ease-standard);box-shadow:var(--shadow)}
+.toast{position:fixed;top:max(12px,env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);width:min(430px,calc(100% - 24px));max-width:100%;padding:11px 12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;z-index:999;white-space:normal;word-break:break-word;overflow-wrap:anywhere;box-sizing:border-box;text-align:left;opacity:0;transition:opacity var(--motion-standard) var(--ease-standard);box-shadow:var(--shadow-md,0 8px 24px rgba(0,0,0,0.18))}
 .toast.on{opacity:1}
 .toast.out{opacity:0}
-.toast.ok{background:rgba(52,213,160,0.95);color:#05050f}
-.toast.warn{background:rgba(245,194,52,0.95);color:#111}
-.toast.err{background:rgba(240,112,112,0.95);color:#fff}
+.toast.ok{background:rgba(52,213,160,0.88);color:#05050f}
+.toast.warn{background:rgba(245,194,52,0.92);color:#111}
+.toast.err{background:rgba(240,112,112,0.92);color:#fff}
 
 /* LOGIN */
 #pg-login{position:fixed;inset:0;z-index:90;background:radial-gradient(ellipse at 50% 30%,#1c0d38,#0a0618 50%,#05050f);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px 24px}
@@ -879,7 +879,7 @@ canvas{display:block}
 .details-why{margin-top:6px;font-size:10px;color:var(--tx-2);line-height:1.35}
 .details-why summary{cursor:pointer;color:var(--gem-l);font-weight:800;list-style-position:outside}
 .details-why__body{margin-top:6px}
-.modal-impact{margin:var(--sp-3) 0 var(--sp-1);padding:10px 11px;border-radius:var(--radius-sm);background:rgba(255,255,255,0.03);border:1px solid var(--bd)}
+.modal-impact{margin:12px 0 14px;padding:10px 11px;border-radius:var(--radius-sm);background:rgba(255,255,255,0.03);border:1px solid var(--bd)}
 .modal-impact__title{font-size:10px;font-weight:800;letter-spacing:1.2px;color:var(--tx-3);text-transform:uppercase;margin-bottom:6px}
 .modal-impact__line{font-size:11px;color:var(--tx-1);line-height:1.35}
 .modal-impact__coach{font-size:11px;color:var(--tx-2);line-height:1.35}
@@ -1115,6 +1115,9 @@ canvas{display:block}
 .geode-hm-transient.is-hiding{opacity:0;transform:translateY(-4px);pointer-events:none}
 .geode-home-anticipatory{margin-bottom:var(--sp-3);padding:var(--sp-3) 14px;border-radius:var(--radius);background:var(--bg-surface);border:1px solid var(--accent-border);border-left:2px solid var(--gem);box-shadow:var(--surface-glow);transition:opacity var(--motion-standard) var(--ease-out),transform var(--motion-standard) var(--ease-out),background var(--motion-calm) var(--ease-standard),border-color var(--motion-calm) var(--ease-standard)}
 .geode-home-anticipatory.is-hiding{opacity:0;transform:translateY(-4px);pointer-events:none}
+details.geode-manage-disclosure > summary{cursor:pointer;list-style-position:inside}
+details.geode-manage-disclosure[open] > :not(summary){animation:geode-details-body-in var(--motion-standard) var(--ease-out) both}
+@keyframes geode-details-body-in{from{opacity:0.72}to{opacity:1}}
 
 @keyframes fi{from{opacity:0}to{opacity:1}}
 @keyframes su{from{transform:translateY(60px);opacity:0}to{transform:translateY(0);opacity:1}}
@@ -3554,150 +3557,49 @@ function geodeDashboardV2SingleInsight() {
  */
 function geodeMicroConfirmPickMessage(kind, extras) {
   extras = extras || {};
-  var fb = 'Nice \u2014 that moved your plan forward.';
+  var fb = 'Saved to your plan.';
   function pick(arr, seed) {
     if (!arr || !arr.length) return fb;
     var s = typeof seed === 'number' && isFinite(seed) ? Math.floor(Math.abs(seed)) : Date.now();
     return arr[s % arr.length];
   }
-  if (kind === 'debt' && extras.debtBalanceDown) return 'You just reduced your interest exposure';
+  if (kind === 'debt' && extras.debtBalanceDown) return 'Debt balance updated in your plan.';
   if (kind === 'import') {
     var nImp = Number(extras.added) || 0;
     if (nImp <= 0) return fb;
-    return pick(
-      [
-        'Nice \u2014 that moved your plan forward.',
-        'Good call \u2014 you\u2019re making progress.',
-        'That helps \u2014 your plan just got clearer.',
-        'Solid \u2014 that\u2019s a step in the right direction.'
-      ],
-      nImp
-    );
+    return pick(['Saved to your plan.', 'Added to your plan.', 'Recorded for this month.'], nImp);
   }
   if (kind === 'expense') {
     return pick(
-      [
-        'Good \u2014 your plan is more accurate now.',
-        'Nice \u2014 that moved your plan forward.',
-        'That helps \u2014 your plan just got clearer.',
-        'Solid \u2014 that\u2019s a step in the right direction.',
-        'You\u2019re building momentum.'
-      ],
+      ['Spending saved for this month.', 'Saved to your plan.', 'Recorded for this month.'],
       extras._seed
     );
   }
   if (kind === 'payment') {
-    var seedP = extras._seed;
-    var hid = null;
-    try {
-      hid = geodeDebtHighlightId(S.debts || []);
-    } catch (eH) {}
-    var primG = null;
-    try {
-      primG = selectPrimaryGoal(S.goals || []);
-    } catch (eG) {}
     if (extras.debtId) {
       if (extras.debtPaymentRecorded) {
         return geodeDebtDualLedgerToastLine();
       }
       return '';
     }
-    if (extras.goalId) {
-      if (primG && String(primG.id) === String(extras.goalId)) {
-        return 'Nice \u2014 you\u2019re tackling your top priority.';
-      }
-      return pick(
-        [
-          'Nice \u2014 you\u2019re getting closer to your goal.',
-          'You\u2019re building momentum.',
-          'Good call \u2014 you\u2019re making progress.',
-          'Nice \u2014 that moved your plan forward.'
-        ],
-        seedP
-      );
-    }
-    if (extras.investId) {
-      return pick(
-        [
-          'Good move \u2014 staying consistent matters.',
-          'Nice \u2014 that moved your plan forward.',
-          'You\u2019re building long-term momentum.',
-          'Solid \u2014 that\u2019s a step in the right direction.'
-        ],
-        seedP
-      );
-    }
-    return pick(
-      [
-        'Nice \u2014 that moved your plan forward.',
-        'Good call \u2014 you\u2019re making progress.',
-        'That helps \u2014 your plan just got clearer.',
-        'You\u2019re building momentum.'
-      ],
-      seedP
-    );
+    if (extras.goalId) return 'Recorded for this month.';
+    if (extras.investId) return 'Recorded for this month.';
+    return 'Saved to your plan.';
   }
   if (kind === 'goal_dep') {
-    var primGd = null;
-    try {
-      primGd = selectPrimaryGoal(S.goals || []);
-    } catch (eGd) {}
-    if (extras.goalId && primGd && String(primGd.id) === String(extras.goalId)) {
-      return 'Nice \u2014 you\u2019re tackling your top priority.';
-    }
-    return pick(
-      [
-        'Nice \u2014 you\u2019re getting closer to your goal.',
-        'You\u2019re building momentum.',
-        'Good call \u2014 you\u2019re making progress.',
-        'Nice \u2014 that moved your plan forward.'
-      ],
-      extras._seed
-    );
+    return 'Recorded for this month.';
   }
   if (kind === 'goal') {
-    return pick(
-      [
-        'Nice \u2014 that moved your plan forward.',
-        'Solid \u2014 that\u2019s a step in the right direction.',
-        'Good call \u2014 you\u2019re making progress.',
-        'That helps \u2014 your plan just got clearer.'
-      ],
-      extras._seed
-    );
+    return pick(['Saved to your plan.', 'Recorded for this month.'], extras._seed);
   }
   if (kind === 'invest') {
-    return pick(
-      [
-        'Good move \u2014 staying consistent matters.',
-        'Nice \u2014 that moved your plan forward.',
-        'You\u2019re building long-term momentum.',
-        'Solid \u2014 that\u2019s a step in the right direction.'
-      ],
-      extras._seed
-    );
+    return pick(['Saved to your plan.', 'Recorded for this month.'], extras._seed);
   }
   if (kind === 'income') {
-    return pick(
-      [
-        'Nice \u2014 that moved your plan forward.',
-        'That helps \u2014 your plan just got clearer.',
-        'Good call \u2014 you\u2019re making progress.',
-        'Solid \u2014 that\u2019s a step in the right direction.'
-      ],
-      extras._seed
-    );
+    return pick(['Saved to your plan.', 'Income updated for this month.'], extras._seed);
   }
   if (kind === 'debt') {
-    return pick(
-      [
-        'Nice \u2014 that moved your plan forward.',
-        'Good \u2014 your plan sees the full debt picture now.',
-        'Solid \u2014 that\u2019s a step in the right direction.',
-        'That helps \u2014 your plan just got clearer.'
-      ],
-      extras._seed
-    );
+    return pick(['Saved to your plan.', 'Debt updated in your plan.'], extras._seed);
   }
   return '';
 }
@@ -6562,7 +6464,7 @@ function geodeDebtReviewDisclosureHtml(debt, state) {
   var reviewNote =
     '<div data-geode-css="margin-top:5px;font-size:9px;color:var(--tx-3);line-height:1.3">Check your provider before updating.</div>';
   var updateBtn =
-    '<button type="button" class="btn btn-s" data-geode-css="width:100%;margin-top:8px;font-size:10px;padding:7px 10px" onclick="openDebtModal(\'' +
+    '<button type="button" class="btn-sm" data-geode-css="margin-top:8px;font-size:10px;padding:5px 10px" onclick="openDebtModal(\'' +
     debt.id +
     '\')">Update balance</button>';
   if (st === 'reconcile') {
@@ -8872,6 +8774,84 @@ function geodeStageJToastAfterSave(defaultMsg) {
   return defaultMsg || '';
 }
 
+var GEODE_COMPLETION_NOTE_MS = 3000;
+var GEODE_DEBT_DUAL_LEDGER_TOAST_MS = 3000;
+var GEODE_POST_SAVE_ALERT_SUPPRESS_MS = 5000;
+
+function geodeMarkRecentUserSave() {
+  try {
+    window._geodeRecentUserSaveTs = Date.now();
+  } catch (_eRus) {}
+}
+
+function geodeShouldSuppressPostSaveAlerts() {
+  try {
+    var ts = window._geodeRecentUserSaveTs;
+    return ts && Date.now() - ts < GEODE_POST_SAVE_ALERT_SUPPRESS_MS;
+  } catch (_eRsa) {
+    return false;
+  }
+}
+
+function geodeCompletionNoteIsActive() {
+  try {
+    var rc = window._geodeHomeRecentCompletion;
+    return !!(rc && rc.ts && Date.now() - rc.ts < GEODE_COMPLETION_NOTE_MS);
+  } catch (_eRcA) {
+    return false;
+  }
+}
+
+function geodePaymentCompletionKindFromRow(p) {
+  if (!p) return '';
+  if (p.debtId) return 'debt';
+  if (p.investId) return 'invest';
+  if (geodePaymentNameLooksLikeBuffer(p.name) || String(p.name || '').toLowerCase().indexOf('buffer') >= 0) return 'buffer';
+  if (p.goalId) return 'goal';
+  return '';
+}
+
+function geodeBumpPaymentCompletionSessionCount() {
+  try {
+    var sk = 'geode_pay_complete_count_' + currentYM();
+    var n = Number(sessionStorage.getItem(sk) || 0) + 1;
+    sessionStorage.setItem(sk, String(n));
+    return n;
+  } catch (_ePcc) {
+    return 1;
+  }
+}
+
+/** Display-only: one calm completion channel per paid contribution (toast or Home note). */
+function geodeEmitPaymentCompletionFeedback(p, opts) {
+  opts = opts || {};
+  if (!p || String(p.status || '') !== 'paid') return;
+  geodeMarkRecentUserSave();
+  var kind = geodePaymentCompletionKindFromRow(p);
+  var repeatN = geodeBumpPaymentCompletionSessionCount();
+  var quiet = repeatN > 2;
+  if (kind === 'debt') {
+    toast(geodeDebtDualLedgerToastLine(), 'ok', quiet ? 2200 : GEODE_DEBT_DUAL_LEDGER_TOAST_MS);
+    return;
+  }
+  if (kind === 'goal' || kind === 'invest' || kind === 'buffer') {
+    geodeHomeNoteRecentCompletion(kind);
+    return;
+  }
+  var payExtras = {
+    debtId: p.debtId || '',
+    goalId: p.goalId || '',
+    investId: p.investId || '',
+    _seed: Date.now()
+  };
+  var msg = geodeStageLToastAfterSave(opts.userMsg || 'Marked complete.', 'payment', payExtras);
+  if (quiet) {
+    toast(msg || 'Marked complete.', 'ok', 2200);
+  } else {
+    geodeSuccessToast(msg || 'Marked complete.');
+  }
+}
+
 var _tt;
 try {
   if (typeof window.geodeLastAdjustment === 'undefined') window.geodeLastAdjustment = null;
@@ -8955,11 +8935,12 @@ function toast(msg, type, durationMs) {
 }
 /** Short success feedback after saves (micro-confirmation layer). */
 function geodeSuccessToast(msg) {
-  toast(msg, 'ok', 2800);
+  toast(msg, 'ok', 2600);
 }
 
 // ── ALERTS ────────────────────────────────────────
 function checkAlerts() {
+  if (geodeShouldSuppressPostSaveAlerts()) return;
   syncRecurringPayments();
   var left = calcMonthlyLeftoverConfirmedOnly(S);
   var inc = toNum(S.income);
@@ -22384,9 +22365,9 @@ function geodePlanPagePrioritiesStackHtml(plan) {
     }
     h +=
       '<div data-geode-css="margin-top:10px">' +
-      '<button type="button" class="btn-sm" onclick="geodeOpenPlanStepDetail(' +
+      '<button type="button" onclick="geodeOpenPlanStepDetail(' +
       i +
-      ')">View details</button>' +
+      ')" data-geode-css="background:transparent;border:none;padding:0;font-size:11px;font-weight:600;color:var(--tx-3);cursor:pointer;text-decoration:underline;text-underline-offset:3px">View details</button>' +
       '</div>';
     h += '</div>';
     h += '</div>';
@@ -23604,9 +23585,10 @@ function geodePlanStepStatusDisplayLabel(prog) {
 /** Display-only Home context line from Reality Check (no internal confidence words). */
 function geodeHomeRealityConfDisplayLabel(rs) {
   if (!rs || !rs.hasData) return 'No balance check on file';
-  if (rs.activitySinceCheck) return 'Things may have moved since your last balance check';
+  if (rs.activitySinceCheck) return 'Your month may have shifted a little since this check';
   if (typeof rs.daysOld === 'number' && rs.daysOld > 3) {
-    return 'Your last balance check may be out of date';
+    if (rs.daysOld > 7) return 'This check is from earlier in the month';
+    return 'A quick refresh may help';
   }
   if (rs.confidence === 'high') return 'Balance check on file';
   if (rs.confidence === 'moderate') return 'Recent check on file';
@@ -24994,7 +24976,7 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   var ctaOverride = '';
   try {
     var rc = window._geodeHomeRecentCompletion || null;
-    if (rc && rc.ts && Date.now() - rc.ts < 5200 && rc.msg) {
+    if (rc && rc.ts && Date.now() - rc.ts < GEODE_COMPLETION_NOTE_MS && rc.msg) {
       sub = String(rc.msg);
       ctaOverride = 'View plan';
       window._geodeMainActionRun = function () {
@@ -25055,7 +25037,7 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   var _bhvIsConflict = false;
   try {
     var _rcAct = window._geodeHomeRecentCompletion || null;
-    var _rcStillActive = _rcAct && _rcAct.ts && (Date.now() - _rcAct.ts < 5200);
+    var _rcStillActive = _rcAct && _rcAct.ts && Date.now() - _rcAct.ts < GEODE_COMPLETION_NOTE_MS;
     if (
       !_rcStillActive &&
       sub.toLowerCase().indexOf('marked complete') < 0 &&
@@ -25588,20 +25570,20 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
 function geodeHomeNoteRecentCompletion(kind) {
   try {
     var msg = '';
-    if (kind === 'debt') msg = 'Debt payment marked complete.';
-    else if (kind === 'buffer') msg = 'Buffer contribution marked complete.';
-    else if (kind === 'invest') msg = 'Investment contribution marked complete.';
-    else if (kind === 'goal') msg = 'Goal contribution marked complete.';
-    else msg = 'Marked complete.';
+    if (kind === 'debt') msg = 'Debt payment recorded for this month.';
+    else if (kind === 'buffer') msg = 'Buffer contribution recorded for this month.';
+    else if (kind === 'invest') msg = 'Investment contribution recorded for this month.';
+    else if (kind === 'goal') msg = 'Goal contribution recorded for this month.';
+    else msg = 'Recorded for this month.';
     window._geodeHomeRecentCompletion = { ts: Date.now(), msg: msg };
     setTimeout(function () {
       try {
         if (!window._geodeHomeRecentCompletion) return;
-        if (Date.now() - window._geodeHomeRecentCompletion.ts < 5200) return;
+        if (Date.now() - window._geodeHomeRecentCompletion.ts < GEODE_COMPLETION_NOTE_MS) return;
         window._geodeHomeRecentCompletion = null;
         if (typeof tab !== 'undefined' && tab === 'home') render();
       } catch (e2) {}
-    }, 5600);
+    }, GEODE_COMPLETION_NOTE_MS + 400);
   } catch (e0) {}
 }
 
@@ -25703,12 +25685,15 @@ function geodeAffordabilityRealityLine() {
     if (rs.confidence === 'low') {
       return 'Your balance and plan look quite far apart. Worth a fresh look before you continue.';
     }
-    var daysOld = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
-    if (daysOld > 3) {
-      return 'Your last balance check may be out of date.';
-    }
     if (rs.activitySinceCheck) {
-      return 'Things may have moved since your last balance check.';
+      return 'Your month may have shifted a little since this check.';
+    }
+    var daysOld = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
+    if (daysOld > 7) {
+      return 'This check is from earlier in the month.';
+    }
+    if (daysOld > 3) {
+      return 'A quick refresh may help.';
     }
     return 'Your latest balance check helps Beynd sense-check this step.';
   } catch (_eAr) {
@@ -25854,10 +25839,18 @@ function geodeHomePrimaryActionHtml() {
   var a = actions[0];
   var disp = geodeHomeActionCardCopy(a);
   var sub = String(disp.sub || '').trim();
+  var _completionCalm = false;
+  try {
+    _completionCalm = geodeCompletionNoteIsActive();
+  } catch (_eRcCalm) {}
   var h = '<div class="home-primary-action" data-geode-css="margin:0 0 10px">';
   h += '<div data-geode-css="font-size:10px;font-weight:700;color:var(--tx-3);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:10px">Main Action</div>';
   h +=
-    '<button type="button" class="card" onclick="openSuggestedAction(0)" data-geode-css="width:100%;text-align:left;cursor:pointer;background:rgba(245,194,52,0.06);border:1px solid rgba(245,194,52,0.65);border-radius:14px;padding:16px 16px;margin-bottom:0;font-family:inherit;display:block;box-shadow:0 0 0 1px rgba(245,194,52,0.4),0 0 20px rgba(245,194,52,0.14);transition:background 0.15s,border-color 0.15s,transform 0.08s">';
+    '<button type="button" class="card" onclick="openSuggestedAction(0)" data-geode-css="width:100%;text-align:left;cursor:pointer;' +
+    (_completionCalm
+      ? 'background:rgba(255,255,255,0.03);border:1px solid var(--bd);border-radius:14px;padding:16px 16px;margin-bottom:0;font-family:inherit;display:block;box-shadow:none;transition:background 0.15s,border-color 0.15s'
+      : 'background:rgba(245,194,52,0.06);border:1px solid rgba(245,194,52,0.65);border-radius:14px;padding:16px 16px;margin-bottom:0;font-family:inherit;display:block;box-shadow:0 0 0 1px rgba(245,194,52,0.4),0 0 20px rgba(245,194,52,0.14);transition:background 0.15s,border-color 0.15s,transform 0.08s') +
+    '">';
   h += '<div data-geode-css="font-size:13px;font-weight:700;color:var(--tx-1);margin-bottom:6px">' + escHtmlLite(disp.title) + '</div>';
   if (sub) {
     h +=
@@ -32592,7 +32585,7 @@ function openGoalModal(id) {
     '" oninput="try{geodeGoalDateManualInput();geodeGoalModalImpactRefresh()}catch(e){}" />';
   h += '</div>';
   h += '<div id="geode-goal-impact-host"></div>';
-  h += '<button class="btn btn-p" data-geode-css="margin-top:4px" onclick="saveGoal(\''+(id||'')+'\')">Save Goal</button>';
+  h += '<button class="btn btn-p" data-geode-css="margin-top:12px" onclick="saveGoal(\''+(id||'')+'\')">Save Goal</button>';
   openModal(h);
   setTimeout(function() {
     try {
@@ -33272,10 +33265,58 @@ function rDebts(el) {
       e.style.borderRadius = '14px';
     }
     var lastDebtAmt = geodeLastLinkedContributionAmount('debt', d.id);
-    var lastDebtLine = lastDebtAmt ? '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:6px;line-height:1.2">Last payment: ' + fm(lastDebtAmt) + '</div>' : '';
+    var lastDebtLine = lastDebtAmt
+      ? '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:4px;line-height:1.2;opacity:0.85">Last payment: ' +
+        fm(lastDebtAmt) +
+        '</div>'
+      : '';
     var reviewDisclosure = geodeDebtReviewDisclosureHtml(d, S);
     var healthCard = geodeDebtHealthCardHtml(d, S);
-    e.innerHTML='<div data-geode-css="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div data-geode-css="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:#f07070">'+geodeSvg(catIc)+'</span><span>'+d.name+'</span></div><div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:2px;text-transform:uppercase;letter-spacing:1px">'+d.cat+'</div></div><div data-geode-css="display:flex;gap:5px"><button class="btn-sm" onclick="openDebtModal(\''+d.id+'\')">Edit</button><button class="btn-del" onclick="delDebt(\''+d.id+'\')">Remove</button></div></div><div data-geode-css="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"><div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Balance</div><div data-geode-css="font-size:17px;font-weight:700;color:#f07070">'+fm(d.balance)+'</div>'+(showFocus?'<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:4px;line-height:1.2">Often the first focus in your plan</div>':'')+reviewDisclosure+'</div>'+(d.apr?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">APR</div><div data-geode-css="font-size:17px;font-weight:700;color:#f5c234">'+d.apr+'%</div></div>':'<div></div>')+(mi>0?'<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Interest</div><div data-geode-css="font-size:12px;font-weight:600;color:rgba(240,112,112,0.72)">~'+fm(mi)+'/mo</div></div>':'<div></div>')+'</div>'+healthCard+'<button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:10px" onclick="geodePayFromDebt(\''+d.id+'\')">Schedule extra payment</button>'+lastDebtLine;
+    var hasReviewDisclosure = !!reviewDisclosure;
+    var manageDebtHtml =
+      '<details class="geode-manage-disclosure" data-geode-css="margin-top:8px;font-size:9px;color:rgba(189,183,220,0.72);line-height:1.25">' +
+      '<summary data-geode-css="cursor:pointer;font-weight:600;list-style-position:inside">Manage</summary>' +
+      '<div data-geode-css="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
+    if (!hasReviewDisclosure) {
+      manageDebtHtml +=
+        '<button type="button" class="btn-sm" onclick="openDebtModal(\'' + d.id + '\')">Edit</button>';
+    }
+    manageDebtHtml +=
+      '<button type="button" class="btn-del" onclick="delDebt(\'' +
+      d.id +
+      '\')">Remove</button></div></details>';
+    e.innerHTML =
+      '<div data-geode-css="margin-bottom:10px"><div data-geode-css="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:#f07070">' +
+      geodeSvg(catIc) +
+      '</span><span>' +
+      d.name +
+      '</span></div><div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:2px;text-transform:uppercase;letter-spacing:1px">' +
+      d.cat +
+      '</div></div><div data-geode-css="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"><div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Balance</div><div data-geode-css="font-size:17px;font-weight:700;color:#f07070">' +
+      fm(d.balance) +
+      '</div>' +
+      (showFocus
+        ? '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:4px;line-height:1.2">Often the first focus in your plan</div>'
+        : '') +
+      reviewDisclosure +
+      '</div>' +
+      (d.apr
+        ? '<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">APR</div><div data-geode-css="font-size:17px;font-weight:700;color:#f5c234">' +
+          d.apr +
+          '%</div></div>'
+        : '<div></div>') +
+      (mi > 0
+        ? '<div><div data-geode-css="font-size:9px;color:var(--tx-3);text-transform:uppercase;margin-bottom:2px">Interest</div><div data-geode-css="font-size:12px;font-weight:600;color:rgba(240,112,112,0.72)">~' +
+          fm(mi) +
+          '/mo</div></div>'
+        : '<div></div>') +
+      '</div>' +
+      healthCard +
+      '<button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:12px" onclick="geodePayFromDebt(\'' +
+      d.id +
+      '\')">Schedule extra payment</button>' +
+      lastDebtLine +
+      manageDebtHtml;
     list.appendChild(e);
   }
 }
@@ -33288,13 +33329,12 @@ function openDebtModal(id) {
   var h=mh(d?'Edit Debt':'Add Debt');
   h+='<div class="field"><label>Name</label><input id="dn" class="fi" placeholder="Visa Card, Student Loan..." value="'+(d?d.name:'')+'" /></div>';
   h+='<div class="field"><label>Balance</label><input type="number" id="db" class="fi" placeholder="5000" value="'+(d?d.balance:'')+'" /></div>';
-  h+=
-    '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:-4px 0 4px;line-height:1.4">Use the balance your provider shows today.</div>';
   if (!d || needsGuidance) {
     h+=
-      '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:0 0 10px;line-height:1.4">Beynd does not pull live balances.</div>';
+      '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:-4px 0 10px;line-height:1.4">Use the balance your provider shows. Beynd does not pull live balances.</div>';
   } else {
-    h += '<div data-geode-css="margin:0 0 10px"></div>';
+    h+=
+      '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:-4px 0 10px;line-height:1.4">Use the balance your provider shows today.</div>';
   }
   h+='<div class="field"><label>Category</label><select id="dcat" class="fi">';
   var dkeys=Object.keys(DEBT_LABELS); for(var i=0;i<dkeys.length;i++) h+='<option value="'+dkeys[i]+'"'+(d&&d.cat===dkeys[i]?' selected':'')+'>'+DEBT_LABELS[dkeys[i]]+'</option>';
@@ -33318,7 +33358,7 @@ function openDebtModal(id) {
       escHtmlLite(geodeDebtProviderReviewStatusCopy(d)) +
       '</div>';
   }
-  h+='<button class="btn btn-p" onclick="saveDebt(\''+(id||'')+'\')">Save Debt</button>';
+  h+='<button class="btn btn-p" data-geode-css="margin-top:12px" onclick="saveDebt(\''+(id||'')+'\')">Save Debt</button>';
   openModal(h);
 }
 function saveDebt(id) {
@@ -34013,13 +34053,14 @@ function rPayments(el) {
     return '';
   }
   h +=
-    '<div data-geode-css="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px;align-items:center">' +
-    '<span data-geode-css="font-size:9px;color:var(--tx-3);margin-right:2px">Quick add</span>' +
+    '<details data-geode-css="margin:8px 0 2px;font-size:9px;color:var(--tx-3);line-height:1.35">' +
+    '<summary data-geode-css="cursor:pointer;font-weight:600;list-style-position:inside">Quick add</summary>' +
+    '<div data-geode-css="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center">' +
     '<button type="button" class="btn-sm" onclick="geodePayQuickFromPlan(\'debt\')">Debt payment</button>' +
     '<button type="button" class="btn-sm" onclick="geodePayQuickFromPlan(\'goal\')">Goal contribution</button>' +
     '<button type="button" class="btn-sm" onclick="geodePayQuickFromPlan(\'invest\')">Investment contribution</button>' +
     '<button type="button" class="btn-sm" onclick="openPayQuick(\'bill\')">Bill</button>' +
-    '</div>';
+    '</div></details>';
   if(payMo.length>0) h+='<div data-geode-css="display:flex;justify-content:space-between;align-items:center;margin:11px 0 4px"><span data-geode-css="font-size:10px;color:var(--tx-3)">'+payMo.length+' this month</span><span data-geode-css="font-size:17px;font-weight:700;color:#f5c234">'+fm(tUp)+'</span></div>';
   h+='<div id="plist" data-geode-css="margin-top:8px"></div>';
   el.innerHTML=h;
@@ -34076,21 +34117,25 @@ function rPayments(el) {
     var ctxLine =
       (p.rec === 'yes' ? 'Monthly' : 'One-off') +
       (p.date ? ' \u2022 Due ' + fd(p.date) : '');
-    var confirmHelp =
-      needsConfirm
-        ? '<div data-geode-css="font-size:10px;color:var(--tx-2);margin-top:6px;line-height:1.35">Mark completed if this money has moved, or edit if plans changed.</div>'
-        : '';
+    var confirmHelp = '';
+    var editLinkHtml =
+      '<button type="button" onclick="openPayModal(\'' +
+      p.id +
+      '\')" data-geode-css="background:transparent;border:none;padding:0;font-size:11px;font-weight:600;color:var(--tx-3);cursor:pointer;text-decoration:underline;text-underline-offset:3px">Edit</button>';
     var removeBtnHtml =
       '<button type="button" onclick="delPay(\'' +
       p.id +
-      '\')" data-geode-css="background:transparent;border:none;padding:6px 2px;font-size:11px;font-weight:600;color:rgba(240,112,112,0.75);cursor:pointer;text-decoration:underline;text-underline-offset:3px">Remove</button>';
+      '\')" data-geode-css="background:transparent;border:none;padding:0;font-size:11px;font-weight:600;color:rgba(240,112,112,0.65);cursor:pointer;text-decoration:underline;text-underline-offset:3px">Remove</button>';
+    var managePayHtml =
+      '<details class="geode-manage-disclosure" data-geode-css="margin-top:6px;font-size:9px;color:rgba(189,183,220,0.72);line-height:1.25">' +
+      '<summary data-geode-css="cursor:pointer;font-weight:600;list-style-position:inside">Manage</summary>' +
+      '<div data-geode-css="margin-top:5px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">' +
+      editLinkHtml +
+      removeBtnHtml +
+      '</div></details>';
     var actionRow = '';
     if (isPaid) {
-      actionRow =
-        '<button type="button" class="btn-sm" onclick="openPayModal(\'' +
-        p.id +
-        '\')">Edit</button>' +
-        removeBtnHtml;
+      actionRow = '';
     } else if (likely) {
       actionRow =
         '<button type="button" class="btn btn-p btn-sm" onclick="geodeConfirmLikelyCompleted(\'' +
@@ -34098,20 +34143,18 @@ function rPayments(el) {
         '\')">Confirm</button>' +
         '<button type="button" onclick="togglePay(\'' +
         p.id +
-        '\')" data-geode-css="background:transparent;border:none;padding:6px 2px;font-size:12px;font-weight:600;color:var(--tx-2);cursor:pointer;text-decoration:underline;text-underline-offset:3px">Mark manually</button>' +
-        removeBtnHtml;
+        '\')" data-geode-css="background:transparent;border:none;padding:0 2px;font-size:11px;font-weight:600;color:var(--tx-3);cursor:pointer;text-decoration:underline;text-underline-offset:3px">Mark manually</button>';
     } else {
       actionRow =
         '<button type="button" class="btn btn-p btn-sm" onclick="togglePay(\'' +
         p.id +
-        '\')">Mark completed</button>' +
-        '<button type="button" class="btn-sm" onclick="openPayModal(\'' +
-        p.id +
-        '\')">Edit</button>' +
-        removeBtnHtml;
+        '\')">Mark completed</button>';
     }
     var e=document.createElement('div'); e.className='card'; e.style.borderLeft='3px solid '+col; e.style.marginBottom='10px';
-    if(p.status==='paid')e.style.opacity='0.55';
+    if(p.status==='paid'){
+      e.style.opacity='0.45';
+      col='var(--tx-3)';
+    }
     if (needsConfirm && !isPaid) {
       // Display-only visual state: subtle tint + soft outline (no new actions, no stored-status changes).
       e.style.boxShadow = '0 0 0 1px rgba(196,171,255,0.18)';
@@ -34130,16 +34173,18 @@ function rPayments(el) {
       ';flex-shrink:0">' +
       fm(p.amount) +
       '</div></div>' +
-      '<div data-geode-css="margin-top:8px">' +
-      stateChip +
-      '</div>' +
-      '<div data-geode-css="font-size:10px;color:rgba(112,106,144,0.92);margin-top:7px;line-height:1.35">' +
-      ctxLine +
-      '</div>' +
+      (isPaid
+        ? ''
+        : '<div data-geode-css="margin-top:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">' +
+          stateChip +
+          '<span data-geode-css="font-size:10px;color:rgba(112,106,144,0.92);line-height:1.35">' +
+          ctxLine +
+          '</span></div>') +
       confirmHelp +
-      '<div data-geode-css="display:flex;align-items:center;gap:8px;margin-top:11px;flex-wrap:wrap">' +
-      actionRow +
-      '</div>';
+      (actionRow
+        ? '<div data-geode-css="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap">' + actionRow + '</div>'
+        : '') +
+      managePayHtml;
     list.appendChild(e);
   }
 }
@@ -34181,46 +34226,38 @@ function openPayModal(id, prefill) {
     } catch (_eBufPmTit) {}
   }
   var h = mh(p ? 'Edit contribution' : payModalTitle);
-  h +=
-    '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin:-6px 0 10px">This schedules a contribution that affects your monthly cash flow.</div>';
   h += '<input type="hidden" id="geode_pay_edit_id" value="' + (p ? String(p.id).replace(/"/g, '&quot;') : '') + '" />';
   h +=
     '<div class="field"><label>Name</label><input id="pn" class="fi" list="geode-dl-pay-names" placeholder="Rent, Credit Card..." value="' +
     defName.replace(/"/g, '&quot;') +
-    '" oninput="try{geodePayHintRefresh();geodePayModalImpactRefresh();}catch(e){}" />' +
+    '" oninput="try{geodePayHintRefresh();geodePayModalUiRefresh();}catch(e){}" />' +
     geodePayRecentNamesHtml() +
     (!p ? geodePayLastHintHtml(defName) : '') +
     '</div>';
   h +=
     '<div data-geode-css="display:grid;grid-template-columns:1fr 1fr;gap:9px"><div class="field"><label>Amount</label><input type="number" id="pa" class="fi" placeholder="1200" value="' +
     defAmt +
-    '" oninput="try{geodePayModalImpactRefresh()}catch(e){}" /></div><div class="field"><label>Due date</label><input type="date" id="pd" class="fi" value="' +
+    '" oninput="try{geodePayModalUiRefresh()}catch(e){}" /></div><div class="field"><label>Due date</label><input type="date" id="pd" class="fi" value="' +
     defDate +
-    '" oninput="try{geodePayModalImpactRefresh()}catch(e){}" /></div></div>';
+    '" oninput="try{geodePayModalUiRefresh()}catch(e){}" /></div></div>';
   h +=
-    '<div class="field"><label>Status</label><select id="ps" class="fi" onchange="try{geodePayModalImpactRefresh()}catch(e){}"><option value="upcoming"' +
+    '<div class="field" data-geode-css="margin-bottom:4px"><label>Status</label><select id="ps" class="fi" onchange="try{geodePayModalUiRefresh()}catch(e){}"><option value="upcoming"' +
     (defStatus === 'upcoming' ? ' selected' : '') +
     '>Scheduled</option><option value="paid"' +
     (defStatus === 'paid' ? ' selected' : '') +
     '>Completed</option><option value="overdue"' +
     (defStatus === 'overdue' ? ' selected' : '') +
     '>Needs confirmation</option></select></div>';
+  h += '<div id="geode-pay-status-hint"></div>';
   h +=
-    '<div data-geode-css="font-size:10px;color:var(--tx-2);line-height:1.35;margin:-4px 0 10px">Scheduled counts in this month\u2019s plan. Mark Completed when the money has moved. Another linked save this month updates that scheduled amount.</div>';
-  h +=
-    '<div class="field" data-geode-css="margin-bottom:10px"><label>Frequency</label><select id="prec" class="fi" onchange="try{geodePayModalImpactRefresh()}catch(e){}" data-geode-css="font-size:12px">' +
+    '<div class="field" data-geode-css="margin-bottom:4px"><label>Frequency</label><select id="prec" class="fi" onchange="try{geodePayModalUiRefresh()}catch(e){}" data-geode-css="font-size:12px">' +
     '<option value="no"' + (defRec===false||defRec==='no'?' selected':'') + '>One-off</option>' +
     '<option value="yes"' + (defRec===true||defRec==='yes'?' selected':'') + '>Monthly</option>' +
     '<option value="annual"' + (defRec==='annual'?' selected':'') + '>Annual</option>' +
-    '</select>' +
-    geodeDetailsWhy(
-      'Learn more',
-      '<span data-geode-css="color:rgba(237,234,255,0.78)">Recurring contributions roll forward monthly. Marking one paid can affect which month it counts toward.</span>'
-    ) +
-    '</div>';
-  h += '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.75);margin:-2px 0 10px;line-height:1.35">Optional links (pick at most one)</div>';
+    '</select></div>';
+  h += '<div id="geode-pay-rec-hint-host" data-geode-css="margin:-2px 0 8px"></div>';
   h +=
-    '<div class="field" data-geode-css="opacity:0.95"><label>Link to goal (optional)</label><select id="pglid" class="fi" onchange="try{geodePayModalImpactRefresh()}catch(e){}"><option value="">None</option>';
+    '<div class="field" data-geode-css="opacity:0.95"><label>Link to goal (optional)</label><select id="pglid" class="fi" onchange="try{geodePayModalUiRefresh()}catch(e){}"><option value="">None</option>';
   for (var gi = 0; gi < S.goals.length; gi++) {
     var gg = S.goals[gi];
     if (!gg || !gg.id) continue;
@@ -34228,7 +34265,7 @@ function openPayModal(id, prefill) {
   }
   h += '</select></div>';
   h +=
-    '<div class="field" data-geode-css="opacity:0.95"><label>Link to investment (optional)</label><select id="pinvlid" class="fi" onchange="try{geodePayModalImpactRefresh()}catch(e){}"><option value="">None</option>';
+    '<div class="field" data-geode-css="opacity:0.95"><label>Link to investment (optional)</label><select id="pinvlid" class="fi" onchange="try{geodePayModalUiRefresh()}catch(e){}"><option value="">None</option>';
   for (var vi = 0; vi < S.investments.length; vi++) {
     var iv = S.investments[vi];
     if (!iv || !iv.id) continue;
@@ -34236,25 +34273,20 @@ function openPayModal(id, prefill) {
   }
   h += '</select></div>';
   h +=
-    '<div class="field" data-geode-css="opacity:0.95;margin-bottom:14px"><label>Link to debt repayment (optional)</label><select id="pdebtlid" class="fi" onchange="try{geodePayModalImpactRefresh()}catch(e){}"><option value="">None</option>';
+    '<div class="field" data-geode-css="opacity:0.95;margin-bottom:8px"><label>Link to debt repayment (optional)</label><select id="pdebtlid" class="fi" onchange="try{geodePayModalUiRefresh()}catch(e){}"><option value="">None</option>';
   for (var di = 0; di < S.debts.length; di++) {
     var dd = S.debts[di];
     if (!dd || !dd.id) continue;
     h += '<option value="' + dd.id + '"' + (defDebt === dd.id ? ' selected' : '') + '>' + escOpt(dd.name || 'Debt') + '</option>';
   }
-  h +=
-    '</select><div data-geode-css="font-size:10px;color:var(--tx-3);margin-top:6px;line-height:1.4">Pick at most one link.' +
-    geodeDetailsWhy(
-      'Learn more',
-      '<span data-geode-css="color:rgba(237,234,255,0.78)">Links label the contribution for clarity. Marking paid does not automatically reduce a debt balance — update the debt balance separately when it changes.</span>'
-    ) +
-    '</div></div>';
+  h += '</select></div>';
+  h += '<div id="geode-pay-link-hint-host" data-geode-css="margin:-2px 0 10px"></div>';
   h += '<div id="geode-pay-impact-host"></div>';
-  h += '<button class="btn btn-p" onclick="savePay(\''+(p?p.id:'')+'\')">'+(p?'Save changes':'Save')+'</button>';
+  h += '<button class="btn btn-p" data-geode-css="margin-top:12px" onclick="savePay(\''+(p?p.id:'')+'\')">'+(p?'Save changes':'Save')+'</button>';
   openModal(h);
   setTimeout(function() {
     try {
-      geodePayModalImpactRefresh();
+      geodePayModalUiRefresh();
     } catch (e) {}
   }, 0);
 }
@@ -34874,20 +34906,24 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
   render();
   checkAlerts();
   try { geodeSubOnSave(nm, am, rec); } catch(_se) {}
-  geodeSuccessToast(
-    geodeStageLToastAfterSave(userMsg, 'payment', {
-      debtId: debtid,
-      goalId: gid,
-      investId: invid,
-      debtPaymentRecorded: !!(debtid && st === 'paid'),
-      _seed: Date.now()
-    })
-  );
+  if (st === 'paid' && savedPayRow) {
+    geodeEmitPaymentCompletionFeedback(savedPayRow, { userMsg: userMsg });
+  } else {
+    geodeMarkRecentUserSave();
+    geodeSuccessToast(
+      geodeStageLToastAfterSave(userMsg, 'payment', {
+        debtId: debtid,
+        goalId: gid,
+        investId: invid,
+        debtPaymentRecorded: !!(debtid && st === 'paid'),
+        _seed: Date.now()
+      })
+    );
+  }
 }
 function togglePay(id){
   var p=S.payments.filter(function(x){return x.id===id;})[0];
   if(!p)return;
-  var microDelay = 0;
   if(p.status==='paid'){
     p.status='upcoming';
     p.lastPaidYM='';
@@ -34916,47 +34952,14 @@ function togglePay(id){
         aligned: (_tpMk !== '' && _tpMk !== 'none' && _tpKind === _tpMk)
       });
     } catch (eTpLog) {}
-    if (p.goalId) {
-      try {
-        var kGoal = 'geode_goal_saved_note_session';
-        if (!sessionStorage.getItem(kGoal)) {
-          sessionStorage.setItem(kGoal, '1');
-          toast('Marked complete — goal progress updated.');
-        }
-      } catch (eGoalNote) {}
-    }
-    if (p.investId) {
-      try {
-        var kInv = 'geode_invest_balance_note_session';
-        if (!sessionStorage.getItem(kInv)) {
-          sessionStorage.setItem(kInv, '1');
-          toast('Marked complete — investment balance updated.');
-        }
-      } catch (eInvNote) {}
-    }
   }
   geodeRecomputeBalancesFromPayments();
   save();
   geodeInvalidateDecisionCaches();
   render();
+  checkAlerts();
   if (p.status === 'paid') {
-    try {
-      // Home confidence UX: short-lived completion note for linked contributions.
-      var k = '';
-      if (p.debtId) k = 'debt';
-      else if (p.investId) k = 'invest';
-      else if (geodePaymentNameLooksLikeBuffer(p.name) || (String(p.name || '').toLowerCase().indexOf('buffer') >= 0)) k = 'buffer';
-      else if (p.goalId) k = 'goal';
-      geodeHomeNoteRecentCompletion(k);
-    } catch (eHx) {}
-    var payExtras = { debtId: p.debtId || '', goalId: p.goalId || '', investId: p.investId || '', _seed: Date.now() };
-    setTimeout(function () {
-      if (p.debtId) {
-        toast(geodeDebtDualLedgerToastLine(), 'ok', 5200);
-        return;
-      }
-      geodeSuccessToast(geodeStageLToastAfterSave('Completed — this now reflects in your plan.', 'payment', payExtras));
-    }, microDelay);
+    geodeEmitPaymentCompletionFeedback(p, { userMsg: 'Marked complete.' });
   }
 }
 function delPay(id){
@@ -34967,6 +34970,67 @@ function delPay(id){
   geodeRecomputeBalancesFromPayments();
   save();
   render();
+}
+
+function geodePayModalUiRefresh() {
+  try {
+    geodePayModalGuidanceRefresh();
+  } catch (eG) {}
+  try {
+    geodePayModalImpactRefresh();
+  } catch (eI) {}
+}
+
+function geodePayModalGuidanceRefresh() {
+  var statusHost = document.getElementById('geode-pay-status-hint');
+  var recHost = document.getElementById('geode-pay-rec-hint-host');
+  var linkHost = document.getElementById('geode-pay-link-hint-host');
+  if (!statusHost && !recHost && !linkHost) return;
+  var st = ((document.getElementById('ps') || {}).value) || 'upcoming';
+  var recEl = document.getElementById('prec');
+  var rec = recEl ? recEl.value || 'no' : 'no';
+  var gid = String(((document.getElementById('pglid') || {}).value) || '');
+  var invid = String(((document.getElementById('pinvlid') || {}).value) || '');
+  var debtid = String(((document.getElementById('pdebtlid') || {}).value) || '');
+  if (statusHost) {
+    var statusLine = '';
+    if (st === 'paid') {
+      statusLine = '';
+    } else if (st === 'overdue') {
+      statusLine = 'Mark completed once the money has moved.';
+    } else {
+      statusLine = 'Completed means the money has moved.';
+    }
+    statusHost.innerHTML = statusLine
+      ? '<div data-geode-css="font-size:10px;color:var(--tx-2);line-height:1.35;margin:-2px 0 8px">' +
+        escHtmlLite(statusLine) +
+        '</div>'
+      : '';
+  }
+  if (recHost) {
+    recHost.innerHTML =
+      rec === 'yes' || rec === 'annual'
+        ? geodeDetailsWhy(
+            'Learn more',
+            '<span data-geode-css="color:rgba(237,234,255,0.78)">Recurring items roll forward each month. Marking one complete can shift which month it belongs to.</span>'
+          )
+        : '';
+  }
+  if (linkHost) {
+    var linkHtml = '';
+    if (debtid) {
+      linkHtml = geodeDetailsWhy(
+        'About debt payments',
+        '<span data-geode-css="color:rgba(237,234,255,0.78)">Marking complete records the payment here. Update the balance in Debts when your provider shows a new figure.</span>'
+      );
+    } else if (invid) {
+      linkHtml =
+        '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.35">Optional this month. Linking helps Beynd see where the money goes.</div>';
+    } else if (gid) {
+      linkHtml = '';
+    }
+    linkHost.innerHTML = linkHtml;
+  }
 }
 
 function geodePayModalImpactRefresh() {
@@ -34997,11 +35061,7 @@ function geodePayModalImpactRefresh() {
   var editId = String(((document.getElementById('geode_pay_edit_id') || {}).value) || '');
 
   if (!dt || amRaw === '' || amRaw == null || isNaN(Number(amRaw))) {
-    host.innerHTML =
-      '<div data-geode-css="margin:12px 0 4px;padding:10px 11px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid var(--bd)">' +
-      '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.2px;color:rgba(189,183,220,0.65);text-transform:uppercase;margin-bottom:6px">Impact</div>' +
-      '<div data-geode-css="font-size:11px;color:rgba(237,234,255,0.78);line-height:1.35">Enter amount and due date to see how &ldquo;left this month&rdquo; changes.</div>' +
-      '</div>';
+    host.innerHTML = geodeRenderModalImpactBlock('', 'Add amount and date to preview plan impact.', '');
     return;
   }
 
@@ -35046,11 +35106,12 @@ function geodePayModalImpactRefresh() {
   var hasChange = Math.abs(delta) >= eps;
   var line1 = hasChange ? 'Left this month: ' + fm(baseLeft) + ' → ' + fm(newLeft) : '';
   var sentence = !hasChange
-    ? 'This does not affect monthly cash flow until scheduled as a contribution.'
+    ? 'Won\u2019t change left this month as entered.'
     : delta < 0
       ? 'This lowers left this month on your plan.'
       : 'This raises left this month on your plan.';
-  host.innerHTML = geodeRenderModalImpactBlock(line1, sentence, coach.why);
+  var coachWhy = linkKind === 'debt' ? '' : coach.why;
+  host.innerHTML = geodeRenderModalImpactBlock(line1, sentence, coachWhy);
 }
 
 function geodeExpModalImpactRefresh() {
@@ -35065,11 +35126,7 @@ function geodeExpModalImpactRefresh() {
   var editId = String(((document.getElementById('geode_exp_edit_id') || {}).value) || '');
 
   if (!edRaw || amRaw === '' || amRaw == null || isNaN(Number(amRaw))) {
-    host.innerHTML =
-      '<div data-geode-css="margin:12px 0 4px;padding:10px 11px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid var(--bd)">' +
-      '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.2px;color:rgba(189,183,220,0.65);text-transform:uppercase;margin-bottom:6px">Impact</div>' +
-      '<div data-geode-css="font-size:11px;color:rgba(237,234,255,0.78);line-height:1.35">Enter amount and date to see how &ldquo;left this month&rdquo; changes.</div>' +
-      '</div>';
+    host.innerHTML = geodeRenderModalImpactBlock('', 'Add amount and date to preview plan impact.', '');
     return;
   }
 
@@ -35102,7 +35159,7 @@ function geodeExpModalImpactRefresh() {
     : delta < 0
       ? 'This lowers left this month on your plan.'
       : 'This raises left this month on your plan.';
-  host.innerHTML = geodeRenderModalImpactBlock(line1, sentence, '') + geodeExplain('Spending lowers left this month on your plan.');
+  host.innerHTML = geodeRenderModalImpactBlock(line1, sentence, '');
 }
 
 function geodeGoalModalImpactRefresh() {
@@ -35125,25 +35182,25 @@ function geodeGoalModalImpactRefresh() {
       '<div data-geode-css="margin-top:8px;font-size:11px;color:rgba(237,234,255,0.85);line-height:1.35">Add a target date for pace needed</div>';
   }
 
-  host.innerHTML =
-    geodeRenderModalImpactBlock('', 'Does not affect monthly cash flow until you contribute.', '') +
-    paceLine +
-    geodeExplain('Pace needed uses your target, saved amount, and target date.');
+  host.innerHTML = geodeRenderModalImpactBlock('', 'Does not affect monthly cash flow until you contribute.', '') + paceLine;
 }
 
 function geodeInvModalImpactRefresh() {
   var host = document.getElementById('geode-inv-impact-host');
   if (!host) return;
-  var baseLeft = calcMonthlyLeftover(S);
   var balRaw = (document.getElementById('xb') || {}).value;
   var bal = balRaw === '' || balRaw == null || isNaN(Number(balRaw)) ? null : Number(balRaw);
 
+  var coachSentence =
+    bal === null
+      ? 'Balances track what you hold.'
+      : 'Balance update reflects what you hold.';
   var coachWhy =
     bal === null
-      ? 'Balances track holdings (net worth). Use Contributions when you want an outflow to affect &ldquo;left this month.&rdquo;'
-      : 'Updating balances reflects what you hold. Consistent contributions are what typically move monthly cash flow.';
+      ? 'Use Contributions when you want an outflow to affect left this month.'
+      : 'Consistent contributions are what typically move monthly cash flow.';
 
-  host.innerHTML = geodeRenderModalImpactBlock('', 'This does not affect monthly cash flow until scheduled as a contribution.', coachWhy);
+  host.innerHTML = geodeRenderModalImpactBlock('', coachSentence, coachWhy);
 }
 
 function geodeReadSessionJson(key) {
@@ -35452,13 +35509,14 @@ function rExpenses(el) {
     '<div id="geode-qadd-exp-err" data-geode-css="font-size:9px;color:rgba(240,112,112,0.85);line-height:1.35;min-height:14px;margin:0 0 6px"></div>' +
     '<div data-geode-css="font-size:9px;color:rgba(112,106,144,0.86);line-height:1.35;margin:0 0 6px">Quick add creates a one-time spending line. Use Edit for details.</div>';
   h +=
-    '<div data-geode-css="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px;align-items:center">' +
-    '<span data-geode-css="font-size:9px;color:var(--tx-3);margin-right:2px">Quick add</span>' +
+    '<details data-geode-css="margin:8px 0 2px;font-size:9px;color:var(--tx-3);line-height:1.35">' +
+    '<summary data-geode-css="cursor:pointer;font-weight:600;list-style-position:inside">Quick add presets</summary>' +
+    '<div data-geode-css="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center">' +
     '<button type="button" class="btn-sm" onclick="openExpQuick(\'Groceries\',\'food\')">Groceries</button>' +
     '<button type="button" class="btn-sm" onclick="openExpQuick(\'Transport\',\'transport\')">Transport</button>' +
     '<button type="button" class="btn-sm" onclick="openExpQuick(\'Subscription\',\'subs\')">Subscription</button>' +
     '<button type="button" class="btn-sm" onclick="openExpQuick(\'Rent\',\'utilities\')">Rent</button>' +
-    '</div>';
+    '</div></details>';
   if(activeExpenses.length>0){
     h+='<div class="card" data-geode-css="margin-top:12px"><div class="card-title">Spending · '+fm(tot)+'</div>';
     Object.keys(byCat).forEach(function(cat){
@@ -35478,7 +35536,12 @@ function rExpenses(el) {
     var _recLabel = _isStale ? ' · One-off from ' + _eYM : e.rec === 'yes' ? ' · Monthly' : e.rec === 'annual' ? ' · Annual' : ' · One-off';
     var div=document.createElement('div'); div.className='card'; div.style.borderLeft='3px solid '+col; div.style.marginBottom='10px';
     if (_isStale) div.style.opacity = '0.45';
-    div.innerHTML='<div data-geode-css="display:flex;justify-content:space-between;align-items:center"><div><div data-geode-css="font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:'+col+'">'+geodeSvg(icn)+'</span><span>'+e.name+'</span></div><div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:2px">'+e.cat+_recLabel+'</div></div><div data-geode-css="text-align:right"><div data-geode-css="font-size:17px;font-weight:700;color:'+col+'">'+fm(e.amount)+'</div><div data-geode-css="display:flex;gap:5px;justify-content:flex-end;margin-top:4px"><button class="btn-sm" onclick="openExpModal(\''+e.id+'\')">Edit</button><button class="btn-del" onclick="delExp(\''+e.id+'\')">Remove</button></div></div></div>';
+    div.innerHTML=
+      '<div data-geode-css="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">' +
+      '<div data-geode-css="min-width:0"><div data-geode-css="font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:'+col+'">'+geodeSvg(icn)+'</span><span>'+e.name+'</span></div><div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:2px">'+e.cat+_recLabel+'</div></div>' +
+      '<div data-geode-css="font-size:17px;font-weight:700;color:'+col+';flex-shrink:0">'+fm(e.amount)+'</div></div>' +
+      '<details class="geode-manage-disclosure" data-geode-css="margin-top:8px;font-size:9px;color:rgba(189,183,220,0.72);line-height:1.25"><summary data-geode-css="cursor:pointer;font-weight:600;list-style-position:inside">Manage</summary>' +
+      '<div data-geode-css="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn-sm" onclick="openExpModal(\''+e.id+'\')">Edit</button><button class="btn-del" onclick="delExp(\''+e.id+'\')">Remove</button></div></details>';
     list.appendChild(div);
   });
 }
@@ -35488,15 +35551,12 @@ function openExpModal(id, opts){
   var h=mh(e?'Edit spending':'Add spending');
   h +=
     '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin:-6px 0 10px">' +
-    'Enter the total amount you expect to spend this month. ' +
-    'Spending reduces &ldquo;left this month&rdquo; as part of your monthly total.' +
+    'Enter the total amount you expect to spend this month.' +
     geodeDetailsWhy(
       'How this works',
       '<span data-geode-css="color:rgba(237,234,255,0.78)">Beynd totals your spending amounts for the month (not every individual purchase).</span>'
     ) +
     '</div>';
-  h +=
-    '<div data-geode-css="font-size:9px;color:rgba(112,106,144,0.92);line-height:1.35;margin:-6px 0 10px">This will affect your monthly plan and safe-to-spend.</div>';
   var namePh = 'Groceries, Netflix...';
   var defCat = e ? e.cat : opts.cat || geodeGetLastExpenseCategory() || 'other';
   var defAmt = '';
@@ -35530,11 +35590,11 @@ function openExpModal(id, opts){
     (defRec !== 'yes' && defRec !== 'annual' ? ' selected' : '') +
     '>One-time</option><option value="yes"' +
     (defRec === 'yes' ? ' selected' : '') +
-    '>Monthly — repeats each month</option><option value="annual"' +
+    '>Monthly (repeats each month)</option><option value="annual"' +
     (defRec === 'annual' ? ' selected' : '') +
-    '>Annual — once a year</option></select></div>';
+    '>Annual (once a year)</option></select></div>';
   h += '<div id="geode-exp-impact-host"></div>';
-  h+='<button class="btn btn-p" onclick="saveExp(\''+(id||'')+'\')">Save</button>';
+  h+='<button class="btn btn-p" data-geode-css="margin-top:12px" onclick="saveExp(\''+(id||'')+'\')">Save</button>';
   openModal(h);
   setTimeout(function() {
     try {
@@ -35619,8 +35679,40 @@ function rInvest(_target) {
     var tIc=INV_ICONS[e.type]||'briefcase';
     var div=document.createElement('div'); div.className='card'; div.style.borderLeft='3px solid #9b7fe8'; div.style.marginBottom='10px';
     var lastInvAmt = geodeLastLinkedContributionAmount('invest', e.id);
-    var lastInvLine = lastInvAmt ? '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:6px;line-height:1.2">Last contribution: ' + fm(lastInvAmt) + '</div>' : '';
-    div.innerHTML='<div data-geode-css="display:flex;justify-content:space-between;align-items:flex-start"><div data-geode-css="flex:1;min-width:0;padding-right:9px"><div data-geode-css="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:#9b7fe8">'+geodeSvg(tIc)+'</span><span>'+e.name+'</span></div><div data-geode-css="font-size:9px;color:#9b7fe8;margin-top:2px;text-transform:uppercase;letter-spacing:1px">'+e.type+'</div>'+(e.platform?'<div data-geode-css="font-size:10px;color:var(--tx-3);margin-top:2px">via '+e.platform+'</div>':'')+(e.notes?'<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.62);margin-top:3px;font-style:italic">'+e.notes+'</div>':'')+'</div><div data-geode-css="text-align:right;flex-shrink:0"><div data-geode-css="font-size:17px;font-weight:700;color:#9b7fe8">'+fm(e.balance)+'</div><details data-geode-css="margin-top:4px;text-align:right;font-size:9px;color:rgba(189,183,220,0.8);line-height:1.25"><summary data-geode-css="cursor:pointer;font-weight:700;list-style-position:inside">Balance vs contributions</summary><div data-geode-css="margin-top:4px;color:rgba(237,234,255,0.78)">Balance is what you currently hold. Contributions are money you add over time.</div></details>'+(Number(e.returns)>0?'<div data-geode-css="font-size:10px;color:#34d5a0;margin-top:2px">+'+fm(e.returns)+'</div>':'')+'<button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:10px" onclick="geodePayFromInvest(\''+e.id+'\')">Contribute to this investment</button><div data-geode-css="display:flex;gap:5px;margin-top:6px;justify-content:flex-end;flex-wrap:wrap"><button class="btn-sm" onclick="openInvModal(\''+e.id+'\')">Edit</button><button class="btn-del" onclick="delInv(\''+e.id+'\')">Remove</button></div>'+lastInvLine+'</div></div>';
+    var lastInvLine = lastInvAmt
+      ? '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:4px;line-height:1.2;opacity:0.85">Last contribution: ' +
+        fm(lastInvAmt) +
+        '</div>'
+      : '';
+    div.innerHTML =
+      '<div data-geode-css="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div data-geode-css="flex:1;min-width:0"><div data-geode-css="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:#9b7fe8">' +
+      geodeSvg(tIc) +
+      '</span><span>' +
+      e.name +
+      '</span></div><div data-geode-css="font-size:9px;color:#9b7fe8;margin-top:2px;text-transform:uppercase;letter-spacing:1px">' +
+      e.type +
+      '</div>' +
+      (e.platform ? '<div data-geode-css="font-size:10px;color:var(--tx-3);margin-top:2px">via ' + e.platform + '</div>' : '') +
+      (e.notes
+        ? '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.62);margin-top:3px;font-style:italic">' + e.notes + '</div>'
+        : '') +
+      '</div><div data-geode-css="text-align:right;flex-shrink:0"><div data-geode-css="font-size:17px;font-weight:700;color:#9b7fe8">' +
+      fm(e.balance) +
+      '</div>' +
+      (Number(e.returns) > 0
+        ? '<div data-geode-css="font-size:10px;color:#34d5a0;margin-top:2px">+' + fm(e.returns) + '</div>'
+        : '') +
+      '</div></div>' +
+      '<details data-geode-css="margin-top:6px;font-size:9px;color:rgba(189,183,220,0.8);line-height:1.25"><summary data-geode-css="cursor:pointer;font-weight:600;list-style-position:inside">Balance vs contributions</summary><div data-geode-css="margin-top:4px;color:rgba(237,234,255,0.78)">Balance is what you currently hold. Contributions are money you add over time.</div></details>' +
+      '<button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:12px" onclick="geodePayFromInvest(\'' +
+      e.id +
+      '\')">Contribute to this investment</button>' +
+      lastInvLine +
+      '<details class="geode-manage-disclosure" data-geode-css="margin-top:8px;font-size:9px;color:rgba(189,183,220,0.72);line-height:1.25"><summary data-geode-css="cursor:pointer;font-weight:600;list-style-position:inside">Manage</summary><div data-geode-css="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn-sm" onclick="openInvModal(\'' +
+      e.id +
+      '\')">Edit</button><button class="btn-del" onclick="delInv(\'' +
+      e.id +
+      '\')">Remove</button></div></details>';
     list.appendChild(div);
   });
 }
@@ -35645,8 +35737,6 @@ function openInvModal(id){
     '<div class="field" data-geode-css="opacity:0.96"><label>Returns / gains (optional)</label><input type="number" id="xr" class="fi" placeholder="0" value="' +
     (e ? e.returns || '' : '') +
     '" oninput="try{geodeInvModalImpactRefresh()}catch(e){}" /></div>';
-  h +=
-    '<div data-geode-css="font-size:10px;color:var(--tx-3);margin:-4px 0 10px;line-height:1.4">Use <strong>Money \u2192 Contributions</strong> when a payment should affect &ldquo;left this month.&rdquo;</div>';
   h += '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.75);margin:10px 0 8px;line-height:1.35">Optional investing context</div>';
   h += '<div data-geode-css="display:grid;grid-template-columns:1fr 1fr;gap:9px">';
   h += '<div class="field" data-geode-css="opacity:0.96"><label>What is this for?</label><select id="xpurpose" class="fi" onchange="try{geodeInvModalImpactRefresh()}catch(e){}">';
@@ -35686,7 +35776,7 @@ function openInvModal(id){
     (e ? e.notes || '' : '') +
     '</textarea></div>';
   h += '<div id="geode-inv-impact-host"></div>';
-  h+='<button class="btn btn-p" onclick="saveInv(\''+(id||'')+'\')">Save</button>';
+  h+='<button class="btn btn-p" data-geode-css="margin-top:12px" onclick="saveInv(\''+(id||'')+'\')">Save</button>';
   openModal(h);
   setTimeout(function() {
     try {
