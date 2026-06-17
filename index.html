@@ -31038,6 +31038,357 @@ try {
 } catch (_eNcmInit) {}
 
 /**
+ * Stage 80N-J: read-only Tier-C runtime gate (resilience v1 only).
+ * Returns verdict metadata only. Never mutates snapshot, orchestration, or Plan.
+ */
+function geodeNoticedTierCGate(snapshot, domain, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  var domainKey = domain != null ? String(domain).trim() : '';
+  var surface = opts.surface != null ? String(opts.surface) : 'reflection';
+
+  function gateOut(verdict, extra) {
+    var o = extra && typeof extra === 'object' ? extra : {};
+    return {
+      version: 1,
+      stage: '80N-J',
+      domain: domainKey,
+      surface: surface,
+      verdict: verdict,
+      renderAllowed: verdict === 'PASS',
+      archetype: o.archetype != null ? o.archetype : null,
+      collisionSeverity: o.collisionSeverity || 'LOW',
+      silenceReason:
+        o.silenceReason != null
+          ? o.silenceReason
+          : verdict === 'PASS'
+            ? null
+            : verdict,
+      silenceCodes: Array.isArray(o.silenceCodes) ? o.silenceCodes.slice() : [],
+      replaceTargets: Array.isArray(o.replaceTargets) ? o.replaceTargets.slice() : [],
+      suppressTargets: Array.isArray(o.suppressTargets) ? o.suppressTargets.slice() : [],
+      copyMapRef: o.copyMapRef || null,
+      audit: o.audit && typeof o.audit === 'object' ? o.audit : {}
+    };
+  }
+
+  if (!domainKey || domainKey === 'pressure') {
+    return gateOut('INTERNAL_ONLY', {
+      collisionSeverity: 'CRITICAL',
+      silenceCodes: ['permanent_tier_a_internal']
+    });
+  }
+
+  if (domainKey !== 'resilience') {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['domain_not_allowed_v1']
+    });
+  }
+
+  if (surface !== 'reflection') {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['surface_not_allowed_v1']
+    });
+  }
+
+  var parityPass = false;
+  var parityReport = opts.parityReport;
+  if (parityReport && typeof parityReport === 'object') {
+    parityPass = parityReport.pass === true;
+  } else if (opts.runParity !== false) {
+    try {
+      parityReport = geodeNoticedParityCheck(opts.state || S, { log: false });
+      parityPass = !!(parityReport && parityReport.pass === true);
+    } catch (_eTcgParity) {
+      parityPass = false;
+      parityReport = null;
+    }
+  }
+  if (!parityPass) {
+    return gateOut('HARD_SUPPRESS', {
+      collisionSeverity: 'CRITICAL',
+      silenceCodes: ['parity_fail'],
+      audit: { parityPass: false }
+    });
+  }
+
+  if (!snapshot.active || snapshot.reason === 'empty_state' || snapshot.reason === 'not_onboarded') {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['snapshot_inactive']
+    });
+  }
+
+  if (snapshot.reason === 'quiet_period') {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['snapshot_quiet']
+    });
+  }
+
+  var quiet = snapshot.quiet && typeof snapshot.quiet === 'object' ? snapshot.quiet : {};
+  if (quiet.shouldStayQuiet === true) {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['quiet_period']
+    });
+  }
+
+  var noticed = snapshot.noticed && typeof snapshot.noticed === 'object' ? snapshot.noticed : {};
+  var userLoad = noticed.userLoad != null ? String(noticed.userLoad) : 'low';
+  if (userLoad === 'critical' || userLoad === 'high') {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['user_load_high']
+    });
+  }
+
+  if (opts.completionAftermathActive === true) {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['completion_aftermath']
+    });
+  }
+
+  var entryGate = opts.entryGate;
+  if (entryGate && entryGate.visibility === 'hidden') {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['entry_hidden']
+    });
+  }
+
+  var res = noticed.resilience && typeof noticed.resilience === 'object' ? noticed.resilience : {};
+  var heldBackCount = typeof res.heldBackCount === 'number' ? res.heldBackCount : 0;
+  var heldBackSignals = opts.heldBackSignals === true;
+  if (heldBackCount <= 0 && !heldBackSignals) {
+    return gateOut('SOFT_SUPPRESS', {
+      silenceCodes: ['no_held_back_signal']
+    });
+  }
+
+  var atmosphere =
+    opts.atmosphere != null
+      ? String(opts.atmosphere)
+      : opts.visualModel && opts.visualModel.atmosphere != null
+        ? String(opts.visualModel.atmosphere)
+        : 'calm';
+
+  if (atmosphere === 'recovering' || atmosphere === 'reflective') {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['atmosphere_owns_quiet']
+    });
+  }
+  if (atmosphere !== 'calm' && atmosphere !== 'protective' && atmosphere !== 'room') {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['atmosphere_incompatible']
+    });
+  }
+
+  if (opts.showBackground === true) {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['background_canonical']
+    });
+  }
+
+  if (opts.monthSoFarDuplicatesQuiet === true) {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['month_so_far_duplicates_quiet']
+    });
+  }
+
+  var meta =
+    snapshot.stabilityMetadata && typeof snapshot.stabilityMetadata === 'object'
+      ? snapshot.stabilityMetadata
+      : {};
+  var collisions =
+    meta.narratorCollisions && typeof meta.narratorCollisions === 'object'
+      ? meta.narratorCollisions
+      : {};
+  var resCol = collisions.resilience && typeof collisions.resilience === 'object' ? collisions.resilience : {};
+  var risk = resCol.risk != null ? String(resCol.risk) : 'none';
+  var severity = 'LOW';
+  if (risk === 'medium') severity = 'MEDIUM';
+  else if (risk === 'high') severity = 'HIGH';
+
+  if (resCol.recommendSilence === true) {
+    return gateOut(severity === 'HIGH' ? 'HARD_SUPPRESS' : 'SOFT_SUPPRESS', {
+      collisionSeverity: severity,
+      silenceCodes: ['recommend_silence']
+    });
+  }
+
+  if (severity === 'HIGH') {
+    return gateOut('HARD_SUPPRESS', {
+      collisionSeverity: 'HIGH',
+      silenceCodes: ['collision_high']
+    });
+  }
+  if (severity === 'MEDIUM') {
+    return gateOut('SOFT_SUPPRESS', {
+      collisionSeverity: 'MEDIUM',
+      silenceCodes: ['collision_medium']
+    });
+  }
+
+  var sameIdea =
+    collisions.sameIdeaAlreadyExpressed && typeof collisions.sameIdeaAlreadyExpressed === 'object'
+      ? collisions.sameIdeaAlreadyExpressed
+      : {};
+  if (
+    sameIdea.risk === 'medium' &&
+    Array.isArray(sameIdea.domains) &&
+    sameIdea.domains.indexOf('resilience') >= 0
+  ) {
+    return gateOut('SOFT_SUPPRESS', {
+      collisionSeverity: 'MEDIUM',
+      silenceCodes: ['same_idea_medium']
+    });
+  }
+
+  if (opts.composeHasMonthSoFar !== true) {
+    return gateOut('SOFT_SUPPRESS', {
+      silenceCodes: ['no_replace_target_month_so_far']
+    });
+  }
+
+  if (opts.tierCAlreadyThisCompose === true) {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['max_one_tier_c']
+    });
+  }
+
+  var copyMapRef = null;
+  try {
+    copyMapRef = geodeNoticedCopyMap('resilience');
+  } catch (_eTcgCopy) {
+    copyMapRef = null;
+  }
+  if (!copyMapRef || copyMapRef.permanentlyInternal === true) {
+    return gateOut('INTERNAL_ONLY', {
+      silenceCodes: ['copy_map_internal']
+    });
+  }
+  if (
+    !copyMapRef.surfaceEligibility ||
+    copyMapRef.surfaceEligibility.stabilityRoom !== true
+  ) {
+    return gateOut('HARD_SUPPRESS', {
+      silenceCodes: ['surface_ineligible_copy_map']
+    });
+  }
+
+  return gateOut('PASS', {
+    archetype: 'quiet_background_ack',
+    collisionSeverity: 'LOW',
+    replaceTargets: ['month_so_far'],
+    suppressTargets: ['background'],
+    copyMapRef: copyMapRef,
+    audit: {
+      parityPass: true,
+      atmosphere: atmosphere,
+      heldBackCount: heldBackCount,
+      userLoad: userLoad
+    }
+  });
+}
+
+/**
+ * Stage 80N-J: Tier-C slot arbitration (replace-not-append; max 1 block).
+ * composeCtx carries pre-experience blockMap preview (not full experience model).
+ */
+function geodeTierCSlotDecision(snapshot, visualModel, composeCtx, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  composeCtx = composeCtx && typeof composeCtx === 'object' ? composeCtx : {};
+  var blockMap =
+    composeCtx.blockMap && typeof composeCtx.blockMap === 'object' ? composeCtx.blockMap : {};
+
+  var monthSoFarDuplicatesQuiet = false;
+  if (blockMap.month_so_far && blockMap.month_so_far.body) {
+    var msfBody = String(blockMap.month_so_far.body).toLowerCase();
+    if (msfBody.indexOf('background') >= 0 || msfBody.indexOf('stayed in the background') >= 0) {
+      monthSoFarDuplicatesQuiet = true;
+    }
+  }
+
+  var gateOpts = {
+    surface: 'reflection',
+    entryGate: opts.entryGate,
+    visualModel: visualModel,
+    atmosphere: composeCtx.atmosphere,
+    showBackground: composeCtx.showBackground === true,
+    heldBackSignals: composeCtx.heldBackSignals === true,
+    composeHasMonthSoFar: !!blockMap.month_so_far,
+    monthSoFarDuplicatesQuiet: monthSoFarDuplicatesQuiet,
+    parityReport: opts.parityReport,
+    runParity: opts.runParity,
+    state: opts.state,
+    completionAftermathActive: opts.completionAftermathActive === true,
+    tierCAlreadyThisCompose: opts.tierCAlreadyThisCompose === true
+  };
+
+  var gate = geodeNoticedTierCGate(snapshot, 'resilience', gateOpts);
+
+  var decision = {
+    version: 1,
+    stage: '80N-J',
+    gate: gate,
+    tierCBlock: null,
+    omitBlockIds: [],
+    insertBlockId: null,
+    audit: {
+      replaceNotAppend: true,
+      maxTierCBlocks: 1,
+      renderAllowed: gate.renderAllowed === true
+    }
+  };
+
+  if (gate.verdict !== 'PASS') {
+    try {
+      window._geodeTierCLastGate = gate;
+      window._geodeTierCLastSlotDecision = decision;
+    } catch (_eTcsdWin) {}
+    return decision;
+  }
+
+  var copyMap = gate.copyMapRef || geodeNoticedCopyMap('resilience');
+  var approved =
+    copyMap && copyMap.safePhrases && Array.isArray(copyMap.safePhrases.approved)
+      ? copyMap.safePhrases.approved
+      : [];
+  var tierBody =
+    approved.length > 0
+      ? String(approved[0])
+      : 'A few prompts stayed in the background so this month could stay focused.';
+
+  decision.tierCBlock = {
+    id: 'noticed_tier_c',
+    register: 'calm',
+    registerClass: 'vi-register-calm',
+    headline: 'A quieter read',
+    body: tierBody,
+    visible: true,
+    spacing: 'standard',
+    source: 'noticed.resilience.tier_c',
+    archetype: 'quiet_background_ack',
+    tierC: true
+  };
+  decision.insertBlockId = 'noticed_tier_c';
+
+  if (blockMap.month_so_far && gate.replaceTargets.indexOf('month_so_far') >= 0) {
+    decision.omitBlockIds.push('month_so_far');
+  }
+
+  try {
+    window._geodeTierCLastGate = gate;
+    window._geodeTierCLastSlotDecision = decision;
+    window.geodeNoticedTierCGate = geodeNoticedTierCGate;
+    window.geodeTierCSlotDecision = geodeTierCSlotDecision;
+  } catch (_eTcsdWin2) {}
+
+  return decision;
+}
+
+try {
+  window.geodeNoticedTierCGate = geodeNoticedTierCGate;
+  window.geodeTierCSlotDecision = geodeTierCSlotDecision;
+} catch (_eTcgInit) {}
+
+/**
  * Stage 80G-B: shadow-only Stability Room visual/reflection model.
  * Interprets geodeStabilityRoomSnapshot output for future UI — no DOM, CSS, or routes.
  * Uses calm VI registers only (never risk, error, or pressure).
@@ -31503,8 +31854,8 @@ function geodeStabilityRoomEntryGate(snapshot, visualModel, opts) {
 }
 
 /**
- * Stage 80I-B / 80I-C.1: shadow-only Reflection experience composer.
- * Bounded human copy blocks from snapshot + visual model + entry gate — no DOM, CSS, routes, or storage.
+ * Stage 80I-B / 80I-C.1 / 80N-J: Reflection experience composer.
+ * 80N-J adds optional Tier-C resilience block (replace month_so_far; gate + slot law).
  */
 function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opts) {
   opts = opts && typeof opts === 'object' ? opts : {};
@@ -31727,6 +32078,55 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
       };
     }
 
+    var tierCSlot = null;
+    var tierCGate = null;
+    try {
+      tierCSlot = geodeTierCSlotDecision(
+        snapshot,
+        visualModel,
+        {
+          blockMap: blockMap,
+          atmosphere: atmosphere,
+          showBackground: showBackground,
+          heldBackSignals: heldBackSignals
+        },
+        {
+          entryGate: entryGate,
+          state: opts.state || S,
+          runParity: opts.runParity,
+          parityReport: opts.parityReport,
+          completionAftermathActive: opts.completionAftermathActive === true,
+          tierCAlreadyThisCompose: opts.tierCAlreadyThisCompose === true
+        }
+      );
+    } catch (_eTierCSlot) {
+      tierCSlot = null;
+    }
+    if (tierCSlot && tierCSlot.gate) tierCGate = tierCSlot.gate;
+    if (
+      tierCSlot &&
+      tierCSlot.gate &&
+      tierCSlot.gate.verdict === 'PASS' &&
+      tierCSlot.tierCBlock
+    ) {
+      var tci;
+      for (tci = 0; tci < tierCSlot.omitBlockIds.length; tci++) {
+        delete blockMap[tierCSlot.omitBlockIds[tci]];
+      }
+      blockMap.noticed_tier_c = {
+        id: tierCSlot.tierCBlock.id,
+        register: tierCSlot.tierCBlock.register,
+        registerClass: tierCSlot.tierCBlock.registerClass,
+        headline: sanitizeCopy(tierCSlot.tierCBlock.headline, 80),
+        body: sanitizeCopy(tierCSlot.tierCBlock.body, 280),
+        visible: true,
+        spacing: tierCSlot.tierCBlock.spacing || 'standard',
+        source: tierCSlot.tierCBlock.source,
+        archetype: tierCSlot.tierCBlock.archetype,
+        tierC: true
+      };
+    }
+
     var orderIds = ['what_matters_this_month', 'month_so_far', 'background', 'plan_protecting'];
     if (atmosphere === 'calm' || atmosphere === 'room') {
       orderIds = ['what_matters_this_month', 'month_so_far', 'plan_protecting', 'background'];
@@ -31736,6 +32136,13 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
       orderIds = ['what_matters_this_month', 'plan_protecting', 'month_so_far', 'background'];
     } else if (atmosphere === 'recovering') {
       orderIds = ['what_matters_this_month', 'background', 'month_so_far', 'plan_protecting'];
+    }
+
+    if (blockMap.noticed_tier_c) {
+      var oir;
+      for (oir = 0; oir < orderIds.length; oir++) {
+        if (orderIds[oir] === 'month_so_far') orderIds[oir] = 'noticed_tier_c';
+      }
     }
 
     var blocks = [];
@@ -31812,6 +32219,13 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
             ? String(entryGate.visibility)
             : 'unknown',
         stabilityMetadataStage: '80N-H',
+        tierCStage: '80N-J',
+        tierCGateVerdict:
+          tierCGate && tierCGate.verdict != null ? String(tierCGate.verdict) : 'not_evaluated',
+        tierCArchetype:
+          blockMap.noticed_tier_c && blockMap.noticed_tier_c.archetype
+            ? String(blockMap.noticed_tier_c.archetype)
+            : null,
         forbiddenPatterns: [
           'you should',
           'you must',
@@ -31828,7 +32242,9 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
           snapshot.stabilityMetadata && typeof snapshot.stabilityMetadata === 'object'
             ? snapshot.stabilityMetadata
             : null,
-        renderForbidden: true,
+        tierCGate: tierCGate,
+        tierCSlotDecision: tierCSlot,
+        renderForbidden: false,
         passthroughOnly: true,
         influencesBlocks: false
       }
