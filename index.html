@@ -29074,8 +29074,9 @@ function geodePlanRationaleSnapshot(state, opts) {
 }
 
 /**
- * Stage 80F-B / 80F-D: shadow-only Stability Room reflection read-model.
+ * Stage 80F-B / 80F-D / 80N-A: shadow-only Stability Room reflection read-model.
  * Assembles existing orchestration, posture, plan rationale, and human context.
+ * 80N-A adds Tier-2 noticed.* interpretation domains (no consumers).
  * Not wired to UI. Does not mutate state or create new recommendations.
  */
 function geodeStabilityRoomSnapshot(state, opts) {
@@ -29345,6 +29346,144 @@ function geodeStabilityRoomSnapshot(state, opts) {
     else if (shouldStayQuiet) snapshotReason = 'quiet_period';
     else snapshotReason = 'reflection_eligible';
 
+  /** Stage 80N-A: Tier-2 noticed.* interpretation export (shadow-only; no consumers). */
+    var memoryMods = null;
+    try {
+      memoryMods = geodeFinancialMemoryPlanModifiers(state, null, postureObj);
+      sources.push('geodeFinancialMemoryPlanModifiers');
+    } catch (_eSrMemMods) {
+      memoryMods = null;
+    }
+    if (!memoryMods) {
+      memoryMods = {
+        preserveBreathingRoom: false,
+        bufferPreference: 'normal',
+        debtExtraMultiplier: 1,
+        goalRecoveryMultiplier: 1,
+        investmentMultiplier: 1,
+        reasonCodes: [],
+        confidence: 'low'
+      };
+    }
+
+    var pacingMode =
+      pao && pao.outputs && pao.outputs.pacingMode ? String(pao.outputs.pacingMode) : 'full';
+    var pacingReasonCodes = [];
+    if (pao && pao.dimensions && pao.dimensions.pacingLoad) {
+      var pacingLoadLevel = pao.dimensions.pacingLoad.level;
+      if (pacingLoadLevel && pacingLoadLevel !== 'low') {
+        pacingReasonCodes.push('pacing_load_' + pacingLoadLevel);
+      }
+    }
+    if (pacingMode === 'gentle') pacingReasonCodes.push('pacing_mode_gentle');
+    if (pao && pao.recovery && pao.recovery.reasonCodes) {
+      for (ri = 0; ri < pao.recovery.reasonCodes.length; ri++) {
+        if (pao.recovery.reasonCodes[ri]) pacingReasonCodes.push(pao.recovery.reasonCodes[ri]);
+      }
+    }
+
+    var recoveryPhase =
+      pao && pao.recovery && pao.recovery.phase ? String(pao.recovery.phase) : 'none';
+    var recoveryLabel = '';
+    if (recoveryPhase === 'emerging') recoveryLabel = 'finding_rhythm';
+
+    var heldBackCount =
+      disclosureNeeded.length + deferredItems.length + mutedLines.length;
+
+    var memorySoftened =
+      !!memoryMods.preserveBreathingRoom ||
+      memoryMods.bufferPreference === 'preserve' ||
+      (Number(memoryMods.debtExtraMultiplier) > 0 && Number(memoryMods.debtExtraMultiplier) < 1) ||
+      (Number(memoryMods.goalRecoveryMultiplier) > 0 &&
+        Number(memoryMods.goalRecoveryMultiplier) < 1) ||
+      (Number(memoryMods.investmentMultiplier) > 0 && Number(memoryMods.investmentMultiplier) < 1);
+
+    var pressureDimensions = null;
+    if (pao && pao.dimensions && typeof pao.dimensions === 'object') {
+      pressureDimensions = {
+        cashHeadroom: pao.dimensions.cashHeadroom
+          ? { level: pao.dimensions.cashHeadroom.level || 'low' }
+          : { level: 'low' },
+        obligationRisk: pao.dimensions.obligationRisk
+          ? { level: pao.dimensions.obligationRisk.level || 'low' }
+          : { level: 'low' },
+        pacingLoad: pao.dimensions.pacingLoad
+          ? { level: pao.dimensions.pacingLoad.level || 'low' }
+          : { level: 'low' },
+        humanLoad: pao.dimensions.humanLoad
+          ? { level: pao.dimensions.humanLoad.level || 'low' }
+          : { level: 'low' },
+        dataTrust: pao.dimensions.dataTrust
+          ? { level: pao.dimensions.dataTrust.level || 'moderate' }
+          : { level: 'moderate' }
+      };
+    }
+
+    var noticedInterpretation = {
+      pacing: {
+        mode: pacingMode,
+        band: pao && pao.band ? String(pao.band) : null,
+        reasonCodes: pacingReasonCodes,
+        source: 'assessPressure'
+      },
+      resilience: {
+        quiet: shouldStayQuiet,
+        suppressedTopics: suppressTopics.slice(),
+        heldBackCount: heldBackCount,
+        disclosureNeeded: disclosureNeeded.length,
+        source: 'geodeHomeOrchestrationResolve'
+      },
+      recovery: {
+        phase: recoveryPhase,
+        label: recoveryLabel,
+        source: 'assessPressure.recovery'
+      },
+      continuity: {
+        hasCarry: !!(carry && carry.hasAny),
+        carryYm: carry && carry.ym ? String(carry.ym) : '',
+        behaviourProfile: behProfile
+          ? {
+              shiftApprovalsThisMonth: behProfile.shiftApprovalsThisMonth,
+              shiftRevertsThisMonth: behProfile.shiftRevertsThisMonth,
+              slowOrUnsureThisMonth: behProfile.slowOrUnsureThisMonth,
+              movedFeelingThisMonth: behProfile.movedFeelingThisMonth,
+              oftenRevertsShift: !!behProfile.oftenRevertsShift,
+              oftenSlowFeeling: !!behProfile.oftenSlowFeeling,
+              oftenApprovesShift: !!behProfile.oftenApprovesShift,
+              oftenMovedFeeling: !!behProfile.oftenMovedFeeling
+            }
+          : null,
+        source: 'geodeBehaviourContinuityProfile'
+      },
+      flexibility: {
+        feeling: feeling || null,
+        protect: monthCtx && monthCtx.protect ? String(monthCtx.protect) : '',
+        worried: monthCtx && monthCtx.worried ? String(monthCtx.worried) : '',
+        posture: postureObj && postureObj.posture ? String(postureObj.posture) : 'unknown',
+        tone: postureObj && postureObj.tone ? String(postureObj.tone) : 'calm',
+        source: 'geodeGetContextPosture'
+      },
+      breathingRoomIntent: {
+        preserveBreathingRoom: !!memoryMods.preserveBreathingRoom,
+        bufferPreference:
+          memoryMods.bufferPreference === 'preserve' ? 'preserve' : 'normal',
+        memorySoftened: memorySoftened,
+        reasonCodes: Array.isArray(memoryMods.reasonCodes)
+          ? memoryMods.reasonCodes.slice()
+          : [],
+        source: 'geodeFinancialMemoryPlanModifiers'
+      },
+      pressure: {
+        band: pao && pao.band ? String(pao.band) : null,
+        bandConfidence: pao && pao.bandConfidence ? String(pao.bandConfidence) : null,
+        dimensions: pressureDimensions,
+        reasonCodes:
+          pao && Array.isArray(pao.reasonCodes) ? pao.reasonCodes.slice() : [],
+        internalOnly: true,
+        source: 'assessPressure'
+      }
+    };
+
     var snapshot = {
       version: 1,
       monthKey: monthKey,
@@ -29371,7 +29510,14 @@ function geodeStabilityRoomSnapshot(state, opts) {
             }
           : { posture: 'unknown', tone: 'calm', reasonCodes: [] },
         pressureBand: pao && pao.band ? String(pao.band) : null,
-        reasonCodes: reasonCodes
+        reasonCodes: reasonCodes,
+        pacing: noticedInterpretation.pacing,
+        resilience: noticedInterpretation.resilience,
+        recovery: noticedInterpretation.recovery,
+        continuity: noticedInterpretation.continuity,
+        flexibility: noticedInterpretation.flexibility,
+        breathingRoomIntent: noticedInterpretation.breathingRoomIntent,
+        pressure: noticedInterpretation.pressure
       },
       heldBack: {
         disclosureNeeded: disclosureNeeded,
@@ -29425,6 +29571,16 @@ function geodeStabilityRoomSnapshot(state, opts) {
       },
       audit: {
         shadowOnly: true,
+        noticedTier: 2,
+        noticedDomains: [
+          'pacing',
+          'resilience',
+          'recovery',
+          'continuity',
+          'flexibility',
+          'breathingRoomIntent',
+          'pressure'
+        ],
         sources: sources,
         sideEffects: sideEffects
       }
