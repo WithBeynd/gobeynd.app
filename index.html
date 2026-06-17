@@ -30463,6 +30463,581 @@ function geodeNoticedParityCheck(state, opts) {
 }
 
 /**
+ * Stage 80N-I: read-only noticed.* copy-map governance helper.
+ * Returns structured phrase metadata for future Tier-C consumers only.
+ * Does not render, persist, or wire any surface. No DOM.
+ */
+function geodeNoticedCopyMap(domain, field, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var domainKey = domain != null ? String(domain).trim() : '';
+  var fieldKey = field != null ? String(field).trim() : '';
+
+  var globalForbidden = [
+    'avoidant',
+    'irresponsible',
+    'bad with money',
+    'resilience score',
+    'score dropped',
+    'failed your plan',
+    'failed to follow',
+    'critical pressure',
+    'at risk',
+    'fragile',
+    'vulnerable',
+    'you will',
+    'you always',
+    'you never',
+    'usual month',
+    'definitely',
+    'Beynd knows you',
+    'AI detected',
+    'healthy user',
+    'unhealthy user',
+    'financial personality'
+  ];
+
+  var globalForbiddenCategories = [
+    'personality_inference',
+    'discipline_grading',
+    'mental_health_framing',
+    'certainty_language',
+    'predictive_assumptions',
+    'hidden_classification',
+    'shame_language',
+    'optimisation_pressure',
+    'raw_reason_codes',
+    'pressure_labels'
+  ];
+
+  function baseContract(overrides) {
+    var o = overrides || {};
+    return {
+      version: 1,
+      stage: '80N-I',
+      domain: o.domain || domainKey,
+      field: o.field || fieldKey || null,
+      shadowOnly: true,
+      renderForbiddenDefault: o.renderForbiddenDefault !== false,
+      emitsUserCopy: false,
+      approvedTone: o.approvedTone || 'observational_calm',
+      safePhrases: o.safePhrases || { soft: [], reflective: [], approved: [] },
+      forbiddenPhrases: (o.forbiddenPhrases || []).concat(globalForbidden),
+      forbiddenCategories: (o.forbiddenCategories || []).concat(globalForbiddenCategories),
+      surfaceEligibility: o.surfaceEligibility || {
+        stabilityRoom: false,
+        reflection: false,
+        askBeynd: false,
+        planDetail: false,
+        home: false,
+        reality: false,
+        suggestedActions: false
+      },
+      confidenceRule: o.confidenceRule || 'hedge_with_may_or_appeared',
+      requiresUserRequest: !!o.requiresUserRequest,
+      requiresOptIn: !!o.requiresOptIn,
+      requiresParityPass: o.requiresParityPass !== false,
+      requiresCollisionGate: o.requiresCollisionGate !== false,
+      preferredSurface: o.preferredSurface || null,
+      fallbackSilence: o.fallbackSilence != null ? o.fallbackSilence : true,
+      canonicalPath: o.canonicalPath || null,
+      observationalOnly: !!o.observationalOnly,
+      mayDriveBehaviour: false,
+      mayDriveDeferral: false,
+      displaySafe: !!o.displaySafe,
+      permanentlyInternal: !!o.permanentlyInternal,
+      notes: o.notes || []
+    };
+  }
+
+  var registry = {
+    pacing: baseContract({
+      domain: 'pacing',
+      approvedTone: 'observational_calm',
+      safePhrases: {
+        approved: [
+          'This month may suit smaller steps.',
+          'A gentler pace may fit this month.'
+        ],
+        soft: ['The sequence stays the same.'],
+        reflective: ['One clear next step at a time.']
+      },
+      forbiddenPhrases: [
+        'you are behind on pacing',
+        'pacing penalty',
+        'you failed to keep pace',
+        'critical band'
+      ],
+      forbiddenCategories: ['discipline_grading', 'pressure_labels'],
+      surfaceEligibility: {
+        stabilityRoom: true,
+        reflection: false,
+        askBeynd: true,
+        planDetail: false,
+        home: false,
+        reality: false,
+        suggestedActions: false
+      },
+      preferredSurface: 'stabilityRoom',
+      fallbackSilence: true,
+      displaySafe: false,
+      notes: [
+        'defer_when_plan_pacing_note_or_month_so_far_covers_gentle_pace',
+        'never_surface_pacing_band_or_raw_reason_codes'
+      ]
+    }),
+    resilience: baseContract({
+      domain: 'resilience',
+      approvedTone: 'observational_calm',
+      safePhrases: {
+        approved: [
+          'Some Home prompts were kept quieter on purpose.',
+          'A few things stayed in the background.'
+        ],
+        soft: ['Home stayed calm so you could focus.'],
+        reflective: ['A quieter Home fit this month.']
+      },
+      forbiddenPhrases: [
+        'Beynd suppressed your alerts',
+        'you cannot handle information',
+        'we hid important warnings'
+      ],
+      forbiddenCategories: ['hidden_classification', 'shame_language'],
+      surfaceEligibility: {
+        stabilityRoom: true,
+        reflection: false,
+        askBeynd: true,
+        planDetail: false,
+        home: false,
+        reality: false,
+        suggestedActions: false
+      },
+      preferredSurface: 'stabilityRoom',
+      mayDriveDeferral: false,
+      displaySafe: false,
+      notes: [
+        'may_explain_deferral_never_drive_deferral',
+        'defer_when_experience_background_block_active'
+      ]
+    }),
+    recovery: baseContract({
+      domain: 'recovery',
+      approvedTone: 'observational_calm',
+      safePhrases: {
+        approved: ['One clear next step is enough for this month.'],
+        soft: ['You may be finding a rhythm again.'],
+        reflective: ['A lighter month after a busier stretch.']
+      },
+      forbiddenPhrases: [
+        'recovery mode',
+        'relapse',
+        'setback',
+        'streak',
+        'no recovery'
+      ],
+      forbiddenCategories: ['mental_health_framing', 'discipline_grading'],
+      surfaceEligibility: {
+        stabilityRoom: false,
+        reflection: true,
+        askBeynd: true,
+        planDetail: false,
+        home: false,
+        reality: false,
+        suggestedActions: false
+      },
+      preferredSurface: 'reflection',
+      requiresOptIn: true,
+      displaySafe: false,
+      notes: [
+        'avoid_streak_pressure',
+        'defer_when_plan_pacing_note_recovery_line_present'
+      ]
+    }),
+    continuity: baseContract({
+      domain: 'continuity',
+      approvedTone: 'reflective_light',
+      safePhrases: {
+        approved: ['Something from last month is still in view.'],
+        soft: ['A thread carried over from a recent month.'],
+        reflective: ['Shifts have sometimes been revisited recently.']
+      },
+      forbiddenPhrases: [
+        'you often ignore',
+        'habitually inconsistent',
+        'your usual month',
+        'you always',
+        'you never'
+      ],
+      forbiddenCategories: ['predictive_assumptions', 'personality_inference'],
+      surfaceEligibility: {
+        stabilityRoom: false,
+        reflection: true,
+        askBeynd: false,
+        planDetail: false,
+        home: false,
+        reality: false,
+        suggestedActions: false
+      },
+      preferredSurface: 'reflection',
+      requiresOptIn: true,
+      displaySafe: false,
+      notes: [
+        'never_surface_often_flags_or_month_counts',
+        'avoid_usual_month_assumptions',
+        'tier_d_reflective_only'
+      ]
+    }),
+    flexibility: baseContract({
+      domain: 'flexibility',
+      approvedTone: 'echo_user_words',
+      safePhrases: {
+        approved: [
+          'You appeared to prioritise flexibility this month.',
+          'You want to protect [user protect].',
+          'You are watching [user worried].'
+        ],
+        soft: ['This month felt slower from here.'],
+        reflective: ['Flexibility looked important this month.']
+      },
+      forbiddenPhrases: [
+        'you are avoidant',
+        'you are anxious because',
+        'you are indecisive',
+        'you can afford to spend more'
+      ],
+      forbiddenCategories: ['personality_inference', 'mental_health_framing'],
+      surfaceEligibility: {
+        stabilityRoom: true,
+        reflection: true,
+        askBeynd: true,
+        planDetail: false,
+        home: false,
+        reality: false,
+        suggestedActions: false
+      },
+      preferredSurface: 'stabilityRoom',
+      displaySafe: false,
+      notes: [
+        'prefer_user_authored_protect_worried_verbatim',
+        'defer_when_what_matters_block_active'
+      ]
+    }),
+    breathingRoomIntent: baseContract({
+      domain: 'breathingRoomIntent',
+      approvedTone: 'observational_calm',
+      safePhrases: {
+        approved: [
+          'Your plan may leave a little more breathing room based on recent patterns.',
+          'Breathing room was kept in view when sizing steps.'
+        ],
+        soft: ['Amounts may be slightly softer this month.'],
+        reflective: []
+      },
+      forbiddenPhrases: [
+        'Beynd reduced your plan',
+        'available money',
+        'you do not deserve extra',
+        'we protected you from yourself'
+      ],
+      forbiddenCategories: ['optimisation_pressure', 'certainty_language'],
+      surfaceEligibility: {
+        stabilityRoom: true,
+        reflection: false,
+        askBeynd: true,
+        planDetail: true,
+        home: false,
+        reality: false,
+        suggestedActions: false
+      },
+      preferredSurface: 'planDetail',
+      canonicalPath: 'planPath',
+      displaySafe: false,
+      notes: [
+        'planPath_canonical_for_plan_explanations',
+        'posturePath_observational_only_never_plan_copy',
+        'exclusive_surface_plan_detail_or_stability_not_both'
+      ]
+    }),
+    pressure: baseContract({
+      domain: 'pressure',
+      permanentlyInternal: true,
+      renderForbiddenDefault: true,
+      approvedTone: null,
+      safePhrases: { approved: [], soft: [], reflective: [] },
+      forbiddenPhrases: globalForbidden.concat([
+        'pressure band',
+        'critical',
+        'pinched',
+        'narrow band',
+        'human load high'
+      ]),
+      surfaceEligibility: {
+        stabilityRoom: false,
+        reflection: false,
+        askBeynd: false,
+        planDetail: false,
+        home: false,
+        reality: false,
+        suggestedActions: false
+      },
+      preferredSurface: null,
+      fallbackSilence: true,
+      displaySafe: false,
+      requiresParityPass: false,
+      notes: ['permanent_tier_a_internal_only']
+    })
+  };
+
+  var subfields = {
+    breathingRoomIntent: {
+      planPath: baseContract({
+        domain: 'breathingRoomIntent',
+        field: 'planPath',
+        canonicalPath: 'planPath',
+        approvedTone: 'observational_calm',
+        safePhrases: {
+          approved: [
+            'Your plan may leave a little more breathing room based on recent patterns.',
+            'Breathing room was kept in view when sizing steps.'
+          ],
+          soft: ['Amounts may be slightly softer this month.'],
+          reflective: []
+        },
+        surfaceEligibility: {
+          stabilityRoom: true,
+          reflection: false,
+          askBeynd: true,
+          planDetail: true,
+          home: false,
+          reality: false,
+          suggestedActions: false
+        },
+        preferredSurface: 'planDetail',
+        displaySafe: false,
+        notes: ['canonical_for_explanation']
+      }),
+      posturePath: baseContract({
+        domain: 'breathingRoomIntent',
+        field: 'posturePath',
+        observationalOnly: true,
+        approvedTone: 'observational_soft',
+        safePhrases: {
+          approved: ['Emotional context and plan sizing may read slightly differently this month.'],
+          soft: ['Flexibility looked important from an emotional read.'],
+          reflective: []
+        },
+        forbiddenPhrases: [
+          'your plan was reduced because',
+          'Beynd lowered your amounts because you felt'
+        ],
+        surfaceEligibility: {
+          stabilityRoom: true,
+          reflection: true,
+          askBeynd: false,
+          planDetail: false,
+          home: false,
+          reality: false,
+          suggestedActions: false
+        },
+        preferredSurface: 'stabilityRoom',
+        displaySafe: false,
+        notes: ['never_explain_plan_amounts_from_posture_path']
+      })
+    },
+    pacing: {
+      mode: baseContract({
+        domain: 'pacing',
+        field: 'mode',
+        displaySafe: true,
+        safePhrases: {
+          approved: ['This month may suit smaller steps.'],
+          soft: ['A gentler pace may fit this month.'],
+          reflective: []
+        },
+        notes: ['only_mode_field_is_display_safe_not_band_or_reason_codes']
+      }),
+      band: baseContract({
+        domain: 'pacing',
+        field: 'band',
+        permanentlyInternal: true,
+        renderForbiddenDefault: true,
+        displaySafe: false,
+        notes: ['internal_register_only']
+      }),
+      reasonCodes: baseContract({
+        domain: 'pacing',
+        field: 'reasonCodes',
+        permanentlyInternal: true,
+        renderForbiddenDefault: true,
+        displaySafe: false,
+        notes: ['raw_reason_codes_not_display_safe']
+      })
+    },
+    continuity: {
+      oftenRevertsShift: baseContract({
+        domain: 'continuity',
+        field: 'oftenRevertsShift',
+        approvedTone: 'reflective_light',
+        safePhrases: {
+          approved: [],
+          soft: [],
+          reflective: ['Shifts have sometimes been revisited recently.']
+        },
+        surfaceEligibility: {
+          stabilityRoom: false,
+          reflection: true,
+          askBeynd: false,
+          planDetail: false,
+          home: false,
+          reality: false,
+          suggestedActions: false
+        },
+        requiresOptIn: true,
+        displaySafe: false,
+        notes: ['tier_d_only_never_surface_raw_flag']
+      }),
+      behaviourProfile: baseContract({
+        domain: 'continuity',
+        field: 'behaviourProfile',
+        permanentlyInternal: true,
+        renderForbiddenDefault: true,
+        displaySafe: false,
+        notes: ['counts_internal_map_to_tier_d_phrases_only']
+      })
+    }
+  };
+
+  if (!domainKey) {
+    return baseContract({
+      domain: '',
+      renderForbiddenDefault: true,
+      notes: ['domain_required']
+    });
+  }
+
+  if (subfields[domainKey] && fieldKey && subfields[domainKey][fieldKey]) {
+    return subfields[domainKey][fieldKey];
+  }
+
+  if (!registry[domainKey]) {
+    return baseContract({
+      domain: domainKey,
+      renderForbiddenDefault: true,
+      notes: ['unknown_domain']
+    });
+  }
+
+  return registry[domainKey];
+}
+
+/**
+ * Stage 80N-I: debug-only copy-map governance audit. No render, no persistence.
+ */
+function geodeNoticedCopyMapAudit(opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var domains = [
+    'pacing',
+    'resilience',
+    'recovery',
+    'continuity',
+    'flexibility',
+    'breathingRoomIntent',
+    'pressure'
+  ];
+  var covered = [];
+  var internalOnly = [];
+  var displaySafe = [];
+  var copyGated = [];
+  var surfacesAllowedLater = {
+    stabilityRoom: [],
+    reflection: [],
+    askBeynd: [],
+    planDetail: []
+  };
+  var i;
+  var d;
+  var map;
+  for (i = 0; i < domains.length; i++) {
+    d = domains[i];
+    map = geodeNoticedCopyMap(d);
+    if (!map) continue;
+    covered.push(d);
+    if (map.permanentlyInternal) internalOnly.push(d);
+    if (map.displaySafe) displaySafe.push(d);
+    if (map.renderForbiddenDefault || map.requiresParityPass || map.requiresCollisionGate) {
+      copyGated.push(d);
+    }
+    if (map.surfaceEligibility) {
+      if (map.surfaceEligibility.stabilityRoom) surfacesAllowedLater.stabilityRoom.push(d);
+      if (map.surfaceEligibility.reflection) surfacesAllowedLater.reflection.push(d);
+      if (map.surfaceEligibility.askBeynd) surfacesAllowedLater.askBeynd.push(d);
+      if (map.surfaceEligibility.planDetail) surfacesAllowedLater.planDetail.push(d);
+    }
+  }
+
+  var report = {
+    version: 1,
+    stage: '80N-I',
+    shadowOnly: true,
+    renderForbidden: true,
+    coveredDomains: covered,
+    internalOnlyDomains: internalOnly,
+    displaySafeDomains: displaySafe,
+    domainsRequiringCopyGating: copyGated,
+    forbiddenPhraseCategories: [
+      'personality_inference',
+      'discipline_grading',
+      'mental_health_framing',
+      'certainty_language',
+      'predictive_assumptions',
+      'hidden_classification',
+      'shame_language',
+      'optimisation_pressure',
+      'raw_reason_codes',
+      'pressure_labels'
+    ],
+    surfacesAllowedLater: surfacesAllowedLater,
+    safetyContract: {
+      pressurePermanentlyInternal: true,
+      rawReasonCodesNotDisplaySafe: true,
+      breathingRoomPlanPathCanonical: true,
+      breathingRoomPosturePathObservationalOnly: true,
+      resilienceExplainsNeverDrivesDeferral: true,
+      continuityNoUsualMonth: true,
+      flexibilityPrefersUserWords: true,
+      recoveryNoStreakPressure: true
+    },
+    consumers: {
+      renderPaths: [],
+      consoleExposureOnly: ['window.geodeNoticedCopyMap', 'window._geodeNoticedCopyMapAudit']
+    },
+    notes: [
+      'helper_returns_metadata_only',
+      'future_tier_c_requires_parity_pass_and_collision_gate',
+      'no_ui_wired_in_80N-I'
+    ]
+  };
+
+  if (opts.log !== false && typeof console !== 'undefined' && console.log) {
+    try {
+      console.log('[geodeNoticedCopyMapAudit]', report);
+    } catch (_eNcmAuditLog) {}
+  }
+
+  try {
+    window._geodeNoticedCopyMapAudit = report;
+    window.geodeNoticedCopyMapAudit = geodeNoticedCopyMapAudit;
+    window.geodeNoticedCopyMap = geodeNoticedCopyMap;
+  } catch (_eNcmWin) {}
+
+  return report;
+}
+
+try {
+  window.geodeNoticedCopyMap = geodeNoticedCopyMap;
+  window.geodeNoticedCopyMapAudit = geodeNoticedCopyMapAudit;
+} catch (_eNcmInit) {}
+
+/**
  * Stage 80G-B: shadow-only Stability Room visual/reflection model.
  * Interprets geodeStabilityRoomSnapshot output for future UI — no DOM, CSS, or routes.
  * Uses calm VI registers only (never risk, error, or pressure).
