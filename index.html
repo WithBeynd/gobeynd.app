@@ -29597,6 +29597,430 @@ function geodeStabilityRoomSnapshot(state, opts) {
 }
 
 /**
+ * Stage 80N-C: debug-only noticed.* parity verification.
+ * Compares Tier-2 snapshot export against canonical live sources. Read-only report;
+ * does not persist, render, or wire consumers. May call existing read helpers only.
+ */
+function geodeNoticedParityCheck(state, opts) {
+  state = state || S;
+  opts = opts && typeof opts === 'object' ? opts : {};
+
+  function parityOk(match, notes) {
+    return { match: !!match, notes: notes || [] };
+  }
+
+  function arrEq(a, b) {
+    a = Array.isArray(a) ? a.slice().sort() : [];
+    b = Array.isArray(b) ? b.slice().sort() : [];
+    if (a.length !== b.length) return false;
+    var i;
+    for (i = 0; i < a.length; i++) {
+      if (String(a[i]) !== String(b[i])) return false;
+    }
+    return true;
+  }
+
+  function arrDiff(a, b) {
+    a = Array.isArray(a) ? a.slice() : [];
+    b = Array.isArray(b) ? b.slice() : [];
+    var onlyA = [];
+    var onlyB = [];
+    var seen = {};
+    var i;
+    for (i = 0; i < a.length; i++) {
+      var ka = String(a[i]);
+      if (!seen[ka]) {
+        seen[ka] = { a: 0, b: 0 };
+      }
+      seen[ka].a++;
+    }
+    for (i = 0; i < b.length; i++) {
+      var kb = String(b[i]);
+      if (!seen[kb]) {
+        seen[kb] = { a: 0, b: 0 };
+      }
+      seen[kb].b++;
+    }
+    for (var k in seen) {
+      if (!seen.hasOwnProperty(k)) continue;
+      if (seen[k].a && !seen[k].b) onlyA.push(k);
+      if (seen[k].b && !seen[k].a) onlyB.push(k);
+    }
+    return { onlyInExport: onlyA, onlyInCanonical: onlyB };
+  }
+
+  function memorySoftenedFromMods(mods) {
+    if (!mods) return false;
+    return (
+      !!mods.preserveBreathingRoom ||
+      mods.bufferPreference === 'preserve' ||
+      (Number(mods.debtExtraMultiplier) > 0 && Number(mods.debtExtraMultiplier) < 1) ||
+      (Number(mods.goalRecoveryMultiplier) > 0 && Number(mods.goalRecoveryMultiplier) < 1) ||
+      (Number(mods.investmentMultiplier) > 0 && Number(mods.investmentMultiplier) < 1)
+    );
+  }
+
+  var report = {
+    version: 1,
+    generatedAt: Date.now(),
+    tier: 2,
+    shadowOnly: true,
+    pass: true,
+    snapshotPresent: false,
+    domains: {},
+    consumers: {
+      nestedNoticedReads: [],
+      legacyNoticedReads: ['geodeStabilityRoomVisualModel:noticed.contextPosture'],
+      verdict: 'no_active_nested_consumers'
+    },
+    governance: {
+      noticedTier: 2,
+      pressureInternalOnly: null,
+      breathingRoomFloorUntouched: true
+    },
+    warnings: [],
+    sideEffectsNote:
+      'Building snapshot may normalize monthContext/behaviourEvents via existing snapshot path; parity does not add new writers.'
+  };
+
+  var snap = null;
+  try {
+    snap = geodeStabilityRoomSnapshot(state, {
+      generatedAt: Date.now(),
+      plan: opts.plan,
+      monthKey: opts.monthKey
+    });
+  } catch (_eNpcSnap) {
+    snap = null;
+  }
+  report.snapshotPresent = !!(snap && snap.noticed);
+  var noticed =
+    snap && snap.noticed && typeof snap.noticed === 'object' ? snap.noticed : {};
+  var quiet = snap && snap.quiet ? snap.quiet : {};
+  var heldBack = snap && snap.heldBack ? snap.heldBack : {};
+
+  var paoLive = null;
+  try {
+    paoLive = assessPressure(state);
+  } catch (_eNpcPao) {
+    paoLive = null;
+  }
+
+  var postureLive = null;
+  try {
+    postureLive = geodeGetContextPosture(state);
+  } catch (_eNpcPo) {
+    postureLive = null;
+  }
+
+  var affordLive = null;
+  try {
+    affordLive = computeAffordabilityContext(state);
+  } catch (_eNpcAff) {
+    affordLive = null;
+  }
+
+  var memoryShadow = null;
+  var memoryPlanPath = null;
+  try {
+    memoryShadow = geodeFinancialMemoryPlanModifiers(state, null, postureLive);
+  } catch (_eNpcMemSh) {
+    memoryShadow = null;
+  }
+  try {
+    memoryPlanPath = geodeFinancialMemoryPlanModifiers(state, affordLive, postureLive);
+  } catch (_eNpcMemPl) {
+    memoryPlanPath = null;
+  }
+
+  var recDirect = null;
+  try {
+    recDirect = geodeGetRecoveryState(state);
+  } catch (_eNpcRec) {
+    recDirect = null;
+  }
+
+  var carryLive = null;
+  try {
+    carryLive = geodeGetMonthContextCarry(state);
+  } catch (_eNpcCar) {
+    carryLive = null;
+  }
+
+  var behLive = null;
+  try {
+    behLive = geodeBehaviourContinuityProfile(state);
+  } catch (_eNpcBeh) {
+    behLive = null;
+  }
+
+  var monthLive = null;
+  try {
+    monthLive = geodeGetMonthContext(state);
+  } catch (_eNpcMc) {
+    monthLive = null;
+  }
+
+  var feelingLive = '';
+  try {
+    feelingLive = geodeGetRealityFeeling() || '';
+  } catch (_eNpcFe) {
+    feelingLive = '';
+  }
+
+  var deferredItems = Array.isArray(heldBack.deferredItems) ? heldBack.deferredItems : [];
+  var mutedLines = Array.isArray(heldBack.mutedLines) ? heldBack.mutedLines : [];
+  var disclosureNeeded = Array.isArray(heldBack.disclosureNeeded) ? heldBack.disclosureNeeded : [];
+  var heldBackCountCanonical =
+    disclosureNeeded.length + deferredItems.length + mutedLines.length;
+
+  var res = noticed.resilience || {};
+  var resilienceMatch =
+    res.quiet === quiet.shouldStayQuiet &&
+    arrEq(res.suppressedTopics, quiet.suppressedTopics) &&
+    res.heldBackCount === heldBackCountCanonical &&
+    res.disclosureNeeded === disclosureNeeded.length;
+  report.domains.resilience = {
+    export: res,
+    canonical: {
+      quiet: quiet.shouldStayQuiet,
+      suppressedTopics: Array.isArray(quiet.suppressedTopics) ? quiet.suppressedTopics.slice() : [],
+      heldBackCount: heldBackCountCanonical,
+      disclosureNeeded: disclosureNeeded.length,
+      source: 'snapshot.quiet+heldBack'
+    },
+    parity: parityOk(resilienceMatch, resilienceMatch ? [] : ['resilience_fields_mismatch']),
+    sourceType: 'derived_same_snapshot'
+  };
+  if (!resilienceMatch) report.pass = false;
+
+  var pace = noticed.pacing || {};
+  var paceModeLive =
+    paoLive && paoLive.outputs && paoLive.outputs.pacingMode
+      ? String(paoLive.outputs.pacingMode)
+      : 'full';
+  var paceBandLive = paoLive && paoLive.band ? String(paoLive.band) : null;
+  var pacingMatch = pace.mode === paceModeLive && pace.band === paceBandLive;
+  report.domains.pacing = {
+    export: pace,
+    canonical: {
+      mode: paceModeLive,
+      band: paceBandLive,
+      source: 'assessPressure'
+    },
+    parity: parityOk(pacingMatch, pacingMatch ? [] : ['pacing_mode_or_band_mismatch']),
+    sourceType: 'live_pao_recomputed'
+  };
+  if (!pacingMatch) report.pass = false;
+
+  var rec = noticed.recovery || {};
+  var recPhaseLive =
+    paoLive && paoLive.recovery && paoLive.recovery.phase
+      ? String(paoLive.recovery.phase)
+      : 'none';
+  var recLabelLive = recPhaseLive === 'emerging' ? 'finding_rhythm' : '';
+  var recoveryMatch = rec.phase === recPhaseLive && rec.label === recLabelLive;
+  report.domains.recovery = {
+    export: rec,
+    canonical: {
+      phaseFromPao: recPhaseLive,
+      labelFromPao: recLabelLive,
+      streakHeuristic: recDirect,
+      streakStorage: 'localStorage:geode_streak_count,geode_last_streak',
+      ownership: 'assessPressure.recovery (canonical for export); geodeGetRecoveryState (streak input)'
+    },
+    parity: parityOk(recoveryMatch, recoveryMatch ? [] : ['recovery_phase_or_label_mismatch']),
+    sourceType: 'live_pao_with_localStorage_input',
+    staleRisk:
+      'Streak in localStorage only; not in S. PAO re-reads on each assessPressure call.'
+  };
+  if (!recoveryMatch) report.pass = false;
+
+  var cont = noticed.continuity || {};
+  var carryHasAny = !!(carryLive && carryLive.hasAny);
+  var carryYm = carryLive && carryLive.ym ? String(carryLive.ym) : '';
+  var behExport = cont.behaviourProfile || null;
+  var behParity = true;
+  var behNotes = [];
+  if (behLive && behExport) {
+    if (behExport.shiftApprovalsThisMonth !== behLive.shiftApprovalsThisMonth) behParity = false;
+    if (behExport.shiftRevertsThisMonth !== behLive.shiftRevertsThisMonth) behParity = false;
+    if (behExport.slowOrUnsureThisMonth !== behLive.slowOrUnsureThisMonth) behParity = false;
+    if (behExport.movedFeelingThisMonth !== behLive.movedFeelingThisMonth) behParity = false;
+    if (!!behExport.oftenRevertsShift !== !!behLive.oftenRevertsShift) behParity = false;
+    if (!!behExport.oftenSlowFeeling !== !!behLive.oftenSlowFeeling) behParity = false;
+    if (!!behExport.oftenApprovesShift !== !!behLive.oftenApprovesShift) behParity = false;
+    if (!!behExport.oftenMovedFeeling !== !!behLive.oftenMovedFeeling) behParity = false;
+  } else if (behLive && !behExport) {
+    behParity = false;
+    behNotes.push('behaviour_profile_missing_in_export');
+  }
+  var continuityMatch =
+    !!cont.hasCarry === carryHasAny && String(cont.carryYm || '') === carryYm && behParity;
+  report.domains.continuity = {
+    export: cont,
+    canonical: {
+      hasCarry: carryHasAny,
+      carryYm: carryYm,
+      behaviourProfile: behLive,
+      source: 'geodeGetMonthContextCarry+geodeBehaviourContinuityProfile'
+    },
+    parity: parityOk(continuityMatch, continuityMatch ? behNotes : behNotes.concat(['continuity_mismatch'])),
+    sourceType: 'live_continuity_recomputed',
+    predictiveRisk: 'none_by_design — month-scoped counts only'
+  };
+  if (!continuityMatch) report.pass = false;
+
+  var flex = noticed.flexibility || {};
+  var flexMatch =
+    (flex.feeling || null) === (feelingLive || null) &&
+    String(flex.protect || '') === String((monthLive && monthLive.protect) || '') &&
+    String(flex.worried || '') === String((monthLive && monthLive.worried) || '') &&
+    String(flex.posture || '') === String((postureLive && postureLive.posture) || 'unknown') &&
+    String(flex.tone || '') === String((postureLive && postureLive.tone) || 'calm');
+  report.domains.flexibility = {
+    export: flex,
+    canonical: {
+      feeling: feelingLive || null,
+      protect: monthLive && monthLive.protect ? monthLive.protect : '',
+      worried: monthLive && monthLive.worried ? monthLive.worried : '',
+      posture: postureLive && postureLive.posture ? postureLive.posture : 'unknown',
+      tone: postureLive && postureLive.tone ? postureLive.tone : 'calm',
+      source: 'Reality capture + geodeGetContextPosture'
+    },
+    parity: parityOk(flexMatch, flexMatch ? [] : ['flexibility_field_mismatch']),
+    sourceType: 'live_reality_and_posture',
+    narrationRisk: 'user-authored protect/worried must echo, not reframe, in future copy'
+  };
+  if (!flexMatch) report.pass = false;
+
+  var bri = noticed.breathingRoomIntent || {};
+  var shadowMods = memoryShadow || {};
+  var planMods = memoryPlanPath || {};
+  var shadowVsExportMatch =
+    !!bri.preserveBreathingRoom === !!shadowMods.preserveBreathingRoom &&
+    (bri.bufferPreference === 'preserve') === (shadowMods.bufferPreference === 'preserve') &&
+    !!bri.memorySoftened === memorySoftenedFromMods(shadowMods) &&
+    arrEq(bri.reasonCodes, shadowMods.reasonCodes);
+  var shadowVsPlanMatch =
+    !!shadowMods.preserveBreathingRoom === !!planMods.preserveBreathingRoom &&
+    (shadowMods.bufferPreference === 'preserve') === (planMods.bufferPreference === 'preserve') &&
+    arrEq(shadowMods.reasonCodes, planMods.reasonCodes);
+  var planPathDivergence = {
+    preserveBreathingRoom: {
+      export: !!bri.preserveBreathingRoom,
+      shadowPath: !!shadowMods.preserveBreathingRoom,
+      planPath: !!planMods.preserveBreathingRoom
+    },
+    bufferPreference: {
+      export: bri.bufferPreference,
+      shadowPath: shadowMods.bufferPreference,
+      planPath: planMods.bufferPreference
+    },
+    reasonCodes: arrDiff(bri.reasonCodes, planMods.reasonCodes)
+  };
+  var affordNullLimitation =
+    !shadowVsPlanMatch &&
+    !!planMods.preserveBreathingRoom &&
+    !shadowMods.preserveBreathingRoom;
+  report.domains.breathingRoomIntent = {
+    export: bri,
+    canonical: {
+      shadowPath: {
+        preserveBreathingRoom: !!shadowMods.preserveBreathingRoom,
+        bufferPreference: shadowMods.bufferPreference,
+        memorySoftened: memorySoftenedFromMods(shadowMods),
+        reasonCodes: Array.isArray(shadowMods.reasonCodes) ? shadowMods.reasonCodes.slice() : [],
+        affordInput: null,
+        source: 'geodeFinancialMemoryPlanModifiers(null afford) — snapshot path'
+      },
+      planPath: {
+        preserveBreathingRoom: !!planMods.preserveBreathingRoom,
+        bufferPreference: planMods.bufferPreference,
+        memorySoftened: memorySoftenedFromMods(planMods),
+        reasonCodes: Array.isArray(planMods.reasonCodes) ? planMods.reasonCodes.slice() : [],
+        affordInput: 'computeAffordabilityContext',
+        source: 'geodeFinancialMemoryPlanModifiers — getMonthPlan path'
+      },
+      breathingRoomFloor: affordLive ? toNum(affordLive.breathingRoomFloor) : null,
+      floorOwner: 'computeAffordabilityContext (Tier 0) — separate from intent export'
+    },
+    parity: {
+      exportVsShadowPath: parityOk(shadowVsExportMatch, shadowVsExportMatch ? [] : ['export_shadow_path_mismatch']),
+      shadowPathVsPlanPath: parityOk(
+        shadowVsPlanMatch,
+        shadowVsPlanMatch
+          ? []
+          : affordNullLimitation
+            ? ['expected_shadow_limitation: null afford may under-report preserveBreathingRoom']
+            : ['shadow_path_vs_plan_path_mismatch']
+      )
+    },
+    divergence: planPathDivergence,
+    verdict: affordNullLimitation
+      ? 'acceptable_shadow_limitation'
+      : shadowVsPlanMatch
+        ? 'aligned'
+        : 'future_parity_risk',
+    safestFutureOwner: 'noticed.breathingRoomIntent (Tier 2) observes; Plan path remains Tier 0 consumer only'
+  };
+  if (!shadowVsExportMatch) report.pass = false;
+  if (affordNullLimitation) {
+    report.warnings.push('breathingRoomIntent: null-afford snapshot may under-report vs Plan path');
+  }
+
+  var press = noticed.pressure || {};
+  var pressureInternal =
+    press.internalOnly === true &&
+    press.source === 'assessPressure' &&
+    !press.consumer;
+  report.domains.pressure = {
+    export: {
+      band: press.band,
+      bandConfidence: press.bandConfidence,
+      internalOnly: press.internalOnly,
+      dimensionLevels: press.dimensions,
+      reasonCodeCount: Array.isArray(press.reasonCodes) ? press.reasonCodes.length : 0
+    },
+    isolation: {
+      internalOnly: press.internalOnly === true,
+      uiConsumer: false,
+      orchestrationConsumer: false,
+      homeConsumer: false,
+      planConsumer: false,
+      askConsumer: false,
+      reflectionConsumer: false
+    },
+    parity: parityOk(
+      press.band === paceBandLive && press.internalOnly === true,
+      press.band === paceBandLive ? [] : ['pressure_band_mismatch_or_not_internal']
+    ),
+    sourceType: 'internal_only_tier2'
+  };
+  report.governance.pressureInternalOnly = press.internalOnly === true;
+  if (press.internalOnly !== true) report.pass = false;
+
+  if (snap && snap.audit) {
+    report.governance.noticedTier = snap.audit.noticedTier;
+    report.governance.shadowOnly = snap.audit.shadowOnly === true;
+  }
+
+  if (opts.log !== false && typeof console !== 'undefined' && console.log) {
+    try {
+      console.log('[geodeNoticedParityCheck]', report.pass ? 'PASS' : 'NEEDS ATTENTION', report);
+    } catch (_eNpcLog) {}
+  }
+
+  try {
+    window._geodeNoticedParityLast = report;
+    window._geodeNoticedParityCheck = geodeNoticedParityCheck;
+    window.geodeNoticedParityCheck = geodeNoticedParityCheck;
+  } catch (_eNpcWin) {}
+
+  return report;
+}
+
+/**
  * Stage 80G-B: shadow-only Stability Room visual/reflection model.
  * Interprets geodeStabilityRoomSnapshot output for future UI — no DOM, CSS, or routes.
  * Uses calm VI registers only (never risk, error, or pressure).
