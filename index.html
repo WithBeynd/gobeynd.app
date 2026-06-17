@@ -29074,9 +29074,10 @@ function geodePlanRationaleSnapshot(state, opts) {
 }
 
 /**
- * Stage 80F-B / 80F-D / 80N-A: shadow-only Stability Room reflection read-model.
+ * Stage 80F-B / 80F-D / 80N-A / 80N-E: shadow-only Stability Room reflection read-model.
  * Assembles existing orchestration, posture, plan rationale, and human context.
  * 80N-A adds Tier-2 noticed.* interpretation domains (no consumers).
+ * 80N-E adds dual planPath/posturePath breathingRoomIntent export.
  * Not wired to UI. Does not mutate state or create new recommendations.
  */
 function geodeStabilityRoomSnapshot(state, opts) {
@@ -29346,16 +29347,9 @@ function geodeStabilityRoomSnapshot(state, opts) {
     else if (shouldStayQuiet) snapshotReason = 'quiet_period';
     else snapshotReason = 'reflection_eligible';
 
-  /** Stage 80N-A: Tier-2 noticed.* interpretation export (shadow-only; no consumers). */
-    var memoryMods = null;
-    try {
-      memoryMods = geodeFinancialMemoryPlanModifiers(state, null, postureObj);
-      sources.push('geodeFinancialMemoryPlanModifiers');
-    } catch (_eSrMemMods) {
-      memoryMods = null;
-    }
-    if (!memoryMods) {
-      memoryMods = {
+  /** Stage 80N-A/E: Tier-2 breathingRoomIntent dual export (shadow-only; no consumers). */
+    function srMemoryModsEmpty() {
+      return {
         preserveBreathingRoom: false,
         bufferPreference: 'normal',
         debtExtraMultiplier: 1,
@@ -29365,6 +29359,75 @@ function geodeStabilityRoomSnapshot(state, opts) {
         confidence: 'low'
       };
     }
+    function srIntentSliceFromMods(mods) {
+      mods = mods || srMemoryModsEmpty();
+      var softened =
+        !!mods.preserveBreathingRoom ||
+        mods.bufferPreference === 'preserve' ||
+        (Number(mods.debtExtraMultiplier) > 0 && Number(mods.debtExtraMultiplier) < 1) ||
+        (Number(mods.goalRecoveryMultiplier) > 0 &&
+          Number(mods.goalRecoveryMultiplier) < 1) ||
+        (Number(mods.investmentMultiplier) > 0 && Number(mods.investmentMultiplier) < 1);
+      return {
+        preserveBreathingRoom: !!mods.preserveBreathingRoom,
+        bufferPreference: mods.bufferPreference === 'preserve' ? 'preserve' : 'normal',
+        memorySoftened: softened,
+        reasonCodes: Array.isArray(mods.reasonCodes) ? mods.reasonCodes.slice() : [],
+        confidence: mods.confidence || 'low'
+      };
+    }
+    function srIntentSlicesAligned(a, b) {
+      return (
+        !!a.preserveBreathingRoom === !!b.preserveBreathingRoom &&
+        a.bufferPreference === b.bufferPreference &&
+        !!a.memorySoftened === !!b.memorySoftened &&
+        JSON.stringify((a.reasonCodes || []).slice().sort()) ===
+          JSON.stringify((b.reasonCodes || []).slice().sort())
+      );
+    }
+
+    var affordForPlanPath = null;
+    try {
+      affordForPlanPath = computeAffordabilityContext(state);
+      sources.push('computeAffordabilityContext');
+      sideEffects.push('computeAffordabilityContext_may_audit_log');
+    } catch (_eSrAff) {
+      affordForPlanPath = null;
+    }
+
+    var planPathMods = null;
+    try {
+      planPathMods = geodeFinancialMemoryPlanModifiers(state, affordForPlanPath, null);
+      sources.push('geodeFinancialMemoryPlanModifiers');
+    } catch (_eSrPlanPath) {
+      planPathMods = null;
+    }
+    if (!planPathMods) planPathMods = srMemoryModsEmpty();
+
+    var posturePathMods = null;
+    try {
+      posturePathMods = geodeFinancialMemoryPlanModifiers(state, null, postureObj);
+    } catch (_eSrPostPath) {
+      posturePathMods = null;
+    }
+    if (!posturePathMods) posturePathMods = srMemoryModsEmpty();
+
+    var planPathIntent = srIntentSliceFromMods(planPathMods);
+    var posturePathIntent = srIntentSliceFromMods(posturePathMods);
+    var breathingIntentAligned = srIntentSlicesAligned(planPathIntent, posturePathIntent);
+    var breathingIntentConfidence = 'low';
+    if (breathingIntentAligned) {
+      breathingIntentConfidence =
+        planPathIntent.confidence === 'high'
+          ? 'high'
+          : planPathIntent.confidence === 'medium'
+            ? 'medium'
+            : 'low';
+    } else {
+      breathingIntentConfidence = 'partial';
+    }
+
+    var memorySoftened = planPathIntent.memorySoftened;
 
     var pacingMode =
       pao && pao.outputs && pao.outputs.pacingMode ? String(pao.outputs.pacingMode) : 'full';
@@ -29389,14 +29452,6 @@ function geodeStabilityRoomSnapshot(state, opts) {
 
     var heldBackCount =
       disclosureNeeded.length + deferredItems.length + mutedLines.length;
-
-    var memorySoftened =
-      !!memoryMods.preserveBreathingRoom ||
-      memoryMods.bufferPreference === 'preserve' ||
-      (Number(memoryMods.debtExtraMultiplier) > 0 && Number(memoryMods.debtExtraMultiplier) < 1) ||
-      (Number(memoryMods.goalRecoveryMultiplier) > 0 &&
-        Number(memoryMods.goalRecoveryMultiplier) < 1) ||
-      (Number(memoryMods.investmentMultiplier) > 0 && Number(memoryMods.investmentMultiplier) < 1);
 
     var pressureDimensions = null;
     if (pao && pao.dimensions && typeof pao.dimensions === 'object') {
@@ -29464,14 +29519,23 @@ function geodeStabilityRoomSnapshot(state, opts) {
         source: 'geodeGetContextPosture'
       },
       breathingRoomIntent: {
-        preserveBreathingRoom: !!memoryMods.preserveBreathingRoom,
-        bufferPreference:
-          memoryMods.bufferPreference === 'preserve' ? 'preserve' : 'normal',
-        memorySoftened: memorySoftened,
-        reasonCodes: Array.isArray(memoryMods.reasonCodes)
-          ? memoryMods.reasonCodes.slice()
-          : [],
-        source: 'geodeFinancialMemoryPlanModifiers'
+        planPath: planPathIntent,
+        posturePath: posturePathIntent,
+        aligned: breathingIntentAligned,
+        confidence: breathingIntentConfidence,
+        canonicalForExplanation: 'planPath',
+        source: 'geodeFinancialMemoryPlanModifiers',
+        legacyCompatibility: {
+          note: 'flat fields mirror planPath for 80N-A compatibility',
+          preserveBreathingRoom: planPathIntent.preserveBreathingRoom,
+          bufferPreference: planPathIntent.bufferPreference,
+          memorySoftened: planPathIntent.memorySoftened,
+          reasonCodes: planPathIntent.reasonCodes.slice()
+        },
+        preserveBreathingRoom: planPathIntent.preserveBreathingRoom,
+        bufferPreference: planPathIntent.bufferPreference,
+        memorySoftened: planPathIntent.memorySoftened,
+        reasonCodes: planPathIntent.reasonCodes.slice()
       },
       pressure: {
         band: pao && pao.band ? String(pao.band) : null,
@@ -29728,7 +29792,7 @@ function geodeNoticedParityCheck(state, opts) {
     memoryShadow = null;
   }
   try {
-    memoryPlanPath = geodeFinancialMemoryPlanModifiers(state, affordLive, postureLive);
+    memoryPlanPath = geodeFinancialMemoryPlanModifiers(state, affordLive, null);
   } catch (_eNpcMemPl) {
     memoryPlanPath = null;
   }
@@ -29895,78 +29959,114 @@ function geodeNoticedParityCheck(state, opts) {
   if (!flexMatch) report.pass = false;
 
   var bri = noticed.breathingRoomIntent || {};
-  var shadowMods = memoryShadow || {};
+  var planPathExport = bri.planPath || {};
+  var posturePathExport = bri.posturePath || {};
   var planMods = memoryPlanPath || {};
-  var shadowVsExportMatch =
-    !!bri.preserveBreathingRoom === !!shadowMods.preserveBreathingRoom &&
-    (bri.bufferPreference === 'preserve') === (shadowMods.bufferPreference === 'preserve') &&
-    !!bri.memorySoftened === memorySoftenedFromMods(shadowMods) &&
-    arrEq(bri.reasonCodes, shadowMods.reasonCodes);
-  var shadowVsPlanMatch =
-    !!shadowMods.preserveBreathingRoom === !!planMods.preserveBreathingRoom &&
-    (shadowMods.bufferPreference === 'preserve') === (planMods.bufferPreference === 'preserve') &&
-    arrEq(shadowMods.reasonCodes, planMods.reasonCodes);
+  var postureModsObs = memoryShadow || {};
+
+  function intentParitySlice(mods) {
+    return {
+      preserveBreathingRoom: !!mods.preserveBreathingRoom,
+      bufferPreference: mods.bufferPreference === 'preserve' ? 'preserve' : 'normal',
+      memorySoftened: memorySoftenedFromMods(mods),
+      reasonCodes: Array.isArray(mods.reasonCodes) ? mods.reasonCodes.slice() : [],
+      confidence: mods.confidence || 'low'
+    };
+  }
+
+  var planPathCanonical = intentParitySlice(planMods);
+  var posturePathCanonical = intentParitySlice(postureModsObs);
+  var exportPlanMatch =
+    !!planPathExport.preserveBreathingRoom === planPathCanonical.preserveBreathingRoom &&
+    planPathExport.bufferPreference === planPathCanonical.bufferPreference &&
+    !!planPathExport.memorySoftened === planPathCanonical.memorySoftened &&
+    arrEq(planPathExport.reasonCodes, planPathCanonical.reasonCodes);
+  var exportPostureMatch =
+    !!posturePathExport.preserveBreathingRoom === posturePathCanonical.preserveBreathingRoom &&
+    posturePathExport.bufferPreference === posturePathCanonical.bufferPreference &&
+    !!posturePathExport.memorySoftened === posturePathCanonical.memorySoftened &&
+    arrEq(posturePathExport.reasonCodes, posturePathCanonical.reasonCodes);
+  var legacyMirrorsPlan =
+    !!bri.preserveBreathingRoom === !!planPathExport.preserveBreathingRoom &&
+    bri.bufferPreference === planPathExport.bufferPreference &&
+    !!bri.memorySoftened === !!planPathExport.memorySoftened &&
+    arrEq(bri.reasonCodes, planPathExport.reasonCodes);
+  var pathsAligned =
+    planPathCanonical.preserveBreathingRoom === posturePathCanonical.preserveBreathingRoom &&
+    planPathCanonical.bufferPreference === posturePathCanonical.bufferPreference &&
+    !!planPathCanonical.memorySoftened === !!posturePathCanonical.memorySoftened &&
+    arrEq(planPathCanonical.reasonCodes, posturePathCanonical.reasonCodes);
   var planPathDivergence = {
     preserveBreathingRoom: {
-      export: !!bri.preserveBreathingRoom,
-      shadowPath: !!shadowMods.preserveBreathingRoom,
-      planPath: !!planMods.preserveBreathingRoom
+      planPath: planPathCanonical.preserveBreathingRoom,
+      posturePath: posturePathCanonical.preserveBreathingRoom
     },
     bufferPreference: {
-      export: bri.bufferPreference,
-      shadowPath: shadowMods.bufferPreference,
-      planPath: planMods.bufferPreference
+      planPath: planPathCanonical.bufferPreference,
+      posturePath: posturePathCanonical.bufferPreference
     },
-    reasonCodes: arrDiff(bri.reasonCodes, planMods.reasonCodes)
+    memorySoftened: {
+      planPath: planPathCanonical.memorySoftened,
+      posturePath: posturePathCanonical.memorySoftened
+    },
+    reasonCodes: arrDiff(planPathCanonical.reasonCodes, posturePathCanonical.reasonCodes)
   };
-  var affordNullLimitation =
-    !shadowVsPlanMatch &&
-    !!planMods.preserveBreathingRoom &&
-    !shadowMods.preserveBreathingRoom;
   report.domains.breathingRoomIntent = {
     export: bri,
     canonical: {
-      shadowPath: {
-        preserveBreathingRoom: !!shadowMods.preserveBreathingRoom,
-        bufferPreference: shadowMods.bufferPreference,
-        memorySoftened: memorySoftenedFromMods(shadowMods),
-        reasonCodes: Array.isArray(shadowMods.reasonCodes) ? shadowMods.reasonCodes.slice() : [],
-        affordInput: null,
-        source: 'geodeFinancialMemoryPlanModifiers(null afford) — snapshot path'
-      },
       planPath: {
-        preserveBreathingRoom: !!planMods.preserveBreathingRoom,
-        bufferPreference: planMods.bufferPreference,
-        memorySoftened: memorySoftenedFromMods(planMods),
-        reasonCodes: Array.isArray(planMods.reasonCodes) ? planMods.reasonCodes.slice() : [],
+        slice: planPathCanonical,
         affordInput: 'computeAffordabilityContext',
-        source: 'geodeFinancialMemoryPlanModifiers — getMonthPlan path'
+        postureInput: null,
+        source: 'geodeFinancialMemoryPlanModifiers(state, afford, null) — matches getMonthPlan'
+      },
+      posturePath: {
+        slice: posturePathCanonical,
+        affordInput: null,
+        postureInput: 'geodeGetContextPosture',
+        source: 'geodeFinancialMemoryPlanModifiers(state, null, posture) — observational only',
+        observationalOnly: true
       },
       breathingRoomFloor: affordLive ? toNum(affordLive.breathingRoomFloor) : null,
-      floorOwner: 'computeAffordabilityContext (Tier 0) — separate from intent export'
+      floorOwner: 'computeAffordabilityContext (Tier 0) — separate from intent export',
+      canonicalForExplanation: bri.canonicalForExplanation || 'planPath'
     },
     parity: {
-      exportVsShadowPath: parityOk(shadowVsExportMatch, shadowVsExportMatch ? [] : ['export_shadow_path_mismatch']),
-      shadowPathVsPlanPath: parityOk(
-        shadowVsPlanMatch,
-        shadowVsPlanMatch
+      exportPlanPathVsLivePlan: parityOk(
+        exportPlanMatch,
+        exportPlanMatch ? [] : ['export_planPath_vs_live_plan_path_mismatch']
+      ),
+      exportPosturePathVsObservational: parityOk(
+        exportPostureMatch,
+        exportPostureMatch ? [] : ['export_posturePath_mismatch']
+      ),
+      legacyFlatFieldsMirrorPlanPath: parityOk(
+        legacyMirrorsPlan,
+        legacyMirrorsPlan ? [] : ['legacy_flat_fields_do_not_mirror_planPath']
+      ),
+      planPathVsPosturePath: parityOk(
+        pathsAligned,
+        pathsAligned
           ? []
-          : affordNullLimitation
-            ? ['expected_shadow_limitation: null afford may under-report preserveBreathingRoom']
-            : ['shadow_path_vs_plan_path_mismatch']
+          : ['planPath_posturePath_divergence — expected when afford-only or posture-only pressure']
       )
     },
     divergence: planPathDivergence,
-    verdict: affordNullLimitation
-      ? 'acceptable_shadow_limitation'
-      : shadowVsPlanMatch
+    aligned: bri.aligned === true,
+    confidence: bri.confidence || null,
+    verdict: exportPlanMatch
+      ? pathsAligned
         ? 'aligned'
-        : 'future_parity_risk',
-    safestFutureOwner: 'noticed.breathingRoomIntent (Tier 2) observes; Plan path remains Tier 0 consumer only'
+        : 'dual_path_divergence_observational'
+      : 'export_planPath_parity_fail',
+    safestFutureOwner:
+      'planPath for Plan softening explanations; posturePath for emotional/context observation only'
   };
-  if (!shadowVsExportMatch) report.pass = false;
-  if (affordNullLimitation) {
-    report.warnings.push('breathingRoomIntent: null-afford snapshot may under-report vs Plan path');
+  if (!exportPlanMatch || !exportPostureMatch || !legacyMirrorsPlan) report.pass = false;
+  if (!pathsAligned && exportPlanMatch) {
+    report.warnings.push(
+      'breathingRoomIntent: planPath and posturePath diverge — use canonicalForExplanation planPath for Plan copy'
+    );
   }
 
   var press = noticed.pressure || {};
