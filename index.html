@@ -31389,8 +31389,8 @@ try {
 } catch (_eTcgInit) {}
 
 /**
- * Stage 80N-N.1-C: read-only session journey context for cross-surface pacing suppress.
- * Read-only — does not write sessionStorage in this stage.
+ * Stage 80N-N.1-C/E: session journey context for cross-surface pacing suppress (read).
+ * 80N-N.1-E: Plan render may write session flags via geodeCrossSurfacePacingSessionWriteFromNote.
  */
 function geodeCrossSurfacePacingJourneyContextRead(opts) {
   opts = opts && typeof opts === 'object' ? opts : {};
@@ -31426,6 +31426,52 @@ function geodeCrossSurfacePacingJourneyContextRead(opts) {
     }
   } catch (_eCsjRead) {}
   return out;
+}
+
+/** Stage 80N-N.1-E: map rendered Plan pacing note text to allowed journey idea bucket, or null. */
+function geodeCrossSurfacePacingNoteIdeaBucket(noteText) {
+  var n = String(noteText || '').toLowerCase();
+  if (!n) return null;
+  if (n.indexOf('one clear next step') >= 0) {
+    return 'IDEA_ONE_CLEAR_STEP';
+  }
+  if (n.indexOf('smaller steps') >= 0 || n.indexOf('sequence stays the same') >= 0) {
+    return 'IDEA_GENTLE_PACE';
+  }
+  return null;
+}
+
+/**
+ * Stage 80N-N.1-E: session-scoped Plan pacing journey flag (write or clear).
+ * Only qualifying gentle/recovery pacing notes set flags; others clear session keys.
+ */
+function geodeCrossSurfacePacingSessionWriteFromNote(noteText) {
+  var idea = geodeCrossSurfacePacingNoteIdeaBucket(noteText);
+  try {
+    if (typeof sessionStorage === 'undefined') return;
+    if (!idea) {
+      sessionStorage.removeItem('geode_journey_plan_pacing_rendered');
+      sessionStorage.removeItem('geode_journey_plan_pacing_idea');
+      return;
+    }
+    sessionStorage.setItem('geode_journey_plan_pacing_rendered', '1');
+    sessionStorage.setItem('geode_journey_plan_pacing_idea', idea);
+  } catch (_eCssSessWrite) {}
+}
+
+/** Stage 80N-N.1-E: neutral month_so_far line when cross-surface pacing duplicate suppressed. */
+function geodeCrossSurfacePacingNeutralMonthSoFarBody(atmosphere) {
+  atmosphere = atmosphere != null ? String(atmosphere).toLowerCase() : 'calm';
+  if (atmosphere === 'reflective') {
+    return 'Some parts of the month are still taking shape.';
+  }
+  if (atmosphere === 'room') {
+    return 'There is still room for the month to settle.';
+  }
+  if (atmosphere === 'protective') {
+    return 'Not everything about the month is fully clear yet.';
+  }
+  return 'The month is still unfolding.';
 }
 
 /** Stage 80N-N.1-C: stable idea bucket for cross-surface pacing suppress (shadow-only). */
@@ -31774,6 +31820,7 @@ function geodeCrossSurfacePacingSuppress(snapshot, surface, candidate, opts) {
 try {
   window.geodeCrossSurfacePacingSuppress = geodeCrossSurfacePacingSuppress;
   window.geodeCrossSurfacePacingJourneyContextRead = geodeCrossSurfacePacingJourneyContextRead;
+  window.geodeCrossSurfacePacingSessionWriteFromNote = geodeCrossSurfacePacingSessionWriteFromNote;
 } catch (_eCssInit) {}
 
 /**
@@ -32333,6 +32380,7 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
       mutedLines.length > 0;
 
     var blockMap = {};
+    var crossSurfaceSuppressVerdict = null;
 
     if (monthContextHasAny && sectionVisible('what_matters_this_month')) {
       var matterLines = [];
@@ -32390,6 +32438,38 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
         monthSoFarBody =
           'What you shared fits with how the rest of the month is shaping up.';
       }
+      var monthSoFarNeutralised = false;
+      try {
+        var cssJourney = geodeCrossSurfacePacingJourneyContextRead({});
+        var cssCandidate = {
+          blockId: 'month_so_far',
+          atmosphere: atmosphere,
+          copyIntent: 'month_so_far'
+        };
+        if (cssJourney.planPacingIdea === 'IDEA_ONE_CLEAR_STEP') {
+          cssCandidate.domain = 'recovery';
+          cssCandidate.idea = 'IDEA_ONE_CLEAR_STEP';
+        } else {
+          cssCandidate.domain = 'pacing';
+          cssCandidate.idea = 'IDEA_MONTH_SO_FAR';
+        }
+        crossSurfaceSuppressVerdict = geodeCrossSurfacePacingSuppress(
+          snapshot,
+          'reflection',
+          cssCandidate,
+          {}
+        );
+        if (
+          crossSurfaceSuppressVerdict &&
+          (crossSurfaceSuppressVerdict.verdict === 'SUPPRESS' ||
+            crossSurfaceSuppressVerdict.verdict === 'DEFER')
+        ) {
+          monthSoFarBody = geodeCrossSurfacePacingNeutralMonthSoFarBody(atmosphere);
+          monthSoFarNeutralised = true;
+        }
+      } catch (_eCssMsfWire) {
+        crossSurfaceSuppressVerdict = null;
+      }
       var bRegister =
         visualModel.viRegister != null ? String(visualModel.viRegister) : 'guidance';
       blockMap.month_so_far = {
@@ -32400,7 +32480,14 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
         body: sanitizeCopy(monthSoFarBody, 320),
         visible: true,
         spacing: blockSpacing(),
-        source: 'atmosphere'
+        source: monthSoFarNeutralised ? 'atmosphere_cross_surface_neutralised' : 'atmosphere',
+        crossSurfaceSuppress: crossSurfaceSuppressVerdict
+          ? {
+              verdict: crossSurfaceSuppressVerdict.verdict,
+              reason: crossSurfaceSuppressVerdict.reason,
+              neutralised: monthSoFarNeutralised
+            }
+          : null
       };
     }
 
@@ -32614,6 +32701,17 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
           blockMap.noticed_tier_c && blockMap.noticed_tier_c.archetype
             ? String(blockMap.noticed_tier_c.archetype)
             : null,
+        crossSurfaceSuppress: crossSurfaceSuppressVerdict
+          ? {
+              verdict: crossSurfaceSuppressVerdict.verdict,
+              reason: crossSurfaceSuppressVerdict.reason,
+              duplicateOf: crossSurfaceSuppressVerdict.duplicateOf,
+              neutralised:
+                blockMap.month_so_far &&
+                blockMap.month_so_far.crossSurfaceSuppress &&
+                blockMap.month_so_far.crossSurfaceSuppress.neutralised === true
+            }
+          : null,
         forbiddenPatterns: [
           'you should',
           'you must',
@@ -32632,6 +32730,7 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
             : null,
         tierCGate: tierCGate,
         tierCSlotDecision: tierCSlot,
+        crossSurfaceSuppress: crossSurfaceSuppressVerdict,
         renderForbidden: false,
         passthroughOnly: true,
         influencesBlocks: false
@@ -34636,12 +34735,19 @@ function rPlan() {
         } catch (_ePaceIr) {}
         _paceNote = geodeFormatPlanPagePacingNote(assessPressure(S), _rsPlan, _paceOpts);
       } catch (_ePacePlan) {}
+      try {
+        geodeCrossSurfacePacingSessionWriteFromNote(_paceNote);
+      } catch (_ePaceSess) {}
       if (_paceNote) {
         h +=
           '<div data-geode-css="margin:-6px 0 12px;font-size:11px;color:rgba(189,183,220,0.72);line-height:1.45">' +
           escHtmlLite(_paceNote) +
           '</div>';
       }
+    } else {
+      try {
+        geodeCrossSurfacePacingSessionWriteFromNote('');
+      } catch (_ePaceSessOb) {}
     }
     if (_planLeftover < 0) {
       // Over budget: replace steps with recovery view — nothing to allocate
