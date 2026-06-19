@@ -4,7 +4,7 @@
 // CACHE_VERSION: increment on every release, then commit + push.
 // CACHE_NAME is derived so old caches are deleted on activate and clients never mix versions.
 
-const CACHE_VERSION = 'v1.0.73'; // Stage 80M-A Reflection bundle release
+const CACHE_VERSION = 'v1.0.74'; // Stage 80N-P.1 — data-safe runtime release (governance bundle)
 const CACHE_NAME = `beynd-cache-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -56,7 +56,7 @@ self.addEventListener('fetch', function (event) {
 
   if (req.mode === 'navigate') {
     event.respondWith(
-      fetch(req).then(function (response) {
+      fetch(req, { cache: 'no-store' }).then(function (response) {
         if (response && response.status === 200 && response.type === 'basic') {
           var clone = response.clone();
           caches.open(CACHE_NAME).then(function (cache) {

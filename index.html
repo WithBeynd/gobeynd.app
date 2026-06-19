@@ -751,8 +751,8 @@ canvas{display:block}
 .reality-muted-line{font-size:10px;color:var(--tx-4);line-height:1.4;margin-top:var(--sp-1)}
 
 /* App chrome utilities */
-.update-banner{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:var(--bg-surface);color:var(--tx-1);padding:10px 14px;border-radius:var(--radius-sm);font-size:12px;display:none;z-index:9999;box-shadow:var(--shadow);pointer-events:none;border:1px solid var(--bd)}
-.update-banner__button{margin-left:10px;background:transparent;border:none;color:var(--gem);cursor:pointer;font-weight:700;font-family:var(--font-sans);pointer-events:auto}
+.update-banner{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:var(--bg-surface);color:var(--tx-1);padding:10px 14px;border-radius:var(--radius-sm);font-size:12px;display:none;z-index:9999;box-shadow:var(--shadow);pointer-events:none;border:1px solid var(--bd);max-width:min(92vw,420px);line-height:1.45;text-align:center}
+.update-banner__button{margin-left:10px;background:transparent;border:none;color:var(--gem);cursor:pointer;font-weight:700;font-family:var(--font-sans);pointer-events:auto;white-space:nowrap}
 
 /* Stage EEE inline-style cleanup utilities */
 #pg-login,#pg-ob,#app,#pw-area{display:none}
@@ -1134,9 +1134,9 @@ details.geode-manage-disclosure[open] > :not(summary){animation:geode-details-bo
 </head>
 <body>
 <div id="update-banner" class="update-banner">
-  <span>Update available</span>
+  <span id="update-banner-text">A quiet update is ready. Your plan stays on this device.</span>
   <button type="button" id="update-btn" class="update-banner__button">
-    Refresh
+    Refresh when ready
   </button>
 </div>
 <!-- SPLASH -->
@@ -1356,6 +1356,8 @@ try {
 
 // ── DATA ──────────────────────────────────────────
 var KEY = 'geode_v6';
+/** Deploy/runtime marker for support and PWA freshness checks (80N-P.1); not persisted. */
+var BEYND_RUNTIME_VERSION = 'v1.0.74';
 /** Local persisted-state schema marker for backup/restore validation (bump when structure changes). */
 var GEODE_SCHEMA_VERSION = 1;
 /** Until splash finishes, save() must not bump last-active (avoids sync-on-load skipping lock). */
@@ -38777,6 +38779,10 @@ function geodeBuildSettingsDataDrillHtml() {
     '<a href="https://withbeynd.com/#privacy" data-geode-css="color:#9b7fe8;text-decoration:none" target="_blank" rel="noopener noreferrer">Privacy</a>';
   h += '</div>';
   h += '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.4">Backup files are private financial documents. Store them carefully.</div>';
+  h +=
+    '<div data-geode-css="font-size:10px;color:var(--tx-4);line-height:1.4;margin-top:10px">Runtime ' +
+    escHtmlLite(typeof BEYND_RUNTIME_VERSION !== 'undefined' ? BEYND_RUNTIME_VERSION : 'unknown') +
+    ' · local data on this device</div>';
   h += '<div data-geode-css="height:10px"></div>';
   return h;
 }
@@ -40672,7 +40678,7 @@ function loadGeodeIntelligence(){_geodeIntelFetched=true;_geodeIntelData=null;}
     _geodeUpdateBannerHideTimer = setTimeout(function () {
       banner.style.display = 'none';
       _geodeUpdateBannerHideTimer = null;
-    }, 15000);
+    }, 60000);
 
     btn.onclick = function () {
       if (reg.waiting) {
