@@ -31389,6 +31389,394 @@ try {
 } catch (_eTcgInit) {}
 
 /**
+ * Stage 80N-N.1-C: read-only session journey context for cross-surface pacing suppress.
+ * Read-only — does not write sessionStorage in this stage.
+ */
+function geodeCrossSurfacePacingJourneyContextRead(opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var out = {
+    planPacingNoteRendered: opts.planPacingNoteRendered === true,
+    planPacingIdea: opts.planPacingIdea != null ? String(opts.planPacingIdea).trim() : null,
+    journeyScope: opts.journeyScope != null ? String(opts.journeyScope) : 'session',
+    sessionAvailable: false,
+    sources: []
+  };
+  if (opts.planPacingNoteRendered === true) {
+    out.sources.push('opts.planPacingNoteRendered');
+  }
+  if (out.planPacingIdea) {
+    out.sources.push('opts.planPacingIdea');
+  }
+  if (opts.sessionOnly === false) {
+    return out;
+  }
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      out.sessionAvailable = true;
+      var rendered = sessionStorage.getItem('geode_journey_plan_pacing_rendered');
+      var idea = sessionStorage.getItem('geode_journey_plan_pacing_idea');
+      if (rendered === '1' && !out.planPacingNoteRendered) {
+        out.planPacingNoteRendered = true;
+        out.sources.push('sessionStorage.geode_journey_plan_pacing_rendered');
+      }
+      if (idea && !out.planPacingIdea) {
+        out.planPacingIdea = String(idea).trim();
+        out.sources.push('sessionStorage.geode_journey_plan_pacing_idea');
+      }
+    }
+  } catch (_eCsjRead) {}
+  return out;
+}
+
+/** Stage 80N-N.1-C: stable idea bucket for cross-surface pacing suppress (shadow-only). */
+function geodeCrossSurfacePacingNormalizeIdea(candidate) {
+  candidate = candidate && typeof candidate === 'object' ? candidate : {};
+  var idea = candidate.idea != null ? String(candidate.idea).trim() : '';
+  if (idea.indexOf('IDEA_') === 0) {
+    return idea;
+  }
+  var domain = candidate.domain != null ? String(candidate.domain).toLowerCase() : '';
+  var blockId = candidate.blockId != null ? String(candidate.blockId).toLowerCase() : '';
+  var source = candidate.source != null ? String(candidate.source).toLowerCase() : '';
+  var copyIntent = candidate.copyIntent != null ? String(candidate.copyIntent).toLowerCase() : '';
+
+  if (
+    domain === 'pressure' ||
+    copyIntent.indexOf('reasoncode') >= 0 ||
+    copyIntent.indexOf('reason_code') >= 0 ||
+    copyIntent.indexOf('band') >= 0
+  ) {
+    return 'IDEA_PRESSURE_INTERNAL';
+  }
+  if (
+    blockId === 'what_matters_this_month' ||
+    domain === 'flexibility' ||
+    copyIntent.indexOf('user_echo') >= 0 ||
+    copyIntent.indexOf('protect') >= 0 ||
+    copyIntent.indexOf('worried') >= 0 ||
+    copyIntent.indexOf('feeling') >= 0
+  ) {
+    return 'IDEA_USER_REALITY_ECHO';
+  }
+  if (
+    domain === 'breathingroomintent' ||
+    copyIntent.indexOf('preservebreathingroom') >= 0 ||
+    copyIntent.indexOf('bufferpreference') >= 0 ||
+    copyIntent.indexOf('breathing_room') >= 0
+  ) {
+    return 'IDEA_BREATHING_ROOM';
+  }
+  if (
+    blockId === 'background' ||
+    blockId === 'noticed_tier_c' ||
+    domain === 'resilience' ||
+    copyIntent.indexOf('heldback') >= 0 ||
+    copyIntent.indexOf('quiet') >= 0 ||
+    copyIntent.indexOf('background') >= 0
+  ) {
+    return 'IDEA_QUIET_HOME';
+  }
+  if (
+    domain === 'recovery' ||
+    copyIntent.indexOf('one_clear') >= 0 ||
+    copyIntent.indexOf('one clear') >= 0
+  ) {
+    return 'IDEA_ONE_CLEAR_STEP';
+  }
+  if (
+    domain === 'pacing' ||
+    copyIntent.indexOf('gentle') >= 0 ||
+    copyIntent.indexOf('smaller step') >= 0
+  ) {
+    return 'IDEA_GENTLE_PACE';
+  }
+  if (blockId === 'month_so_far' || copyIntent.indexOf('month_so_far') >= 0) {
+    return 'IDEA_MONTH_SO_FAR';
+  }
+  if (domain === 'recovery' || source.indexOf('recovery') >= 0) {
+    return 'IDEA_RECOVERY';
+  }
+  return 'IDEA_UNKNOWN';
+}
+
+/** Stage 80N-N.1-C: whether Plan journey idea semantically overlaps candidate idea. */
+function geodeCrossSurfacePacingIdeasOverlap(planIdea, candidateIdea, candidate) {
+  planIdea = planIdea != null ? String(planIdea) : '';
+  candidateIdea = candidateIdea != null ? String(candidateIdea) : '';
+  candidate = candidate && typeof candidate === 'object' ? candidate : {};
+  if (!planIdea || planIdea === 'IDEA_UNKNOWN') return false;
+  if (planIdea === candidateIdea) return true;
+
+  var atmosphere =
+    candidate.atmosphere != null ? String(candidate.atmosphere).toLowerCase() : '';
+
+  if (
+    planIdea === 'IDEA_GENTLE_PACE' &&
+    (candidateIdea === 'IDEA_MONTH_SO_FAR' ||
+      candidateIdea === 'IDEA_RECOVERY' ||
+      (candidateIdea === 'IDEA_GENTLE_PACE' && atmosphere))
+  ) {
+    if (
+      candidateIdea === 'IDEA_MONTH_SO_FAR' &&
+      (atmosphere === 'protective' ||
+        atmosphere === 'calm' ||
+        atmosphere === 'recovering' ||
+        atmosphere === 'reflective')
+    ) {
+      return true;
+    }
+    if (candidateIdea === 'IDEA_RECOVERY' || candidateIdea === 'IDEA_GENTLE_PACE') {
+      return true;
+    }
+  }
+  if (
+    planIdea === 'IDEA_ONE_CLEAR_STEP' &&
+    (candidateIdea === 'IDEA_RECOVERY' ||
+      candidateIdea === 'IDEA_ONE_CLEAR_STEP' ||
+      candidateIdea === 'IDEA_MONTH_SO_FAR' ||
+      candidateIdea === 'IDEA_GENTLE_PACE')
+  ) {
+    return true;
+  }
+  if (
+    planIdea === 'IDEA_RECOVERY' &&
+    (candidateIdea === 'IDEA_ONE_CLEAR_STEP' || candidateIdea === 'IDEA_RECOVERY')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Stage 80N-N.1-C: shadow-only cross-surface pacing suppression verdict helper.
+ * Read-only — does not mutate Plan, Reflection, orchestration, or render paths.
+ * Not wired to UI in this stage.
+ */
+function geodeCrossSurfacePacingSuppress(snapshot, surface, candidate, opts) {
+  opts = opts && typeof opts === 'object' ? opts : {};
+  snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  candidate = candidate && typeof candidate === 'object' ? candidate : {};
+  surface = surface != null ? String(surface).toLowerCase() : '';
+  var candidateIdea = geodeCrossSurfacePacingNormalizeIdea(candidate);
+  var journey = geodeCrossSurfacePacingJourneyContextRead(opts);
+  var sources = journey.sources ? journey.sources.slice() : [];
+  sources.push('geodeCrossSurfacePacingSuppress');
+
+  var atmosphere =
+    candidate.atmosphere != null
+      ? String(candidate.atmosphere).toLowerCase()
+      : '';
+  var blockId = candidate.blockId != null ? String(candidate.blockId).toLowerCase() : '';
+  var domain = candidate.domain != null ? String(candidate.domain).toLowerCase() : '';
+  var showBackground = opts.showBackground === true || opts.composeHasBackground === true;
+  var tierCCandidate =
+    blockId === 'noticed_tier_c' ||
+    candidate.tierC === true ||
+    domain === 'resilience';
+
+  function isTier0FinancialCandidate(c) {
+    c = c || candidate;
+    if (c.tier0FinancialTruth === true) return true;
+    var ci = c.copyIntent != null ? String(c.copyIntent).toLowerCase() : '';
+    return (
+      ci.indexOf('overdue_fact') >= 0 ||
+      ci.indexOf('payment_status') >= 0 ||
+      ci.indexOf('amount_truth') >= 0
+    );
+  }
+
+  function result(verdict, extra) {
+    var o = extra && typeof extra === 'object' ? extra : {};
+    var renderAllowed =
+      o.renderAllowed != null
+        ? !!o.renderAllowed
+        : verdict === 'ALLOW' || verdict === 'USER_ECHO_ONLY' || verdict === 'DEFER';
+    var copyAllowed =
+      o.copyAllowed != null
+        ? !!o.copyAllowed
+        : verdict === 'ALLOW' || verdict === 'USER_ECHO_ONLY';
+    var out = {
+      version: 1,
+      stage: '80N-N.1-C',
+      verdict: verdict,
+      reason: o.reason != null ? String(o.reason) : verdict,
+      surface: surface,
+      candidateIdea: candidateIdea,
+      canonicalOwner: o.canonicalOwner != null ? String(o.canonicalOwner) : null,
+      duplicateOf: o.duplicateOf != null ? o.duplicateOf : null,
+      recommendedAction: o.recommendedAction != null ? String(o.recommendedAction) : '',
+      renderAllowed: renderAllowed,
+      copyAllowed: copyAllowed,
+      persistenceAllowed: false,
+      authorityTier: o.authorityTier != null ? o.authorityTier : 2,
+      sessionScoped: journey.journeyScope === 'session',
+      sources: sources,
+      audit: {
+        shadowOnly: true,
+        planPacingNoteRendered: journey.planPacingNoteRendered,
+        planPacingIdea: journey.planPacingIdea,
+        showBackground: showBackground,
+        tierCCandidate: tierCCandidate,
+        atmosphere: atmosphere || null,
+        blockId: blockId || null,
+        domain: domain || null
+      }
+    };
+    if (opts.debug === true) {
+      try {
+        window._geodeCrossSurfacePacingSuppressLast = out;
+      } catch (_eCssDbg) {}
+    } else {
+      try {
+        window._geodeCrossSurfacePacingSuppressLast = out;
+      } catch (_eCssLast) {}
+    }
+    return out;
+  }
+
+  if (
+    candidateIdea === 'IDEA_FINANCIAL_TRUTH' ||
+    isTier0FinancialCandidate(candidate)
+  ) {
+    return result('ALLOW', {
+      reason: 'tier0_financial_truth_never_suppressed',
+      canonicalOwner: 'plan_or_payment_truth',
+      duplicateOf: null,
+      recommendedAction: 'Always allow factual financial truth.',
+      renderAllowed: true,
+      copyAllowed: true,
+      authorityTier: 0
+    });
+  }
+
+  if (candidateIdea === 'IDEA_PRESSURE_INTERNAL' || domain === 'pressure') {
+    return result('SHADOW_ONLY', {
+      reason: 'pressure_internal_only',
+      canonicalOwner: 'noticed.pressure',
+      duplicateOf: null,
+      recommendedAction: 'Never surface pressure internals; shadow export only.',
+      renderAllowed: false,
+      copyAllowed: false,
+      authorityTier: 2
+    });
+  }
+
+  if (
+    candidateIdea === 'IDEA_USER_REALITY_ECHO' ||
+    blockId === 'what_matters_this_month'
+  ) {
+    return result('USER_ECHO_ONLY', {
+      reason: 'user_authored_reality_echo',
+      canonicalOwner: 'reality_month_context',
+      duplicateOf: null,
+      recommendedAction: 'Echo user words; do not suppress for Plan pacing overlap.',
+      renderAllowed: true,
+      copyAllowed: true,
+      authorityTier: 1
+    });
+  }
+
+  if (showBackground && tierCCandidate) {
+    return result('SUPPRESS', {
+      reason: 'background_canonical_quiet_owner',
+      canonicalOwner: 'experience_background_block',
+      duplicateOf: 'background',
+      recommendedAction: 'Background already discloses quiet; suppress Tier-C/resilience duplicate.',
+      renderAllowed: false,
+      copyAllowed: false,
+      authorityTier: 2
+    });
+  }
+
+  if (
+    tierCCandidate &&
+    (atmosphere === 'recovering' || atmosphere === 'reflective')
+  ) {
+    return result('SUPPRESS', {
+      reason: 'atmosphere_owns_quiet_interpretation',
+      canonicalOwner: 'atmosphere',
+      duplicateOf: atmosphere,
+      recommendedAction: 'Atmosphere already owns quiet read; suppress extra Tier-C interpretation.',
+      renderAllowed: false,
+      copyAllowed: false,
+      authorityTier: 2
+    });
+  }
+
+  if (
+    surface === 'reflection' &&
+    journey.planPacingNoteRendered &&
+    journey.planPacingIdea &&
+    geodeCrossSurfacePacingIdeasOverlap(journey.planPacingIdea, candidateIdea, candidate)
+  ) {
+    return result('SUPPRESS', {
+      reason: 'plan_pacing_note_owns_journey',
+      canonicalOwner: 'plan_pacing_note',
+      duplicateOf: 'plan_pacing_note',
+      recommendedAction:
+        'Plan already expressed this pacing idea; neutralise or defer Reflection paraphrase.',
+      renderAllowed: false,
+      copyAllowed: false,
+      authorityTier: 2
+    });
+  }
+
+  if (
+    surface === 'reflection' &&
+    journey.planPacingNoteRendered &&
+    candidateIdea === 'IDEA_QUIET_HOME' &&
+    blockId === 'month_so_far' &&
+    atmosphere === 'recovering'
+  ) {
+    return result('DEFER', {
+      reason: 'month_so_far_quiet_defer_to_background',
+      canonicalOwner: 'experience_background_block',
+      duplicateOf: 'background',
+      recommendedAction: 'Defer quiet phrasing in month_so_far when background will own it.',
+      renderAllowed: false,
+      copyAllowed: false,
+      authorityTier: 2
+    });
+  }
+
+  if (
+    surface === 'reflection' &&
+    !journey.planPacingNoteRendered &&
+    candidateIdea !== 'IDEA_PRESSURE_INTERNAL'
+  ) {
+    return result('ALLOW', {
+      reason: 'no_plan_pacing_note_known',
+      canonicalOwner:
+        candidateIdea === 'IDEA_QUIET_HOME'
+          ? 'experience_background_block'
+          : blockId === 'month_so_far'
+            ? 'atmosphere_month_so_far'
+            : null,
+      duplicateOf: null,
+      recommendedAction: 'No Plan pacing note on journey; do not invent suppression.',
+      renderAllowed: true,
+      copyAllowed: true,
+      authorityTier: 1
+    });
+  }
+
+  return result('ALLOW', {
+    reason: 'no_duplicate_detected',
+    canonicalOwner: null,
+    duplicateOf: null,
+    recommendedAction: 'No cross-surface duplicate detected.',
+    renderAllowed: true,
+    copyAllowed: true,
+    authorityTier: 1
+  });
+}
+
+try {
+  window.geodeCrossSurfacePacingSuppress = geodeCrossSurfacePacingSuppress;
+  window.geodeCrossSurfacePacingJourneyContextRead = geodeCrossSurfacePacingJourneyContextRead;
+} catch (_eCssInit) {}
+
+/**
  * Stage 80G-B: shadow-only Stability Room visual/reflection model.
  * Interprets geodeStabilityRoomSnapshot output for future UI — no DOM, CSS, or routes.
  * Uses calm VI registers only (never risk, error, or pressure).
