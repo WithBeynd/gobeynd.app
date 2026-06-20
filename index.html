@@ -26666,23 +26666,70 @@ function geodeRealityReflectionEntryHtml() {
   } catch (_eRreHtml) {
     return '';
   }
-  if (!gate || gate.visibility !== 'suggested' || !gate.label) return '';
-  var h = '';
-  h +=
+  if (!gate || gate.visibility === 'hidden') return '';
+
+  var entryBtnCss =
+    'display:block;padding:0;border:none;background:transparent;font-family:inherit;font-size:11px;font-weight:600;color:var(--gem-l);cursor:pointer;line-height:1.4;-webkit-tap-highlight-color:transparent;outline:none;text-align:left;width:100%';
+  var footerOpen =
     '<div data-geode-css="padding:10px 14px 12px;border-top:1px solid rgba(189,183,220,0.1)">';
-  h +=
-    '<button type="button" onclick="geodeRealityReflectionEntryTap()" ' +
-    'data-geode-css="display:block;padding:0;border:none;background:transparent;font-family:inherit;font-size:11px;font-weight:600;color:var(--gem-l);cursor:pointer;line-height:1.4;-webkit-tap-highlight-color:transparent;outline:none;text-align:left;width:100%">' +
-    escHtmlLite(String(gate.label)) +
-    ' \u203a</button>';
-  h +=
-    '<div data-geode-css="display:flex;justify-content:flex-end;margin-top:6px">' +
-    '<button type="button" onclick="geodeRealityReflectionEntryDismiss()" ' +
-    'data-geode-css="padding:0;border:none;background:transparent;font-family:inherit;font-size:10px;font-weight:600;color:rgba(189,183,220,0.52);cursor:pointer;line-height:1.35;-webkit-tap-highlight-color:transparent;outline:none">' +
-    escHtmlLite(String(gate.dismissLabel || 'Not now')) +
-    '</button></div>';
-  h += '</div>';
-  return h;
+
+  if (gate.visibility === 'suggested' && gate.label) {
+    var h = '';
+    h += footerOpen;
+    h +=
+      '<button type="button" onclick="geodeRealityReflectionEntryTap()" ' +
+      'data-geode-css="' +
+      entryBtnCss +
+      '">' +
+      escHtmlLite(String(gate.label)) +
+      ' \u203a</button>';
+    h +=
+      '<div data-geode-css="display:flex;justify-content:flex-end;margin-top:6px">' +
+      '<button type="button" onclick="geodeRealityReflectionEntryDismiss()" ' +
+      'data-geode-css="padding:0;border:none;background:transparent;font-family:inherit;font-size:10px;font-weight:600;color:rgba(189,183,220,0.52);cursor:pointer;line-height:1.35;-webkit-tap-highlight-color:transparent;outline:none">' +
+      escHtmlLite(String(gate.dismissLabel || 'Not now')) +
+      '</button></div>';
+    h += '</div>';
+    return h;
+  }
+
+  if (gate.visibility === 'available') {
+    var mc = geodeGetMonthContext(S);
+    if (!mc.hasAny) return '';
+    if (geodeGetReflectionEntryDismissed()) return '';
+    if (geodeGetReflectionJustSavedMonthContext()) {
+      var hJustSaved = '';
+      hJustSaved += footerOpen;
+      hJustSaved +=
+        '<button type="button" onclick="geodeRealityReflectionEntryTap()" ' +
+        'data-geode-css="' +
+        entryBtnCss +
+        '">' +
+        escHtmlLite('See how this month fits together') +
+        ' \u203a</button>';
+      hJustSaved +=
+        '<div data-geode-css="display:flex;justify-content:flex-end;margin-top:6px">' +
+        '<button type="button" onclick="geodeRealityReflectionEntryDismiss()" ' +
+        'data-geode-css="padding:0;border:none;background:transparent;font-family:inherit;font-size:10px;font-weight:600;color:rgba(189,183,220,0.52);cursor:pointer;line-height:1.35;-webkit-tap-highlight-color:transparent;outline:none">' +
+        escHtmlLite(String(gate.dismissLabel || 'Not now')) +
+        '</button></div>';
+      hJustSaved += '</div>';
+      return hJustSaved;
+    }
+    var hAvail = '';
+    hAvail += footerOpen;
+    hAvail +=
+      '<button type="button" onclick="geodeRealityReflectionEntryTap()" ' +
+      'data-geode-css="' +
+      entryBtnCss +
+      '">' +
+      escHtmlLite('See a quieter read of this month') +
+      ' \u203a</button>';
+    hAvail += '</div>';
+    return hAvail;
+  }
+
+  return '';
 }
 
 /** Stage 80K-B: open Reflection from Reality inline entry. */
@@ -26744,6 +26791,16 @@ function geodeRealityMonthContextCompactSummary(mc) {
     var s = String(mc.protect);
     if (s.length > 52) s = s.slice(0, 49) + '\u2026';
     return 'In mind: ' + s;
+  }
+  if (mc.worried) {
+    var w = String(mc.worried);
+    if (w.length > 52) w = w.slice(0, 49) + '\u2026';
+    return 'On your mind: ' + w;
+  }
+  if (mc.success) {
+    var u = String(mc.success);
+    if (u.length > 52) u = u.slice(0, 49) + '\u2026';
+    return 'Success would feel like: ' + u;
   }
   return 'Month context saved';
 }
