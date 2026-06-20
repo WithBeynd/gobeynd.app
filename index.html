@@ -7400,6 +7400,150 @@ function geodeSavingsReleaseSuccessToastLine(preview, releaseEvent) {
   return 'Recorded. ' + name + ' now shows ' + fm(remaining) + '.';
 }
 
+/** Stage 80R-D.2.3: factual reserve-use type label for history (no tiers, no emotional copy). */
+function geodeSavingsReleaseHistoryTypeLabel(state, entry) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  entry = entry && typeof entry === 'object' ? entry : {};
+  var st = String(entry.sourceType || '');
+  if (st === 'buffer') return 'Buffer';
+  if (st === 'linked_investment') return 'Linked investment reserve';
+  if (st === 'investment') return 'Investment reserve';
+  var srcKind = st === 'investment' || st === 'linked_investment' ? 'investment' : 'goal';
+  var resolved = geodeSavingsReleaseResolveSource(state, { kind: srcKind, id: entry.sourceId });
+  if (resolved && resolved.kind === 'goal' && geodeIsEmergencyBufferGoal(resolved.entity)) return 'Buffer';
+  return 'Saved amount';
+}
+
+/**
+ * Stage 80R-D.2.3: read-only formatted row for one savingsReleases[] entry.
+ * Observational only — no scoring, recovery framing, or affordability reads.
+ */
+function geodeFormatSavingsReleaseHistoryEntry(state, entry) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  entry = entry && typeof entry === 'object' ? entry : null;
+  if (!entry || toNum(entry.amount) <= 0) return null;
+  if (entry.confirmedByUser === false) return null;
+
+  var sourceName = '';
+  var kind = String(entry.sourceType || '');
+  var srcKind = kind === 'investment' || kind === 'linked_investment' ? 'investment' : 'goal';
+  var resolved = geodeSavingsReleaseResolveSource(state, { kind: srcKind, id: entry.sourceId });
+  if (resolved && resolved.name) sourceName = String(resolved.name).trim();
+  if (!sourceName) sourceName = 'Reserve';
+
+  var dateStr = String(entry.date || '').slice(0, 10);
+  var dateLabel = dateStr ? fd(dateStr) : '';
+  if (!dateLabel && typeof entry.createdAt === 'number') {
+    try {
+      dateLabel = new Date(entry.createdAt).toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      });
+    } catch (_eSrHistDt) {}
+  }
+
+  var remaining = null;
+  if (entry.remainingBalance != null && Number.isFinite(toNum(entry.remainingBalance))) {
+    remaining = Math.round(toNum(entry.remainingBalance) * 100) / 100;
+  }
+
+  var sortTs = 0;
+  if (typeof entry.createdAt === 'number') sortTs = entry.createdAt;
+  else if (dateStr) {
+    try {
+      sortTs = new Date(dateStr + 'T12:00:00').getTime();
+    } catch (_eSrHistSort) {
+      sortTs = 0;
+    }
+  }
+
+  return {
+    id: String(entry.id || ''),
+    sourceName: sourceName,
+    typeLabel: geodeSavingsReleaseHistoryTypeLabel(state, entry),
+    amount: Math.round(toNum(entry.amount) * 100) / 100,
+    dateLabel: dateLabel,
+    remainingBalance: remaining,
+    userNote: String(entry.note || '').trim(),
+    footnote: 'Recorded as reserve use',
+    sortTs: sortTs
+  };
+}
+
+/** Stage 80R-D.2.3: sorted release history rows (newest first). Read-only. */
+function geodeSavingsReleaseHistoryEntries(state, opts) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  opts = opts && typeof opts === 'object' ? opts : {};
+  var limit = opts.limit != null && isFinite(Number(opts.limit)) ? Math.max(1, Number(opts.limit)) : 50;
+  var releases = (state && state.savingsReleases) || [];
+  var rows = [];
+  var i;
+  for (i = 0; i < releases.length; i++) {
+    var fmt = geodeFormatSavingsReleaseHistoryEntry(state, releases[i]);
+    if (fmt) rows.push(fmt);
+  }
+  rows.sort(function (a, b) {
+    return (b.sortTs || 0) - (a.sortTs || 0);
+  });
+  if (rows.length > limit) rows = rows.slice(0, limit);
+  return rows;
+}
+
+/** Stage 80R-D.2.3: archival reserve-use history (Settings data drill only; empty when no events). */
+function geodeSavingsReleaseHistorySectionHtml(state) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var rows = geodeSavingsReleaseHistoryEntries(state, { limit: 50 });
+  if (!rows.length) return '';
+
+  var h = '';
+  h += '<div class="card" data-geode-css="margin-bottom:12px">';
+  h += geodeMeSub('Reserve use history');
+  h +=
+    '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin-bottom:10px">A factual record of reserve use on this device. This does not change Monthly Left or your plan.</div>';
+  h += '<div data-geode-css="display:flex;flex-direction:column;gap:0">';
+  var ri;
+  for (ri = 0; ri < rows.length; ri++) {
+    var row = rows[ri];
+    h += '<div data-geode-css="padding:10px 0;border-bottom:1px solid var(--bd)">';
+    h +=
+      '<div data-geode-css="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">';
+    h +=
+      '<div data-geode-css="font-size:13px;font-weight:600;color:var(--tx-1);min-width:0">' +
+      escHtmlLite(row.sourceName) +
+      '</div>';
+    h +=
+      '<div data-geode-css="font-size:13px;font-weight:600;color:var(--tx-2);flex-shrink:0">' +
+      escHtmlLite('\u2212' + fm(row.amount)) +
+      '</div>';
+    h += '</div>';
+    h +=
+      '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.4;margin-top:4px">' +
+      escHtmlLite(row.typeLabel) +
+      (row.dateLabel ? ' \u00b7 ' + escHtmlLite(row.dateLabel) : '') +
+      '</div>';
+    if (row.remainingBalance != null) {
+      h +=
+        '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.4;margin-top:2px">' +
+        escHtmlLite('Balance after: ' + fm(row.remainingBalance)) +
+        '</div>';
+    }
+    h +=
+      '<div data-geode-css="font-size:10px;color:var(--tx-4);line-height:1.4;margin-top:2px">' +
+      escHtmlLite(row.footnote) +
+      '</div>';
+    if (row.userNote) {
+      h +=
+        '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.4;margin-top:4px">' +
+        escHtmlLite(row.userNote) +
+        '</div>';
+    }
+    h += '</div>';
+  }
+  h += '</div></div>';
+  return h;
+}
+
 /** Stage 81D-3 / 80R-D.2.2: apply a user-confirmed savings release (event-derived ledger; Monthly Left unchanged). */
 function geodeApplySavingsRelease(event) {
   event = event && typeof event === 'object' ? event : {};
@@ -8621,6 +8765,64 @@ function geodeHomePersistentOverBudgetCardVisible(state) {
     } catch (_eQsOb) {}
     return true;
   } catch (_eObVis) {
+    return false;
+  }
+}
+
+/** Display-only: would Home render the persistent over-budget card this frame? (Stage 90B-B) */
+function geodeHomeOverbudgetCardWouldShow(state) {
+  state = state || S;
+  try {
+    return geodeHomeOrchSurfaceShowResolved('overBudget', function () {
+      return geodeHomePersistentOverBudgetCardVisible(state);
+    });
+  } catch (_eObWs) {
+    return geodeHomePersistentOverBudgetCardVisible(state);
+  }
+}
+
+/** Display-only: would Home render the needs-attention card this frame? (Stage 90B-B) */
+function geodeHomeNeedsAttentionWouldShow(state) {
+  state = state || S;
+  try {
+    return (
+      geodeHomeOrchSurfaceShowResolved('needsAttention', function () {
+        return geodeOverdueCardHtml() !== '';
+      }) && geodeOverdueCardHtml() !== ''
+    );
+  } catch (_eNaWs) {
+    return geodeOverdueCardHtml() !== '';
+  }
+}
+
+/**
+ * Display-only: a strong pressure surface already owns Home orientation (Stage 90B-B).
+ * Render guard only — does not mutate state or affect plan math.
+ */
+function geodeHomePressureOwnsNarrative(state) {
+  state = state || S;
+  try {
+    if (geodeHomeOverbudgetCardWouldShow(state)) return true;
+    if (geodeHomeNeedsAttentionWouldShow(state)) return true;
+    var sp = null;
+    try {
+      sp = geodeHomeSoftPriorityContext(state);
+    } catch (_ePonSp) {
+      sp = null;
+    }
+    if (sp && (sp.band === 'critical' || sp.band === 'focused')) return true;
+    var ma = null;
+    try {
+      ma = geodeGetMainAction(state);
+    } catch (_ePonMa) {
+      ma = null;
+    }
+    if (ma && (ma.title || ma.cta)) {
+      var reg = geodeMainActionVisualRegister(ma);
+      if (reg === 'pressure' || reg === 'risk' || reg === 'review') return true;
+    }
+    return false;
+  } catch (_ePon) {
     return false;
   }
 }
@@ -11605,7 +11807,7 @@ function render() {
     if (_ymR) {
       var _prevYm = localStorage.getItem('geode_app_last_ym');
       if (_prevYm && _prevYm !== _ymR) {
-        toast('New month \u2014 your plan has rolled forward.', 'ok', 4200);
+        toast('Your month has carried forward.', 'ok', 4200);
       }
       localStorage.setItem('geode_app_last_ym', _ymR);
     }
@@ -15000,6 +15202,7 @@ function geodeHomePeekWouldShowInsightStrip(opts) {
   if (geodeIsEmptyState()) return false;
   if (geodeGetIncomeContext(S) === 'NONE') return false;
   if (geodeGetIncomeContext(S) !== 'NONE' && !geodeHasMeaningfulMonthlyExpenses(S)) return false;
+  if (geodeHomePressureOwnsNarrative(S)) return false;
 
   if (geodeHasOverdue(S)) {
     try {
@@ -18293,6 +18496,9 @@ function geodeHomeCoachingStripHtml() {
   }
 
   if (_orchStrip.show === true && _orchStrip.type === 'insight') {
+    if (geodeHomePressureOwnsNarrative(S)) {
+      return geodeHomeCoachingStripSafeBlankHtml();
+    }
     return renderInsights();
   }
 
@@ -18327,6 +18533,10 @@ function renderInsights() {
     S._pendingLastShownHighlightTopics = [];
     return '';
   }
+  if (geodeHomePressureOwnsNarrative(S)) {
+    S._pendingLastShownHighlightTopics = [];
+    return '';
+  }
 
   if (geodeHasOverdue(S)) {
     try {
@@ -18337,8 +18547,7 @@ function renderInsights() {
         return (
           '<div class="geode-soft-enter insight-wrap">' +
           '<div class="insight-head">' +
-          geodeIcon('sparkles', 'ic ic-hdr-sm') +
-          '<span>Insight</span><span class="mini-divider"></span></div>' +
+          '<span>Note</span><span class="mini-divider"></span></div>' +
           '<div class="insight-card insight-card--warning">' +
           '<div class="insight-card-row">' +
           '<span class="ic ic-nudge insight-icon">' +
@@ -18509,7 +18718,7 @@ function renderInsights() {
   }
   var h = '<div class="geode-soft-enter insight-wrap">';
   h += '<div class="insight-head">';
-  h += geodeIcon('sparkles', 'ic ic-hdr-sm') + '<span>Insight</span><span class="mini-divider"></span></div>';
+  h += '<span>Note</span><span class="mini-divider"></span></div>';
   for (var i = 0; i < nudges.length; i++) {
     var nd = nudges[i];
     var st = nudgeStyle(nd.type, nd.topic);
@@ -34415,6 +34624,7 @@ function geodeHomeAnticipatoryMaybeHtml(state) {
   state = state || S;
   try {
     if (geodeIsEmptyState()) return '';
+    if (geodeHomeOverbudgetCardWouldShow(state) || geodeHomeNeedsAttentionWouldShow(state)) return '';
     var today = geodeTodayLocalISO();
     if (!today) return '';
     if (String(state.homeFirstOpenDay || '') === today) return '';
@@ -34660,14 +34870,13 @@ function rHome() {
         h +=
           '<div data-geode-css="margin-bottom:14px;padding:16px;border-radius:14px;' +
           'background:var(--vi-pressure);border:1px solid var(--vi-pressure-border);border-left:2px solid var(--vi-pressure-border)">' +
-          '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--guide);margin-bottom:6px">Your plan shows you\u2019re over budget</div>' +
+          '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--guide);margin-bottom:6px">Spending exceeds income</div>' +
           '<div data-geode-css="font-size:18px;font-weight:800;color:var(--guide);margin-bottom:8px">\u2212' + escHtmlLite(fm(_qs_over)) + ' / month</div>' +
           '<div data-geode-css="font-size:12px;color:rgba(237,234,255,0.88);line-height:1.55;margin-bottom:12px">' +
-          escHtmlLite('Based on what you\u2019ve entered, your spending exceeds your income. ' +
-          'That\u2019s exactly what Beynd is here to fix. The plan tab will show you which category to tackle first.') +
+          escHtmlLite('Based on what you\u2019ve entered, your spending exceeds your income. Plan can show which category to adjust first.') +
           '</div>' +
           '<div data-geode-css="font-size:11px;font-weight:600;color:rgba(155,127,232,0.9);margin-bottom:12px">' +
-          escHtmlLite('You\u2019ve done the hard part \u2014 you now know the number. Most people never do.') +
+          escHtmlLite('You now know the number. That is a useful starting point.') +
           '</div>' +
           '<div data-geode-css="display:flex;gap:8px;flex-wrap:wrap">' +
           '<button type="button" class="btn btn-p" data-geode-css="flex:2;min-width:140px" onclick="goTab(\'plan\')">See what to reduce</button>' +
@@ -34709,7 +34918,7 @@ function rHome() {
         '<path d="M10 3a7 7 0 100 14A7 7 0 0010 3zm0 3v5m0 2v1" stroke="#9b7fe8" stroke-width="1.6" stroke-linecap="round"/>' +
         '</svg>' +
         '<div data-geode-css="font-size:11px;color:rgba(155,127,232,0.9);line-height:1.4;font-weight:500">' +
-        'Buffer-first mode — your plan adjusts for variable income.' +
+        'Buffer-first mode. Your plan adjusts for variable income.' +
         ' <span class="link-like" onclick="geodeOpenSettingsAction(\'income_type\')" data-geode-css="font-size:11px">Change income type</span>' +
         '</div></div>';
     }
@@ -34731,14 +34940,14 @@ function rHome() {
         'background:var(--vi-pressure);border:1px solid var(--vi-pressure-border);' +
         'border-left:2px solid var(--vi-pressure-border);-webkit-tap-highlight-color:transparent;outline:none">';
       h += '<div data-geode-css="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">';
-      h += '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--guide)">Over budget</div>';
+      h += '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--guide)">This month</div>';
       h += '<div data-geode-css="display:flex;align-items:center;gap:8px;flex-shrink:0">';
       h += '<div data-geode-css="font-size:16px;font-weight:800;color:var(--guide)">−' + escHtmlLite(fm(_homeOver)) + '</div>';
       h +=
         '<span data-geode-css="font-size:16px;color:rgba(189,183,220,0.45);line-height:1;flex-shrink:0" aria-hidden="true">\u203a</span>';
       h += '</div></div>';
       h += '<div data-geode-css="font-size:11px;color:rgba(237,234,255,0.8);line-height:1.5">' +
-        escHtmlLite('Your spending exceeds income by ' + fm(_homeOver) + ' this month. Review where this month is under pressure.') +
+        escHtmlLite('Your spending exceeds income by ' + fm(_homeOver) + ' this month. Plan can show where to adjust.') +
         '</div>';
       h += '</div>';
     }
@@ -34788,6 +34997,11 @@ function rHome() {
       _homeSubRenewCardVisible = false;
     } else {
       _homeSubRenewCardVisible = true;
+    }
+    try {
+      if (calcMonthlyLeftover(S) < 0) _homeSubRenewCardVisible = false;
+    } catch (_eSubNeg) {
+      _homeSubRenewCardVisible = false;
     }
     if (_homeSubRenewCardVisible) {
     var _sCardItems = geodeListSubscriptionReminderItems(S);
@@ -34876,17 +35090,33 @@ function rHome() {
 
   if (_homeShowGoalPreview) {
     var g = selectPrimaryGoal(S.goals) || S.goals[0];
-    var _focusGoalStrip = false;
+    var _focusGoalCompact = false;
     try {
-      if (geodeHomeMainActionInsightKind() === 'goal') {
+      var _orchFgMode = window._geodeHomeOrchestrationResolve;
+      if (
+        _orchFgMode &&
+        _orchFgMode.surfaces &&
+        _orchFgMode.surfaces.focusGoal &&
+        _orchFgMode.surfaces.focusGoal.mode === 'compact'
+      ) {
+        _focusGoalCompact = true;
+      }
+    } catch (_eFgOrch) {}
+    try {
+      if (!_focusGoalCompact && geodeHomeMainActionInsightKind() === 'goal') {
         var _dedSt = geodeHomeResolvedPlanStepForDedup(S);
         var _dedIds = _dedSt ? geodeHomePlanStepDebtGoalIds(_dedSt) : { goalId: '' };
-        _focusGoalStrip = !!(_dedIds.goalId && String(g.id) === String(_dedIds.goalId));
+        _focusGoalCompact = !!(_dedIds.goalId && String(g.id) === String(_dedIds.goalId));
       }
     } catch (_eFgs) {}
+    try {
+      if (!_focusGoalCompact && geodeHomePressureOwnsNarrative(S)) {
+        _focusGoalCompact = true;
+      }
+    } catch (_eFgPres) {}
     var gEffH = geodeGoalEffectiveSaved(g);
     var p = g.amount > 0 ? Math.min(100, gEffH / Number(g.amount) * 100) : 0;
-    if (_focusGoalStrip) {
+    if (_focusGoalCompact) {
       h +=
         '<div data-geode-css="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;margin-top:20px;margin-bottom:8px;border-radius:14px;background:var(--bg-surface);border:1px solid var(--bd);cursor:pointer" onclick="goTab(\'goals\')">';
       h +=
@@ -39191,6 +39421,7 @@ function geodeBuildSettingsDataDrillHtml() {
   h +=
     '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45">No account. No server sync. Nothing uploaded or sold.</div>';
   h += '</div>';
+  h += geodeSavingsReleaseHistorySectionHtml(S);
   h += '<div class="card">';
   h += geodeMeSub('Export &amp; backup');
   h += geodeMeRow('Export CSV', 'Spreadsheet summary. Not a full restore file.', 'exportCSV()', 'Export');
