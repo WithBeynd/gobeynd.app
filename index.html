@@ -1386,7 +1386,7 @@ var S = {
   /** K7.1: whether user supports others financially (display / nudges only) */
   hasDependants: false,
   goals: [], debts: [], payments: [], expenses: [], archivedExpenses: [], beyondStatement: [], investments: [],
-  /** Stage 81D-3: user-confirmed savings releases (mutates baseSaved/baseBalance only). */
+  /** Stage 81D-3 / 80R-D.2.2: user-confirmed savings releases (event-derived ledger; recompute applies deductions). */
   savingsReleases: [],
   /** Monthly totals keyed by YYYY-MM (one object per month, overwritten on update). */
   snapshots: {},
@@ -1657,6 +1657,8 @@ function load() {
   geodeNormalizeGoalInvestBaseFields();
   geodeNormalizeDebtHealthFields(S);
   geodeNormalizeSavingsReleases(S);
+  /** Stage 80R-D.1: align display saved/balance with base fields + paid payments after boot. */
+  geodeRecomputeBalancesFromPayments();
   if (typeof S.incomeExplicitlySet !== 'boolean') {
     if (toNum(S.income) > 0) {
       S.incomeExplicitlySet = true;
@@ -4480,6 +4482,30 @@ function calcTotals(state) {
   return { tDebt: tDebt, tGS: tGS, tGT: tGT, tInv: tInv, assets: assets, net: net };
 }
 
+/**
+ * Stage 80R-D.2.2: sum confirmed event-derived release deductions for one reserve sourceId.
+ * Legacy records without balanceMutationMode or with base_delta are excluded (deduction already in base fields).
+ */
+function geodeSavingsReleaseDeductionSumForSource(state, sourceId) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  sourceId = String(sourceId || '');
+  if (!sourceId || !state) return 0;
+  var releases = state.savingsReleases || [];
+  var sum = 0;
+  var i;
+  for (i = 0; i < releases.length; i++) {
+    var r = releases[i];
+    if (!r || String(r.sourceId || '') !== sourceId) continue;
+    if (r.confirmedByUser === false) continue;
+    var mode = String(r.balanceMutationMode || 'base_delta');
+    if (mode !== 'event_derived') continue;
+    var amt = toNum(r.amount);
+    if (amt <= 0) continue;
+    sum += amt;
+  }
+  return Math.round(sum * 100) / 100;
+}
+
 function geodeRecomputeBalancesFromPayments() {
   try {
     (S.goals || []).forEach(function (g) {
@@ -4509,6 +4535,22 @@ function geodeRecomputeBalancesFromPayments() {
           return x.id === p.investId;
         })[0];
         if (inv) inv.balance += amt;
+      }
+    });
+
+    (S.goals || []).forEach(function (g) {
+      if (!g || g.id == null) return;
+      var ded = geodeSavingsReleaseDeductionSumForSource(S, g.id);
+      if (ded > 0) {
+        g.saved = Math.max(0, Math.round((toNum(g.saved) - ded) * 100) / 100);
+      }
+    });
+
+    (S.investments || []).forEach(function (inv) {
+      if (!inv || inv.id == null) return;
+      var dedInv = geodeSavingsReleaseDeductionSumForSource(S, inv.id);
+      if (dedInv > 0) {
+        inv.balance = Math.max(0, Math.round((toNum(inv.balance) - dedInv) * 100) / 100);
       }
     });
   } catch (e) {
@@ -6277,6 +6319,16 @@ function geodeNormalizeSavingsReleases(state) {
       confirmedByUser: r.confirmedByUser !== false,
       note: String(r.note || '')
     };
+    if (r.reserveClass) rec.reserveClass = String(r.reserveClass);
+    if (r.reserveTier != null && Number.isFinite(Number(r.reserveTier))) {
+      rec.reserveTier = Number(r.reserveTier);
+    }
+    if (r.copyKey) rec.copyKey = String(r.copyKey);
+    if (r.balanceMutationMode) {
+      rec.balanceMutationMode = String(r.balanceMutationMode);
+    } else {
+      rec.balanceMutationMode = 'base_delta';
+    }
     if (!rec.sourceId || rec.amount <= 0) continue;
     out.push(rec);
   }
@@ -7324,7 +7376,31 @@ function geodeSavingsReleaseCopyForSource(meta, context) {
   return out;
 }
 
-/** Stage 81D-3: apply a user-confirmed savings release (base fields only; Monthly Left unchanged). */
+/** Stage 80R-D.1: post-confirm toast — remaining balance only; no Monthly Left / overbudget relief. */
+function geodeSavingsReleaseSuccessToastLine(preview, releaseEvent) {
+  preview = preview && typeof preview === 'object' ? preview : {};
+  releaseEvent = releaseEvent && typeof releaseEvent === 'object' ? releaseEvent : {};
+  var remaining = releaseEvent.remainingBalance;
+  if (remaining == null || !Number.isFinite(toNum(remaining))) {
+    return geodeSavingsReleaseCopyForSource(preview, {
+      amount: preview.amount,
+      kind: 'success'
+    }).successLine;
+  }
+  remaining = Math.round(toNum(remaining) * 100) / 100;
+  var name = String(preview.sourceName || releaseEvent.sourceName || '').trim();
+  if (!name) {
+    name =
+      preview.sourceType === 'buffer'
+        ? 'Your buffer'
+        : preview.sourceType === 'investment' || preview.sourceType === 'linked_investment'
+          ? 'Your investment reserve'
+          : 'Your reserve';
+  }
+  return 'Recorded. ' + name + ' now shows ' + fm(remaining) + '.';
+}
+
+/** Stage 81D-3 / 80R-D.2.2: apply a user-confirmed savings release (event-derived ledger; Monthly Left unchanged). */
 function geodeApplySavingsRelease(event) {
   event = event && typeof event === 'object' ? event : {};
   var sourceId = String(event.sourceId || '');
@@ -7346,19 +7422,6 @@ function geodeApplySavingsRelease(event) {
 
   setLastSnapshotBeforeChange();
 
-  if (resolved.kind === 'goal') {
-    var g = resolved.entity;
-    if (g.baseSaved === undefined) g.baseSaved = toNum(g.saved);
-    g.baseSaved = Math.max(0, Math.round((toNum(g.baseSaved) - amt) * 100) / 100);
-  } else {
-    var inv = resolved.entity;
-    if (inv.baseBalance === undefined) inv.baseBalance = toNum(inv.balance);
-    inv.baseBalance = Math.max(0, Math.round((toNum(inv.baseBalance) - amt) * 100) / 100);
-  }
-
-  geodeRecomputeBalancesFromPayments();
-
-  var remaining = Math.round(geodeSavingsReleaseAvailableBalance(S, src) * 100) / 100;
   var ym = currentYM();
   var releaseRecord = {
     id: String(event.id || uid()),
@@ -7369,14 +7432,47 @@ function geodeApplySavingsRelease(event) {
     date: String(event.date || geodeTodayLocalISO()).slice(0, 10),
     ym: String(event.ym || ym),
     relatedYm: String(event.relatedYm || ym),
-    remainingBalance: remaining,
+    remainingBalance: 0,
     createdAt: typeof event.createdAt === 'number' ? event.createdAt : Date.now(),
     confirmedByUser: event.confirmedByUser !== false,
-    note: String(event.note || '')
+    note: String(event.note || ''),
+    balanceMutationMode: 'event_derived'
   };
+  if (event.reserveClass || elig.reserveClass) {
+    releaseRecord.reserveClass = String(event.reserveClass || elig.reserveClass || '');
+  }
+  if (event.reserveTier != null || elig.reserveTier != null) {
+    releaseRecord.reserveTier = event.reserveTier != null ? Number(event.reserveTier) : Number(elig.reserveTier);
+  }
+  if (event.copyKey || elig.copyKey) {
+    releaseRecord.copyKey = String(event.copyKey || elig.copyKey || '');
+  }
 
   if (!S.savingsReleases || !Array.isArray(S.savingsReleases)) S.savingsReleases = [];
   S.savingsReleases.push(releaseRecord);
+
+  geodeRecomputeBalancesFromPayments();
+
+  var remaining = Math.round(geodeSavingsReleaseAvailableBalance(S, src) * 100) / 100;
+  releaseRecord.remainingBalance = remaining;
+
+  try {
+    var canonRemaining = Math.round(geodeSavingsReleaseAvailableBalance(S, src) * 100) / 100;
+    var auditOk = Math.abs(canonRemaining - remaining) <= 0.01;
+    if (!auditOk) {
+      console.warn('[geode] savings release remaining mismatch', {
+        remaining: remaining,
+        canonRemaining: canonRemaining
+      });
+    }
+    window._geodeLastSavingsReleaseAudit = {
+      remaining: remaining,
+      canonRemaining: canonRemaining,
+      ok: auditOk,
+      sourceId: sourceId,
+      amount: amt
+    };
+  } catch (_eSrAud) {}
 
   appendActivityLog('savings_release', -amt, {
     sourceType: releaseRecord.sourceType,
@@ -7384,12 +7480,14 @@ function geodeApplySavingsRelease(event) {
     sourceName: elig.sourceName,
     reason: releaseRecord.reason,
     releaseId: releaseRecord.id,
-    relatedYm: releaseRecord.relatedYm
+    relatedYm: releaseRecord.relatedYm,
+    reserveClass: releaseRecord.reserveClass,
+    reserveTier: releaseRecord.reserveTier
   });
 
   save();
   render();
-  return { ok: true, event: releaseRecord };
+  return { ok: true, event: releaseRecord, remainingBalance: remaining };
 }
 
 function geodeSavingsReleaseReadModalUi() {
@@ -7509,15 +7607,17 @@ function geodeConfirmSavingsRelease() {
     reason: ui.reason,
     note: ui.note,
     relatedYm: currentYM(),
-    confirmedByUser: true
+    confirmedByUser: true,
+    reserveClass: preview.reserveClass,
+    reserveTier: preview.reserveTier,
+    copyKey: preview.copyKey
   });
   if (!result.ok) {
     toast('Could not record release.', 'warn');
     return;
   }
   closeModal();
-  var successCopy = geodeSavingsReleaseCopyForSource(preview, { amount: preview.amount, kind: 'success' });
-  toast(successCopy.successLine, 'ok');
+  toast(geodeSavingsReleaseSuccessToastLine(preview, result.event), 'ok');
 }
 
 function geodeOpenSavingsReleaseModal() {
