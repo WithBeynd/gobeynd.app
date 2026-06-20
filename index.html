@@ -26591,6 +26591,57 @@ function geodeClearRealityReturnOrigin() {
   } catch (_eRrClr) {}
 }
 
+/** Stage 91C: read-only status line for Money overview Reality tile (no new persistence). */
+function geodeRealityMoneyTileStatusLine(state) {
+  state = state || S;
+  try {
+    var rs = geodeRealityStatus();
+    if (!rs || !rs.hasData) return 'Not added this month';
+    if (rs.activitySinceCheck) return 'Activity since last save';
+    if (typeof rs.daysOld === 'number' && rs.daysOld > 7) return 'Saved earlier this month';
+    if (typeof rs.daysOld === 'number' && rs.daysOld > 3) return 'Saved a few days ago';
+    return 'On file this month';
+  } catch (_eRcMt) {
+    return '';
+  }
+}
+
+/**
+ * Stage 91C: ambient Home to Reality routing (display only).
+ * Suppressed under pressure, empty state, and when post-QS prompt already offers entry.
+ */
+function geodeHomeRealityEntryHtml(state) {
+  state = state || S;
+  try {
+    if (geodeIsEmptyState()) return '';
+    if (geodeGetIncomeContext(state) === 'NONE') return '';
+    if (!geodeHasMeaningfulMonthlyExpenses(state)) return '';
+    if (geodeHomePressureOwnsNarrative(state)) return '';
+    try {
+      if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('geode_post_qs_reality_prompt') === '1') {
+        return '';
+      }
+    } catch (_eRcHomeQs) {}
+    var rs = geodeRealityStatus();
+    var line = 'Compare balance with this month';
+    if (!rs || !rs.hasData) {
+      line = 'Add a balance check for this month';
+    } else if (rs.activitySinceCheck || (typeof rs.daysOld === 'number' && rs.daysOld > 7)) {
+      line = 'Refresh your balance check';
+    }
+    return (
+      '<button type="button" onclick="geodeNavigateToReality(\'home\')" ' +
+      'data-geode-css="display:block;width:100%;margin:10px 0 2px;padding:0;border:none;background:transparent;' +
+      'font-family:inherit;font-size:11px;font-weight:600;color:rgba(155,127,232,0.88);cursor:pointer;' +
+      'line-height:1.45;text-align:left;-webkit-tap-highlight-color:transparent;outline:none">' +
+      escHtmlLite(line) +
+      ' \u203a</button>'
+    );
+  } catch (_eRcHome) {
+    return '';
+  }
+}
+
 function geodeMarkRealitySavedThisVisit() {
   try {
     if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('geode_reality_saved_visit', '1');
@@ -27082,7 +27133,10 @@ function geodeReflectionStackForSurface(state) {
       dismissedThisMonth: geodeGetReflectionEntryDismissed()
     });
     if (!gate || gate.visibility === 'hidden') return null;
-    var exp = geodeStabilityRoomExperienceModel(snap, vm, gate, { maxBlocks: 3 });
+    var exp = geodeStabilityRoomExperienceModel(snap, vm, gate, {
+      maxBlocks: 3,
+      completionAftermathActive: geodeReflectionAftermathFromSession()
+    });
     if (!exp || !Array.isArray(exp.blocks) || !exp.blocks.length) return null;
     var stack = { snap: snap, vm: vm, gate: gate, exp: exp };
     try {
@@ -27671,7 +27725,7 @@ function geodeRealityPageHtml() {
   h +=
     '<div class="reality-head">' +
     '<div class="reality-title">' +
-    escHtmlLite('Reality check') +
+    escHtmlLite('This month') +
     '</div>' +
     '<div class="reality-subtitle">' +
     escHtmlLite('Compare your monthly estimate with your balance today.') +
@@ -32114,6 +32168,104 @@ function geodeCrossSurfacePacingNeutralMonthSoFarBody(atmosphere) {
   return 'The month is still unfolding.';
 }
 
+/**
+ * Stage 91D-B: read-only low-allocation signal from existing snapshot fields only.
+ * Does not mutate state or call affordability producers beyond snapshot assembly.
+ */
+function geodeReflectionLowAllocationFromSnapshot(snapshot) {
+  snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  try {
+    var noticed = snapshot.noticed && typeof snapshot.noticed === 'object' ? snapshot.noticed : {};
+    var homeBand = noticed.homeBand != null ? String(noticed.homeBand) : 'open';
+    if (homeBand === 'critical' || homeBand === 'focused') return true;
+    var planFocus = snapshot.planFocus && typeof snapshot.planFocus === 'object' ? snapshot.planFocus : {};
+    var steps = Array.isArray(planFocus.topSteps) ? planFocus.topSteps : [];
+    if (!steps.length) return true;
+    var sum = 0;
+    var i;
+    for (i = 0; i < steps.length; i++) {
+      if (steps[i]) sum += toNum(steps[i].amount);
+    }
+    if (sum <= 0) return true;
+    var br =
+      noticed.breathingRoomIntent && typeof noticed.breathingRoomIntent === 'object'
+        ? noticed.breathingRoomIntent
+        : {};
+    if ((br.preserveBreathingRoom === true || br.memorySoftened === true) && sum <= 50) {
+      return true;
+    }
+    return false;
+  } catch (_eRlaSnap) {
+    return false;
+  }
+}
+
+/** Stage 91D-B: session-only post-action aftermath (existing Home flag; display read only). */
+function geodeReflectionAftermathFromSession() {
+  try {
+    return window._geodeOverdueCleared === true;
+  } catch (_eRaftSess) {
+    return false;
+  }
+}
+
+/** Stage 91D-B: background block body from held-back parts (copy only). */
+function geodeReflectionBackgroundBody(lowAllocation, bgParts) {
+  var parts = bgParts && bgParts.length ? bgParts.join(' ') : '';
+  if (lowAllocation) {
+    if (parts) {
+      return (
+        'Home held a few items back on purpose so this month could stay manageable. ' + parts
+      );
+    }
+    return (
+      'Home held a few items back on purpose so this month could stay manageable. Nothing here was forgotten.'
+    );
+  }
+  if (parts) {
+    return 'Home kept a few things quiet on purpose. ' + parts;
+  }
+  return 'Home kept a few things quiet on purpose so this month could stay manageable.';
+}
+
+/** Stage 91D-B: plan_protecting block body (copy only; existing planFocus fields). */
+function geodeReflectionPlanProtectBody(planFocus, lowAllocation, aftermath, sanitizeFn) {
+  planFocus = planFocus && typeof planFocus === 'object' ? planFocus : {};
+  sanitizeFn = typeof sanitizeFn === 'function' ? sanitizeFn : function (t) { return String(t || ''); };
+  var summary = String(planFocus.headlineSummary || '').trim();
+  var strategy = String(planFocus.strategyDisplayName || '').trim();
+  if (aftermath && lowAllocation) {
+    return 'One urgent item is no longer competing for attention on Home. The month may feel slightly quieter now.';
+  }
+  if (aftermath) {
+    return 'One urgent item is no longer competing for attention on Home.';
+  }
+  if (lowAllocation) {
+    if (summary) {
+      return (
+        'There is little room for new allocation right now. Your plan is still oriented around ' +
+        sanitizeFn(summary, 100) +
+        '.'
+      );
+    }
+    if (strategy) {
+      return (
+        'There is little room for new allocation right now. Your ' +
+        sanitizeFn(strategy, 80) +
+        ' plan still defines what the month is carrying.'
+      );
+    }
+    return 'There is little room for new allocation right now. Your existing commitments still define what the month is carrying.';
+  }
+  if (!summary && strategy) {
+    return 'Your ' + sanitizeFn(strategy, 80) + ' plan is still guiding this month.';
+  }
+  if (summary) {
+    return 'Your plan is still looking after ' + sanitizeFn(summary, 100) + '.';
+  }
+  return 'Your plan is still guiding what matters this month.';
+}
+
 /** Stage 80N-N.1-C: stable idea bucket for cross-surface pacing suppress (shadow-only). */
 function geodeCrossSurfacePacingNormalizeIdea(candidate) {
   candidate = candidate && typeof candidate === 'object' ? candidate : {};
@@ -33019,6 +33171,10 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
       deferredWithCopy ||
       mutedLines.length > 0;
 
+    var lowAllocation = geodeReflectionLowAllocationFromSnapshot(snapshot);
+    var aftermathActive =
+      opts.completionAftermathActive === true || geodeReflectionAftermathFromSession();
+
     var blockMap = {};
     var crossSurfaceSuppressVerdict = null;
 
@@ -33058,16 +33214,20 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
     if (sectionVisible('what_beynd_noticed')) {
       var monthSoFarBody = '';
       if (atmosphere === 'calm') {
-        monthSoFarBody = 'So far this month reads steady from here.';
+        monthSoFarBody = lowAllocation
+          ? 'The month is tight on allocation, but it still holds together from here.'
+          : 'So far this month reads steady from here.';
       } else if (atmosphere === 'reflective') {
         monthSoFarBody =
           'What you shared fits with a few threads worth holding together this month.';
       } else if (atmosphere === 'protective') {
-        monthSoFarBody =
-          'This month looks easier with flexibility kept in view before anything new.';
+        monthSoFarBody = lowAllocation
+          ? 'This month is carrying a lot. Flexibility stays in view before anything new.'
+          : 'This month looks easier with flexibility kept in view before anything new.';
       } else if (atmosphere === 'recovering') {
-        monthSoFarBody =
-          'A couple of things stayed in the background so Home could stay calm.';
+        monthSoFarBody = lowAllocation
+          ? 'Home held some items back on purpose so this month could stay manageable.'
+          : 'A couple of things stayed in the background so Home could stay calm.';
       } else if (atmosphere === 'room') {
         monthSoFarBody =
           'There is a little space in the month, without treating it as money to spend.';
@@ -33110,6 +33270,10 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
       } catch (_eCssMsfWire) {
         crossSurfaceSuppressVerdict = null;
       }
+      if (aftermathActive && !monthSoFarNeutralised) {
+        monthSoFarBody =
+          'One urgent item is no longer competing for attention on Home. The month may feel slightly quieter now.';
+      }
       var bRegister =
         visualModel.viRegister != null ? String(visualModel.viRegister) : 'guidance';
       blockMap.month_so_far = {
@@ -33134,7 +33298,9 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
     var showBackground =
       heldBackSignals &&
       sectionVisible('what_home_kept_quiet') &&
-      (atmosphere === 'recovering' || atmosphere === 'reflective');
+      (atmosphere === 'recovering' ||
+        atmosphere === 'reflective' ||
+        (lowAllocation && atmosphere === 'protective'));
     var showPlanProtect =
       sectionVisible('what_plan_protecting') &&
       (atmosphere === 'calm' ||
@@ -33155,41 +33321,35 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
           bgParts.push(sanitizeCopy(deferred[di].humanCopy, 160));
         }
       }
-      var bgBody =
-        bgParts.length > 0
-          ? 'Home kept a few things quiet on purpose. ' + bgParts.join(' ')
-          : 'Home kept a few things quiet on purpose so this month could stay focused.';
+      var bgBody = geodeReflectionBackgroundBody(lowAllocation, bgParts);
       blockMap.background = {
         id: 'background',
         register: 'recovery',
         registerClass: registerClass('recovery'),
-        headline: 'What stayed in the background',
-        body: sanitizeCopy(bgBody, 200),
+        headline: lowAllocation ? 'What Home held back on purpose' : 'What stayed in the background',
+        body: sanitizeCopy(bgBody, 220),
         visible: true,
         spacing: blockSpacing(),
         source: 'heldBack'
       };
     } else if (showPlanProtect) {
-      var planLine = String(planFocus.headlineSummary || '').trim();
-      if (!planLine && String(planFocus.strategyDisplayName || '').trim()) {
-        planLine =
-          'Your ' +
-          sanitizeCopy(planFocus.strategyDisplayName, 80) +
-          ' plan is still guiding this month.';
-      } else if (planLine) {
-        planLine = 'Your plan is still looking after ' + sanitizeCopy(planLine, 100) + '.';
-      } else {
-        planLine = 'Your plan is still guiding what matters this month.';
-      }
+      var planAftermath =
+        aftermathActive && !sectionVisible('what_beynd_noticed');
+      var planLine = geodeReflectionPlanProtectBody(
+        planFocus,
+        lowAllocation,
+        planAftermath,
+        sanitizeCopy
+      );
       blockMap.plan_protecting = {
         id: 'plan_protecting',
         register: 'guidance',
         registerClass: registerClass('guidance'),
-        headline: 'What your plan is protecting',
-        body: sanitizeCopy(planLine, 120),
+        headline: lowAllocation ? 'What still holds this month' : 'What your plan is protecting',
+        body: sanitizeCopy(planLine, 160),
         visible: true,
         spacing: blockSpacing(),
-        source: 'planFocus'
+        source: lowAllocation ? 'planFocus_constrained' : 'planFocus'
       };
     }
 
@@ -33251,6 +33411,12 @@ function geodeStabilityRoomExperienceModel(snapshot, visualModel, entryGate, opt
       orderIds = ['what_matters_this_month', 'plan_protecting', 'month_so_far', 'background'];
     } else if (atmosphere === 'recovering') {
       orderIds = ['what_matters_this_month', 'background', 'month_so_far', 'plan_protecting'];
+    }
+
+    if (lowAllocation && blockMap.background) {
+      if (atmosphere === 'protective' || atmosphere === 'recovering') {
+        orderIds = ['what_matters_this_month', 'background', 'month_so_far', 'plan_protecting'];
+      }
     }
 
     if (blockMap.noticed_tier_c) {
@@ -35087,6 +35253,9 @@ function rHome() {
       'My goals</button>';
   }
   h += '</div>';
+  try {
+    h += geodeHomeRealityEntryHtml(S);
+  } catch (_eRcHomeRh) {}
 
   if (_homeShowGoalPreview) {
     var g = selectPrimaryGoal(S.goals) || S.goals[0];
@@ -35295,8 +35464,9 @@ function rPlan() {
     try {
       var _sL = '';
       var _iCtx = geodeGetIncomeContext(S);
-      var _hD = !!selectWorstHighAprDebt(S.debts, 10) && calcMonthlyLeftover(S) > 50;
       var _lft = calcMonthlyLeftover(S);
+      var _hasHighAprDebt = !!selectWorstHighAprDebt(S.debts, 10);
+      var _hasRoomForDebtStep = _hasHighAprDebt && _lft > 50;
       var _bT = geodeResolveBufferTarget(S);
       var _egBufIntro = getFirstEmergencyGoal(S);
       var _bS = _egBufIntro
@@ -35305,10 +35475,13 @@ function rPlan() {
       var _bSh = _bT>0 && _bS<_bT*0.9;
       if (_iCtx==='IRREGULAR') { _sL='Variable income: buffer sits before goals so a quieter month doesn\u2019t knock the rest off course.'; }
       else if (_lft<0) { _sL=''; }
-      else if (_hD&&_bSh) { _sL=S.planStrategy==='debt' ? 'High-interest debt is in play; a modest buffer still comes first so a surprise doesn\u2019t mean new borrowing. Debt follows next.' : 'Debt and a buffer gap both show; the buffer builds first so surprises are less likely to mean new borrowing.'; }
-      else if (_hD) { _sL='This debt sits first because its interest costs the most each month. Adjust if something else needs attention right now.'; }
-      else if (_bSh) { _sL='No high-interest debt flagged; the buffer is next so you have room before longer-term goals.'; }
-      else if (S.goals&&S.goals.length>0) { _sL='Debt and buffer look lighter; there\u2019s more room for goals this month. Reorder goals if one matters more now.'; }
+      else if (_hasHighAprDebt && !_hasRoomForDebtStep) { _sL='High-interest debt is still in view, but this month has little spare room for extra movement.'; }
+      else if (_hasHighAprDebt && _hasRoomForDebtStep) { _sL='High-interest debt is in view, so Beynd keeps it near the front of this month.'; }
+      else if (!_hasHighAprDebt && _bSh && !_egBufIntro && _lft <= 50) { _sL='A safety buffer still matters, but this month has little spare room.'; }
+      else if (!_hasHighAprDebt && _bSh && !_egBufIntro && _lft > 50) { _sL='A safety buffer would come before longer-term goals when there is room.'; }
+      else if (!_hasHighAprDebt && _bSh && _egBufIntro && _lft <= 50) { _sL='Your buffer still matters, but this month has little spare room.'; }
+      else if (!_hasHighAprDebt && _bSh && _egBufIntro && _lft > 50) { _sL='Your buffer is next, before longer-term goals.'; }
+      else { _sL='Beynd is keeping this month realistic based on what you entered.'; }
       if (_sL) { h+='<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.55;margin-bottom:16px;padding:10px 14px;border-radius:10px;background:rgba(255,255,255,0.025);border-left:2px solid var(--gem)">'+escHtmlLite(_sL)+'</div>'; }
     } catch(_eSt) {}
 
@@ -36248,14 +36421,17 @@ function rMoney() {
     '</div>' +
     '</div>';
   h +=
-    '<div tabindex="0" role="button" onclick="geodeNavigateToReality(\'money\')" onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeNavigateToReality(\'money\');}}catch(__rk){}" data-geode-css="margin:0 0 14px;padding:12px 14px;border-radius:13px;border:1px solid rgba(155,127,232,0.22);background:rgba(155,127,232,0.06);cursor:pointer" aria-label="Reality check">' +
+    '<div tabindex="0" role="button" onclick="geodeNavigateToReality(\'money\')" onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeNavigateToReality(\'money\');}}catch(__rk){}" data-geode-css="margin:0 0 14px;padding:12px 14px;border-radius:13px;border:1px solid rgba(155,127,232,0.22);background:rgba(155,127,232,0.06);cursor:pointer" aria-label="This month balance check">' +
     '<div data-geode-css="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">' +
     '<div data-geode-css="min-width:0">' +
     '<div data-geode-css="font-size:10px;font-weight:700;color:rgba(155,127,232,0.95);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px">' +
-    escHtmlLite('Reality check') +
+    escHtmlLite('This month') +
     '</div>' +
     '<div data-geode-css="font-size:12px;color:rgba(237,234,255,0.88);line-height:1.45">' +
     escHtmlLite('Compare your monthly estimate with today\u2019s balance.') +
+    '</div>' +
+    '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.62);line-height:1.4;margin-top:6px">' +
+    escHtmlLite(geodeRealityMoneyTileStatusLine(S)) +
     '</div></div>' +
     '<span data-geode-css="font-size:16px;color:rgba(155,127,232,0.55);line-height:1;margin-top:2px;flex-shrink:0" aria-hidden="true">\u203a</span>' +
     '</div></div>';
