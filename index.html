@@ -6829,6 +6829,166 @@ function geodeSavingsReleaseSourceType(state, source) {
   return 'investment';
 }
 
+/**
+ * Stage 80R-C: deterministic reserve classification for Savings Release (read-only; no Plan/affordability writes).
+ * Uses existing goal.cat, buffer heuristics, investment.type, horizon, purpose, goalId only.
+ */
+function geodeReserveClassifySource(state, source) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var out = {
+    reserveClass: 'unknown_reserve',
+    reserveTier: 2,
+    eligibleForRelease: false,
+    copyKey: 'tradeoff',
+    reasonCodes: []
+  };
+  var resolved = geodeSavingsReleaseResolveSource(state, source);
+  if (!resolved || !resolved.entity) {
+    out.reasonCodes.push('source_not_found');
+    return out;
+  }
+  var entity = resolved.entity;
+  if (entity.releaseProtected === true) {
+    out.reserveClass = 'protected_reserve';
+    out.reserveTier = 4;
+    out.eligibleForRelease = false;
+    out.copyKey = 'hidden';
+    out.reasonCodes.push('release_protected');
+    return out;
+  }
+  if (resolved.kind === 'goal') {
+    if (geodeIsEmergencyBufferGoal(entity)) {
+      out.reserveClass = 'continuity_reserve';
+      out.reserveTier = 0;
+      out.eligibleForRelease = true;
+      out.copyKey = 'continuity';
+      return out;
+    }
+    var gcat = String(entity.cat || '').toLowerCase();
+    if (gcat === 'retirement') {
+      out.reserveClass = 'locked_capital';
+      out.reserveTier = 4;
+      out.eligibleForRelease = false;
+      out.copyKey = 'hidden';
+      out.reasonCodes.push('goal_cat_retirement');
+      return out;
+    }
+    if (
+      gcat &&
+      gcat !== 'other' &&
+      gcat !== 'emergency'
+    ) {
+      out.reserveClass = 'purpose_reserve';
+      out.reserveTier = 2;
+      out.eligibleForRelease = true;
+      out.copyKey = 'tradeoff';
+      return out;
+    }
+    out.reserveClass = 'unknown_reserve';
+    out.reserveTier = 2;
+    out.eligibleForRelease = true;
+    out.copyKey = 'tradeoff';
+    out.reasonCodes.push('goal_unknown');
+    return out;
+  }
+  var invType = String(entity.type || '').toLowerCase();
+  var horizon = String(entity.horizon || '').trim();
+  var purpose = String(entity.purpose || '').trim();
+  var hasGoalLink = !!String(entity.goalId || '');
+  if (invType === 'pension' || invType === 'property') {
+    out.reserveClass = 'locked_capital';
+    out.reserveTier = 4;
+    out.eligibleForRelease = false;
+    out.copyKey = 'hidden';
+    out.reasonCodes.push('inv_type_locked');
+    return out;
+  }
+  if (horizon === 'long') {
+    out.reserveClass = 'locked_capital';
+    out.reserveTier = 4;
+    out.eligibleForRelease = false;
+    out.copyKey = 'hidden';
+    out.reasonCodes.push('horizon_long');
+    return out;
+  }
+  if (invType === 'savings') {
+    out.reserveClass = 'flexible_reserve';
+    out.reserveTier = 1;
+    out.eligibleForRelease = true;
+    out.copyKey = 'flexible';
+    return out;
+  }
+  if (invType === 'isa' && horizon === 'short') {
+    out.reserveClass = 'flexible_reserve';
+    out.reserveTier = 1;
+    out.eligibleForRelease = true;
+    out.copyKey = 'flexible';
+    return out;
+  }
+  if (hasGoalLink || purpose === 'goal-linked') {
+    out.reserveClass = 'purpose_reserve';
+    out.reserveTier = 2;
+    out.eligibleForRelease = true;
+    out.copyKey = 'tradeoff';
+    return out;
+  }
+  if (invType === 'isa' || invType === 'stocks_isa') {
+    if (horizon === 'short') {
+      out.reserveClass = 'flexible_reserve';
+      out.reserveTier = 1;
+      out.eligibleForRelease = true;
+      out.copyKey = 'flexible';
+    } else {
+      out.reserveClass = 'future_capital';
+      out.reserveTier = 3;
+      out.eligibleForRelease = true;
+      out.copyKey = 'future_capital';
+    }
+    return out;
+  }
+  if (invType === 'stocks' || invType === 'crypto' || invType === 'bonds' || invType === 'app') {
+    out.reserveClass = 'future_capital';
+    out.reserveTier = 3;
+    out.eligibleForRelease = true;
+    out.copyKey = 'future_capital';
+    return out;
+  }
+  if (horizon === 'medium') {
+    out.reserveClass = 'future_capital';
+    out.reserveTier = 3;
+    out.eligibleForRelease = true;
+    out.copyKey = 'future_capital';
+    return out;
+  }
+  out.reserveClass = 'unknown_reserve';
+  out.reserveTier = 2;
+  out.eligibleForRelease = true;
+  out.copyKey = 'tradeoff';
+  out.reasonCodes.push('inv_unknown');
+  return out;
+}
+
+/** Stage 80R-C: stable sort — tier asc, smaller balance first, then kind:id. */
+function geodeSavingsReleaseSortSourceRows(rows) {
+  if (!rows || !rows.length) return rows || [];
+  rows.sort(function (a, b) {
+    var ea = (a && a.eligibility) || {};
+    var eb = (b && b.eligibility) || {};
+    var ta = ea.reserveTier != null ? Number(ea.reserveTier) : 9;
+    var tb = eb.reserveTier != null ? Number(eb.reserveTier) : 9;
+    if (ta !== tb) return ta - tb;
+    var ba = toNum(ea.availableBalance);
+    var bb = toNum(eb.availableBalance);
+    if (ba !== bb) return ba - bb;
+    var ka = String(a.kind || '') + ':' + String(a.sourceId || '');
+    var kb = String(b.kind || '') + ':' + String(b.sourceId || '');
+    if (ka < kb) return -1;
+    if (ka > kb) return 1;
+    return 0;
+  });
+  return rows;
+}
+
 function geodeSnapshotFiguresFromState(state) {
   state = state || (typeof S !== 'undefined' ? S : null);
   var totalDebt = (state.debts || []).reduce(function (s, x) {
@@ -6867,6 +7027,9 @@ function geodeSavingsReleaseEligibility(state, source, opts) {
     sourceName: '',
     availableBalance: 0,
     confirmedBase: 0,
+    reserveClass: 'unknown_reserve',
+    reserveTier: 2,
+    copyKey: 'tradeoff',
     reasonCodes: [],
     shadowOnly: true
   };
@@ -6898,6 +7061,22 @@ function geodeSavingsReleaseEligibility(state, source, opts) {
     out.reasonCodes.push('zero_available');
     return out;
   }
+  var classification = geodeReserveClassifySource(state, resolved);
+  out.reserveClass = classification.reserveClass;
+  out.reserveTier = classification.reserveTier;
+  out.copyKey = classification.copyKey || out.copyKey;
+  if (!classification.eligibleForRelease) {
+    out.reasonCodes.push('reserve_tier_suppressed');
+    if (classification.reasonCodes && classification.reasonCodes.length) {
+      var ci;
+      for (ci = 0; ci < classification.reasonCodes.length; ci++) {
+        if (out.reasonCodes.indexOf(classification.reasonCodes[ci]) < 0) {
+          out.reasonCodes.push(classification.reasonCodes[ci]);
+        }
+      }
+    }
+    return out;
+  }
   out.eligible = true;
   return out;
 }
@@ -6919,12 +7098,18 @@ function geodePreviewSavingsRelease(state, source, amount, opts) {
     monthlyLeftAfter: null,
     monthlyLeftUnchanged: true,
     reasonCodes: [],
+    reserveClass: 'unknown_reserve',
+    reserveTier: 2,
+    copyKey: 'tradeoff',
     shadowOnly: true
   };
   var elig = geodeSavingsReleaseEligibility(state, source, opts);
   out.sourceType = elig.sourceType;
   out.sourceId = elig.sourceId;
   out.sourceName = elig.sourceName;
+  out.reserveClass = elig.reserveClass;
+  out.reserveTier = elig.reserveTier;
+  out.copyKey = elig.copyKey;
   if (!elig.eligible) {
     out.reasonCodes = elig.reasonCodes.slice();
     return out;
@@ -6969,6 +7154,8 @@ function geodeSavingsReleaseSourcesSnapshot(state, opts) {
       kind: 'goal',
       sourceId: g.id,
       sourceName: String(g.name || ''),
+      reserveClass: gElig.reserveClass,
+      reserveTier: gElig.reserveTier,
       eligibility: gElig
     });
   }
@@ -6983,9 +7170,12 @@ function geodeSavingsReleaseSourcesSnapshot(state, opts) {
       sourceId: inv.id,
       sourceName: String(inv.name || ''),
       linkedGoalId: String(inv.goalId || ''),
+      reserveClass: iElig.reserveClass,
+      reserveTier: iElig.reserveTier,
       eligibility: iElig
     });
   }
+  geodeSavingsReleaseSortSourceRows(rows);
   if (!rows.length) reasonCodes.push('no_sources');
   var eligibleCount = 0;
   var ri;
@@ -6994,7 +7184,7 @@ function geodeSavingsReleaseSourcesSnapshot(state, opts) {
   }
   if (rows.length && eligibleCount === 0) reasonCodes.push('no_eligible_sources');
   return {
-    version: 1,
+    version: 2,
     generatedAt: opts.generatedAt != null ? opts.generatedAt : null,
     rowCount: rows.length,
     eligibleCount: eligibleCount,
@@ -7002,8 +7192,9 @@ function geodeSavingsReleaseSourcesSnapshot(state, opts) {
     reasonCodes: reasonCodes,
     audit: {
       shadowOnly: true,
+      classificationVersion: 1,
       sideEffects: [],
-      note: 'Preview only — does not mutate balances, Monthly Left, or net worth.'
+      note: 'Preview only — reserve tier gate (80R-C); does not mutate balances, Monthly Left, or net worth.'
     }
   };
 }
@@ -7044,6 +7235,8 @@ function geodeSavingsReleaseSnapshot(state, opts) {
     window._geodePreviewSavingsRelease = geodePreviewSavingsRelease;
     window._geodeSavingsReleaseSourceType = geodeSavingsReleaseSourceType;
     window._geodeSavingsReleaseEligibility = geodeSavingsReleaseEligibility;
+    window._geodeReserveClassifySource = geodeReserveClassifySource;
+    window._geodeSavingsReleaseCopyForSource = geodeSavingsReleaseCopyForSource;
   } catch (_eSrWin) {}
 
   return snapshot;
@@ -7073,6 +7266,62 @@ function geodeSavingsReleaseSourceSelectLabel(row) {
   var elig = row.eligibility;
   var tag = elig.sourceType === 'buffer' ? 'Buffer' : elig.sourceType === 'linked_investment' ? 'Linked investment' : elig.sourceType === 'investment' ? 'Investment' : 'Goal';
   return String(row.sourceName || tag) + ' (' + fm(elig.availableBalance) + ' available)';
+}
+
+/**
+ * Stage 80R-C.1: read-only reserve-class copy map (no state writes; no Plan/affordability reads).
+ * meta: preview row, eligibility object, or { copyKey, reserveClass, reserveTier }.
+ * context: { amount, kind: 'plan_cta'|'modal'|'preview'|'success' }.
+ */
+function geodeSavingsReleaseCopyForSource(meta, context) {
+  meta = meta && typeof meta === 'object' ? meta : {};
+  context = context && typeof context === 'object' ? context : {};
+  var elig = meta.eligibility && typeof meta.eligibility === 'object' ? meta.eligibility : meta;
+  var copyKey = String(elig.copyKey || meta.copyKey || 'tradeoff');
+  if (copyKey === 'hidden') copyKey = 'tradeoff';
+  var reserveClass = String(elig.reserveClass || meta.reserveClass || 'unknown_reserve');
+  var amt = toNum(context.amount);
+  var out = {
+    ctaLabel: 'Use part of a reserve',
+    modalTitle: 'Record reserve use',
+    introLine:
+      'This records reserve use. It reduces your saved balance and does not change Monthly Left or your income and spending lines.',
+    previewLine: 'This can support the month if you choose.',
+    tradeoffLine: 'This may trade against what this money was set aside for.',
+    truthLine:
+      'This does not change Monthly Left. It records that part of your reserve supported the month.',
+    planTruthLine: 'The plan still reflects the month as it stands.',
+    reserveReduceLine: amt > 0 ? 'Your reserve balance will reduce by ' + fm(amt) + '.' : '',
+    confirmLabel: 'Confirm release',
+    successLine: 'Recorded. Your reserve balance now reflects what you used.',
+    planCtaLabel: 'Use part of a reserve'
+  };
+  if (copyKey === 'continuity' || reserveClass === 'continuity_reserve') {
+    out.ctaLabel = 'Use part of your buffer';
+    out.modalTitle = 'Use part of your buffer';
+    out.previewLine = 'This buffer can support the month if you choose.';
+    out.tradeoffLine = '';
+    out.planCtaLabel = 'Use part of your buffer';
+  } else if (copyKey === 'flexible' || reserveClass === 'flexible_reserve') {
+    out.ctaLabel = 'Use part of this reserve';
+    out.modalTitle = 'Use part of this reserve';
+    out.previewLine = 'This can give the month a little more room.';
+    out.tradeoffLine = '';
+    out.planCtaLabel = 'Use part of this reserve';
+  } else if (copyKey === 'future_capital' || reserveClass === 'future_capital') {
+    out.ctaLabel = 'Use part of this investment reserve';
+    out.modalTitle = 'Use part of this investment reserve';
+    out.previewLine = 'This can support the month if you choose.';
+    out.tradeoffLine = 'This would trade against longer-term growth.';
+    out.planCtaLabel = 'Use part of an investment reserve';
+  } else {
+    out.ctaLabel = 'Use part of this saved amount';
+    out.modalTitle = 'Use part of this saved amount';
+    out.previewLine = 'This can support the month if you choose.';
+    out.tradeoffLine = 'This may trade against what this money was set aside for.';
+    out.planCtaLabel = 'Use part of a saved amount';
+  }
+  return out;
 }
 
 /** Stage 81D-3: apply a user-confirmed savings release (base fields only; Monthly Left unchanged). */
@@ -7161,12 +7410,25 @@ function geodeSavingsReleasePreviewBlockHtml(preview, monthlyLeft) {
     return (
       hostOpen +
       '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.2px;color:rgba(189,183,220,0.65);text-transform:uppercase;margin-bottom:6px">Preview</div>' +
-      '<div data-geode-css="font-size:11px;color:rgba(237,234,255,0.78);line-height:1.45">Choose a source and enter an amount to see how this release affects your saved balance.</div>' +
+      '<div data-geode-css="font-size:11px;color:rgba(237,234,255,0.78);line-height:1.45">Choose a source and enter an amount to see how reserve use would affect your saved balance. Monthly Left will not change.</div>' +
       hostClose
     );
   }
+  var copy = geodeSavingsReleaseCopyForSource(preview, { amount: preview.amount, kind: 'preview' });
   var h = hostOpen;
   h += '<div data-geode-css="font-size:10px;font-weight:800;letter-spacing:1.2px;color:rgba(189,183,220,0.65);text-transform:uppercase;margin-bottom:6px">Preview</div>';
+  if (copy.previewLine) {
+    h +=
+      '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:8px">' +
+      escHtmlLite(copy.previewLine) +
+      '</div>';
+  }
+  if (copy.tradeoffLine) {
+    h +=
+      '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:8px">' +
+      escHtmlLite(copy.tradeoffLine) +
+      '</div>';
+  }
   if (preview.reasonCodes && preview.reasonCodes.indexOf('amount_capped') >= 0) {
     h +=
       '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:8px">Available balance: ' +
@@ -7179,7 +7441,7 @@ function geodeSavingsReleasePreviewBlockHtml(preview, monthlyLeft) {
       '</div>';
   }
   h +=
-    '<div data-geode-css="font-size:12px;color:var(--tx-1);line-height:1.5;margin-bottom:4px"><span data-geode-css="color:var(--tx-3)">Amount released</span> ' +
+    '<div data-geode-css="font-size:12px;color:var(--tx-1);line-height:1.5;margin-bottom:4px"><span data-geode-css="color:var(--tx-3)">Amount recorded</span> ' +
     escHtmlLite(fm(preview.amount)) +
     '</div>';
   h +=
@@ -7192,29 +7454,26 @@ function geodeSavingsReleasePreviewBlockHtml(preview, monthlyLeft) {
       escHtmlLite(fm(preview.netWorthBefore) + ' \u2192 ' + fm(preview.netWorthAfter)) +
       '</div>';
   }
-  if (monthlyLeft < 0 && preview.amount > 0) {
-    var pressure = Math.abs(monthlyLeft);
-    var covered = Math.min(preview.amount, pressure);
-    var remainingPressure = Math.max(0, pressure - preview.amount);
-    h +=
-      '<div data-geode-css="font-size:12px;color:var(--tx-1);line-height:1.5;margin-top:8px"><span data-geode-css="color:var(--tx-3)">Pressure covered</span> ' +
-      escHtmlLite(fm(covered)) +
-      '</div>';
-    h +=
-      '<div data-geode-css="font-size:12px;color:var(--tx-1);line-height:1.5;margin-bottom:4px"><span data-geode-css="color:var(--tx-3)">Remaining pressure</span> ' +
-      escHtmlLite(fm(remainingPressure)) +
-      '</div>';
-    if (remainingPressure > 0) {
-      h +=
-        '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45;margin-bottom:6px">This helped cover a tight month. Savings are sometimes there to be used.</div>';
-    }
-  }
   if (preview.sourceType === 'linked_investment') {
     h +=
       '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45;margin-top:6px">This goal is linked to an investment balance, so the release is recorded against the investment.</div>';
   }
+  if (copy.reserveReduceLine) {
+    h +=
+      '<div data-geode-css="font-size:11px;color:var(--tx-2);line-height:1.45;margin-top:8px">' +
+      escHtmlLite(copy.reserveReduceLine) +
+      '</div>';
+  }
   h +=
-    '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin-top:8px">Your saved balance will reduce. This does not change your income or spending lines.</div>';
+    '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin-top:8px">' +
+    escHtmlLite(copy.truthLine) +
+    '</div>';
+  if (monthlyLeft < 0) {
+    h +=
+      '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin-top:6px">' +
+      escHtmlLite(copy.planTruthLine) +
+      '</div>';
+  }
   h += hostClose;
   return h;
 }
@@ -7257,7 +7516,8 @@ function geodeConfirmSavingsRelease() {
     return;
   }
   closeModal();
-  toast('Recorded. Your saved balance now reflects what you used.', 'ok');
+  var successCopy = geodeSavingsReleaseCopyForSource(preview, { amount: preview.amount, kind: 'success' });
+  toast(successCopy.successLine, 'ok');
 }
 
 function geodeOpenSavingsReleaseModal() {
@@ -7277,17 +7537,27 @@ function geodeOpenSavingsReleaseModal() {
       .replace(/"/g, '&quot;');
   };
 
-  var h = mh('Release from savings');
+  var modalCopyEmpty = geodeSavingsReleaseCopyForSource({}, { kind: 'modal' });
+  var h = mh(modalCopyEmpty.modalTitle);
   h +=
-    '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin:-6px 0 12px">Savings are sometimes there to be used. This reduces your saved balance. It does not change your income or spending lines.</div>';
+    '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin:-6px 0 12px">' +
+    escHtmlLite(modalCopyEmpty.introLine) +
+    '</div>';
 
   if (!eligible.length) {
     h +=
-      '<div data-geode-css="font-size:12px;color:var(--tx-2);line-height:1.5;margin-bottom:14px">No saved balances are available to release from right now.</div>' +
+      '<div data-geode-css="font-size:12px;color:var(--tx-2);line-height:1.5;margin-bottom:14px">No reserves are available to record right now.</div>' +
       '<button type="button" class="btn btn-s" onclick="closeModal()">Close</button>';
     openModal(h);
     return;
   }
+
+  var modalCopy = geodeSavingsReleaseCopyForSource(eligible[0], { kind: 'modal' });
+  h = mh(modalCopy.modalTitle);
+  h +=
+    '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin:-6px 0 12px">' +
+    escHtmlLite(modalCopy.introLine) +
+    '</div>';
 
   var defKey = eligible[0].kind + ':' + eligible[0].sourceId;
   var defAvail = eligible[0].eligibility.availableBalance;
@@ -7333,7 +7603,9 @@ function geodeOpenSavingsReleaseModal() {
   );
 
   h +=
-    '<button type="button" class="btn btn-p" onclick="geodeConfirmSavingsRelease()">Confirm release</button>' +
+    '<button type="button" class="btn btn-p" onclick="geodeConfirmSavingsRelease()">' +
+    escHtmlLite(geodeSavingsReleaseCopyForSource(eligible[0], { kind: 'modal' }).confirmLabel) +
+    '</button>' +
     '<button type="button" class="btn btn-s" onclick="closeModal()">Cancel</button>';
 
   openModal(h);
@@ -21338,7 +21610,7 @@ function geodeOverBudgetPlanBlockHtml(left) {
 
   // Primary CTA
   h += '<button type="button" class="btn btn-p btn--block-spaced" onclick="msub=\'expenses\';goTab(\'money\')">Edit monthly spending</button>';
-  h += '<button type="button" class="btn btn-s btn--block-spaced" onclick="geodeOpenSavingsReleaseModal()">Use saved money</button>';
+  h += '<button type="button" class="btn btn-s btn--block-spaced" onclick="geodeOpenSavingsReleaseModal()">' + escHtmlLite(geodeSavingsReleaseCopyForSource({}, { kind: 'plan_cta' }).planCtaLabel) + '</button>';
 
   // Show plan steps collapsed — so user can see what's coming when fixed
   h += '<details class="collapsed-steps">';
