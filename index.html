@@ -7020,6 +7020,32 @@ function geodeReserveClassifySource(state, source) {
   return out;
 }
 
+/**
+ * Stage 80R-B: reserve tier label for one account row (T0–T4).
+ * Pure read-only wrapper over geodeReserveClassifySource — no Plan/affordability writes.
+ * account: { kind, id } goal or investment descriptor, or a goal/investment row with id.
+ */
+function classifyReserveTier(account) {
+  var state = typeof S !== 'undefined' ? S : null;
+  var cls = geodeReserveClassifySource(state, account);
+  var tier = cls && cls.reserveTier != null ? Number(cls.reserveTier) : 2;
+  if (!isFinite(tier) || tier < 0) tier = 0;
+  if (tier > 4) tier = 4;
+  return 'T' + tier;
+}
+
+/** First eligible release row after tier sort, or null (T4 hidden). */
+function geodeSavingsReleaseFirstEligibleRow(state) {
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var snap = geodeSavingsReleaseSourcesSnapshot(state);
+  var rows = (snap && snap.rows) || [];
+  var i;
+  for (i = 0; i < rows.length; i++) {
+    if (rows[i].eligibility && rows[i].eligibility.eligible) return rows[i];
+  }
+  return null;
+}
+
 /** Stage 80R-C: stable sort — tier asc, smaller balance first, then kind:id. */
 function geodeSavingsReleaseSortSourceRows(rows) {
   if (!rows || !rows.length) return rows || [];
@@ -7082,8 +7108,7 @@ function geodeSavingsReleaseEligibility(state, source, opts) {
     reserveClass: 'unknown_reserve',
     reserveTier: 2,
     copyKey: 'tradeoff',
-    reasonCodes: [],
-    shadowOnly: true
+    reasonCodes: []
   };
   var resolved = geodeSavingsReleaseResolveSource(state, source);
   if (!resolved) {
@@ -7152,8 +7177,7 @@ function geodePreviewSavingsRelease(state, source, amount, opts) {
     reasonCodes: [],
     reserveClass: 'unknown_reserve',
     reserveTier: 2,
-    copyKey: 'tradeoff',
-    shadowOnly: true
+    copyKey: 'tradeoff'
   };
   var elig = geodeSavingsReleaseEligibility(state, source, opts);
   out.sourceType = elig.sourceType;
@@ -7243,10 +7267,9 @@ function geodeSavingsReleaseSourcesSnapshot(state, opts) {
     rows: rows,
     reasonCodes: reasonCodes,
     audit: {
-      shadowOnly: true,
       classificationVersion: 1,
       sideEffects: [],
-      note: 'Preview only — reserve tier gate (80R-C); does not mutate balances, Monthly Left, or net worth.'
+      note: 'Reserve tier gate (80R-B/C); eligibility read-only — does not mutate balances, Monthly Left, or net worth.'
     }
   };
 }
@@ -7276,9 +7299,8 @@ function geodeSavingsReleaseSnapshot(state, opts) {
     sources: sources,
     reasonCodes: sources.reasonCodes.slice(),
     audit: {
-      shadowOnly: true,
       sideEffects: [],
-      note: 'Release preview model only. Monthly Left unchanged by preview; apply build reduces base balances later.'
+      note: 'Release preview model. Monthly Left unchanged by preview; apply reduces base balances via event ledger only.'
     }
   };
 
@@ -7288,6 +7310,7 @@ function geodeSavingsReleaseSnapshot(state, opts) {
     window._geodeSavingsReleaseSourceType = geodeSavingsReleaseSourceType;
     window._geodeSavingsReleaseEligibility = geodeSavingsReleaseEligibility;
     window._geodeReserveClassifySource = geodeReserveClassifySource;
+    window.classifyReserveTier = classifyReserveTier;
     window._geodeSavingsReleaseCopyForSource = geodeSavingsReleaseCopyForSource;
   } catch (_eSrWin) {}
 
@@ -7334,44 +7357,44 @@ function geodeSavingsReleaseCopyForSource(meta, context) {
   var reserveClass = String(elig.reserveClass || meta.reserveClass || 'unknown_reserve');
   var amt = toNum(context.amount);
   var out = {
-    ctaLabel: 'Use part of a reserve',
+    ctaLabel: 'Record reserve use',
     modalTitle: 'Record reserve use',
     introLine:
       'This records reserve use. It reduces your saved balance and does not change Monthly Left or your income and spending lines.',
-    previewLine: 'This can support the month if you choose.',
-    tradeoffLine: 'This may trade against what this money was set aside for.',
+    previewLine: 'This reserve could help absorb some pressure this month.',
+    tradeoffLine: 'This would be a tradeoff against a future priority.',
     truthLine:
       'This does not change Monthly Left. It records that part of your reserve supported the month.',
     planTruthLine: 'The plan still reflects the month as it stands.',
     reserveReduceLine: amt > 0 ? 'Your reserve balance will reduce by ' + fm(amt) + '.' : '',
     confirmLabel: 'Confirm release',
     successLine: 'Recorded. Your reserve balance now reflects what you used.',
-    planCtaLabel: 'Use part of a reserve'
+    planCtaLabel: 'Record reserve use'
   };
   if (copyKey === 'continuity' || reserveClass === 'continuity_reserve') {
-    out.ctaLabel = 'Use part of your buffer';
-    out.modalTitle = 'Use part of your buffer';
-    out.previewLine = 'This buffer can support the month if you choose.';
+    out.ctaLabel = 'Record buffer use';
+    out.modalTitle = 'Record buffer use';
+    out.previewLine = 'This reserve could help absorb some pressure this month.';
     out.tradeoffLine = '';
-    out.planCtaLabel = 'Use part of your buffer';
+    out.planCtaLabel = 'Record buffer use';
   } else if (copyKey === 'flexible' || reserveClass === 'flexible_reserve') {
-    out.ctaLabel = 'Use part of this reserve';
-    out.modalTitle = 'Use part of this reserve';
-    out.previewLine = 'This can give the month a little more room.';
+    out.ctaLabel = 'Record reserve use';
+    out.modalTitle = 'Record reserve use';
+    out.previewLine = 'Part of this reserve may support flexibility if needed.';
     out.tradeoffLine = '';
-    out.planCtaLabel = 'Use part of this reserve';
+    out.planCtaLabel = 'Record reserve use';
   } else if (copyKey === 'future_capital' || reserveClass === 'future_capital') {
-    out.ctaLabel = 'Use part of this investment reserve';
-    out.modalTitle = 'Use part of this investment reserve';
-    out.previewLine = 'This can support the month if you choose.';
-    out.tradeoffLine = 'This would trade against longer-term growth.';
-    out.planCtaLabel = 'Use part of an investment reserve';
+    out.ctaLabel = 'Record investment reserve use';
+    out.modalTitle = 'Record investment reserve use';
+    out.previewLine = 'Part of this reserve may support flexibility if needed.';
+    out.tradeoffLine = 'This would be a tradeoff against a future priority.';
+    out.planCtaLabel = 'Record investment reserve use';
   } else {
-    out.ctaLabel = 'Use part of this saved amount';
-    out.modalTitle = 'Use part of this saved amount';
-    out.previewLine = 'This can support the month if you choose.';
-    out.tradeoffLine = 'This may trade against what this money was set aside for.';
-    out.planCtaLabel = 'Use part of a saved amount';
+    out.ctaLabel = 'Record saved amount use';
+    out.modalTitle = 'Record saved amount use';
+    out.previewLine = 'Part of this reserve may support flexibility if needed.';
+    out.tradeoffLine = 'This would be a tradeoff against a future priority.';
+    out.planCtaLabel = 'Record saved amount use';
   }
   return out;
 }
@@ -21919,7 +21942,15 @@ function geodeOverBudgetPlanBlockHtml(left) {
 
   // Primary CTA
   h += '<button type="button" class="btn btn-p btn--block-spaced" onclick="msub=\'expenses\';goTab(\'money\')">Edit monthly spending</button>';
-  h += '<button type="button" class="btn btn-s btn--block-spaced" onclick="geodeOpenSavingsReleaseModal()">' + escHtmlLite(geodeSavingsReleaseCopyForSource({}, { kind: 'plan_cta' }).planCtaLabel) + '</button>';
+  try {
+    var _srPlanRow = geodeSavingsReleaseFirstEligibleRow(S);
+    if (_srPlanRow) {
+      h +=
+        '<button type="button" class="btn btn-s btn--block-spaced" onclick="geodeOpenSavingsReleaseModal()">' +
+        escHtmlLite(geodeSavingsReleaseCopyForSource(_srPlanRow, { kind: 'plan_cta' }).planCtaLabel) +
+        '</button>';
+    }
+  } catch (_eSrPlanCta) {}
 
   // Show plan steps collapsed — so user can see what's coming when fixed
   h += '<details class="collapsed-steps">';
