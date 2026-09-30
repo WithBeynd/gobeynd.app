@@ -6607,16 +6607,16 @@ function geodeDebtProviderReviewStatusCopy(debt) {
   var days = geodeDebtDaysSinceProviderReview(debt);
   var at = String(debt.lastProviderReviewAt || '').slice(0, 10);
   if (at && days != null && days >= 0) {
-    if (days === 0) return 'Balance last confirmed today';
-    if (days === 1) return 'Balance last confirmed yesterday';
-    return 'Balance last confirmed ' + days + ' days ago';
+    if (days === 0) return 'Last updated today';
+    if (days === 1) return 'Last updated yesterday';
+    return 'Last updated ' + days + ' days ago';
   }
   return 'Save the balance your provider shows when you check in';
 }
 
 /** Display-only: one-line dual-ledger reminder for debt payments vs confirmed balance. */
 function geodeDebtDualLedgerToastLine() {
-  return 'Payment recorded. Balance stays as last confirmed.';
+  return 'Payment recorded. Your saved balance hasn\u2019t changed.';
 }
 
 function geodeDebtProviderReviewNudgeCopy(debt) {
@@ -6653,39 +6653,11 @@ function geodeDebtPaymentQualifiesSinceProviderReview(p, reviewAt) {
   return payDate >= reviewAt;
 }
 
-/** Read-only: sum of paid linked debt payments since last provider confirmation. */
-function geodeDebtPaidPaymentsSinceProviderReviewAmount(debt, state) {
-  if (!debt || !debt.id) return 0;
-  state = state || (typeof S !== 'undefined' ? S : null);
-  var reviewAt = String(debt.lastProviderReviewAt || '').slice(0, 10);
-  var pay = (state && state.payments) || [];
-  var total = 0;
-  var pi;
-  for (pi = 0; pi < pay.length; pi++) {
-    var p = pay[pi];
-    if (!p || String(p.debtId || '') !== String(debt.id)) continue;
-    if (!geodeDebtPaymentQualifiesSinceProviderReview(p, reviewAt)) continue;
-    var amt = toNum(p.amount);
-    if (amt > 0) total += amt;
-  }
-  return Math.round(total * 100) / 100;
-}
-
-/** Read-only: show debt progress bridge when paid payments exist since last confirmation. */
-function geodeDebtShouldShowProgressBridge(debt, state) {
-  if (!debt || !debt.id) return false;
-  if (toNum(debt.balance) <= 0) return false;
-  if (!geodeDebtPaidPaymentSinceProviderReview(debt, state)) return false;
-  return geodeDebtPaidPaymentsSinceProviderReviewAmount(debt, state) > 0;
-}
-
-/** Display-only: adaptive debt review state for Money card disclosure. */
+/** Display-only: adaptive debt review state for Money card disclosure. Payments never feed this state. */
 function geodeDebtReviewDisclosureState(debt, state) {
   debt = debt || {};
-  state = state || (typeof S !== 'undefined' ? S : null);
   if (!debt.id) return 'hidden';
   if (!String(debt.lastProviderReviewAt || '').slice(0, 10)) return 'unconfirmed';
-  if (geodeDebtShouldShowProgressBridge(debt, state)) return 'reconcile';
   var days = geodeDebtDaysSinceProviderReview(debt);
   var staleAfter = geodeDebtProviderReviewStaleAfterDays(debt);
   if (days != null && days > staleAfter) return 'stale';
@@ -6716,15 +6688,10 @@ function geodeDebtReviewDisclosureSummaryCopy(debt, state) {
   var st = geodeDebtReviewDisclosureState(debt, state);
   if (st === 'hidden') return '';
   if (st === 'unconfirmed') return 'Balance not confirmed yet';
-  if (st === 'reconcile') {
-    var totalPaidR = geodeDebtPaidPaymentsSinceProviderReviewAmount(debt, state);
-    if (totalPaidR > 0) return fm(totalPaidR) + ' recorded since last check';
-    return 'Review balance';
-  }
   if (st === 'stale') {
     var days = geodeDebtDaysSinceProviderReview(debt);
-    if (days != null && days >= 0) return 'Balance last confirmed ' + days + 'd ago';
-    return 'Balance last confirmed';
+    if (days != null && days >= 0) return 'Balance last updated ' + days + 'd ago';
+    return 'Balance last updated';
   }
   return '';
 }
@@ -6738,29 +6705,19 @@ function geodeDebtReviewDisclosureHtml(debt, state) {
   var summary = geodeDebtReviewDisclosureSummaryCopy(debt, state);
   if (!summary) return '';
   var body = '';
-  var confirmedBal = toNum(debt.balance);
+  var savedBal = toNum(debt.balance);
   var reviewNote =
     '<div data-geode-css="margin-top:5px;font-size:9px;color:var(--tx-3);line-height:1.3">Check your provider before updating.</div>';
   var updateBtn =
     '<button type="button" class="btn-sm" data-geode-css="margin-top:8px;font-size:10px;padding:5px 10px" onclick="openDebtModal(\'' +
     debt.id +
     '\')">Update balance</button>';
-  if (st === 'reconcile') {
-    var totalPaid = geodeDebtPaidPaymentsSinceProviderReviewAmount(debt, state);
-    var approximate = Math.max(0, Math.round((confirmedBal - totalPaid) * 100) / 100);
-    body += '<div data-geode-css="margin-top:4px">';
-    body += geodeDebtReviewMetricRow('Recorded payments', fm(totalPaid));
-    body += geodeDebtReviewMetricRow('Last confirmed', fm(confirmedBal));
-    if (totalPaid > 0 && approximate < confirmedBal) {
-      body += geodeDebtReviewMetricRow('Rough guide', fm(approximate));
-    }
-    body += '</div>' + reviewNote + updateBtn;
-  } else if (st === 'stale') {
+  if (st === 'stale') {
     var staleDays = geodeDebtDaysSinceProviderReview(debt);
     body += '<div data-geode-css="margin-top:4px">';
-    body += geodeDebtReviewMetricRow('Last confirmed', fm(confirmedBal));
+    body += geodeDebtReviewMetricRow('Saved balance', fm(savedBal));
     if (staleDays != null && staleDays >= 0) {
-      body += geodeDebtReviewMetricRow('Confirmed', staleDays === 0 ? 'today' : staleDays + 'd ago');
+      body += geodeDebtReviewMetricRow('Last updated', staleDays === 0 ? 'today' : staleDays + 'd ago');
     }
     body += '</div>' + reviewNote + updateBtn;
   } else if (st === 'unconfirmed') {
@@ -6812,7 +6769,7 @@ function geodeDebtHealthCardMinimalCopy(debt, state) {
   debt = debt || {};
   state = state || (typeof S !== 'undefined' ? S : null);
   if (geodeDebtPaidPaymentSinceProviderReview(debt, state)) {
-    return 'Payment recorded. Balance stays as last confirmed.';
+    return 'Payment recorded. Your saved balance hasn\u2019t changed.';
   }
   var it = String(debt.interestType || 'unknown').toLowerCase();
   if (it === 'variable') return 'Variable APR';
@@ -37051,12 +37008,6 @@ function rDebts(el) {
       e.style.boxShadow = '0 0 0 1px rgba(245,194,52,0.45)';
       e.style.borderRadius = '14px';
     }
-    var lastDebtAmt = geodeLastLinkedContributionAmount('debt', d.id);
-    var lastDebtLine = lastDebtAmt
-      ? '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:4px;line-height:1.2;opacity:0.85">Last payment: ' +
-        fm(lastDebtAmt) +
-        '</div>'
-      : '';
     var reviewDisclosure = geodeDebtReviewDisclosureHtml(d, S);
     var healthCard = geodeDebtHealthCardHtml(d, S);
     var hasReviewDisclosure = !!reviewDisclosure;
@@ -37102,7 +37053,6 @@ function rDebts(el) {
       '<button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:12px" onclick="geodePayFromDebt(\'' +
       d.id +
       '\')">Schedule extra payment</button>' +
-      lastDebtLine +
       manageDebtHtml;
     list.appendChild(e);
   }
@@ -37746,9 +37696,7 @@ function geodeQsDone(){
   }
   var dt=geodeQuickSetupNum((qd.debt||{}).total), dm=geodeQuickSetupNum((qd.debt||{}).min);
   if(dt&&dt>0){
-    var ed=(S.debts||[]).filter(function(d){return d.id==='qs_debt';})[0];
-    if(ed){ed.balance=dt;if(dm)ed.minp=dm;}
-    else S.debts.push({id:'qs_debt',name:'My debt',balance:dt,apr:0,minp:dm||0,cat:'other'});
+    S.debts.push({id:uid(),name:'My debt',balance:dt,apr:0,minp:dm||0,cat:'other'});
   }
   S.hasOnboarded=true; S.ready=true; S.quickSetupDismissed=false;
   try{save();}catch(e){}
