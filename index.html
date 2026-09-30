@@ -20874,7 +20874,7 @@ function geodePaymentMonthYmFromDate(iso) {
 
 /**
  * Merge duplicate linked contributions (same debt OR goal OR investment, same calendar month).
- * Unpaid rows merge together; paid rows merge separately — never mixes paid with unpaid.
+ * Unpaid rows merge together; paid rows are never merged — each completed payment keeps its own identity.
  * Keeps one row per group (oldest createdAt wins id) and summed amounts. Display-only cleanup for state shape.
  */
 function geodeMergeDuplicateLinkedContributionsSameMonth() {
@@ -20883,6 +20883,7 @@ function geodeMergeDuplicateLinkedContributionsSameMonth() {
   for (var i = 0; i < S.payments.length; i++) {
     var p = S.payments[i];
     if (!p) continue;
+    if (String(p.status || '') === 'paid') continue;
     var link = '';
     if (p.debtId && !p.goalId && !p.investId) link = 'd|' + String(p.debtId);
     else if (p.goalId && !p.debtId && !p.investId) link = 'g|' + String(p.goalId);
