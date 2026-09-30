@@ -1357,7 +1357,7 @@ try {
 // ── DATA ──────────────────────────────────────────
 var KEY = 'geode_v6';
 /** Deploy/runtime marker for support and PWA freshness checks (80N-P.1); not persisted. */
-var BEYND_RUNTIME_VERSION = 'v1.0.74';
+var BEYND_RUNTIME_VERSION = 'v1.0.75';
 /** Local persisted-state schema marker for backup/restore validation (bump when structure changes). */
 var GEODE_SCHEMA_VERSION = 1;
 /** Until splash finishes, save() must not bump last-active (avoids sync-on-load skipping lock). */
@@ -3672,6 +3672,13 @@ function fm(v) {
   var n = Number(v) || 0;
   try { return new Intl.NumberFormat(S.cur.loc, {style:'currency', currency:S.cur.code, minimumFractionDigits:0, maximumFractionDigits:0}).format(n); }
   catch(e) { return S.cur.sym + n.toLocaleString(); }
+}
+/** Factual money (e.g. recorded payment history): whole amounts as fm; otherwise exact pence. */
+function fmExact(v) {
+  var n = Math.round((Number(v) || 0) * 100) / 100;
+  var dp = Math.round(n * 100) % 100 === 0 ? 0 : 2;
+  try { return new Intl.NumberFormat(S.cur.loc, {style:'currency', currency:S.cur.code, minimumFractionDigits:dp, maximumFractionDigits:dp}).format(n); }
+  catch(e) { return S.cur.sym + n.toFixed(dp); }
 }
 function fd(s) {
   if (!s) return '';
@@ -6559,6 +6566,81 @@ function geodeRecordDebtPaymentTransition(before, after, source) {
   } catch (_eDpe) {}
 }
 
+/**
+ * DP-3: active completions derived from the ledger alone — same validity, reversal (same paymentId +
+ * occurrenceYm) and one-active-per-occurrence rules as geodeNormalizeDebtPaymentEvents. Read-only display input;
+ * never feeds balances, Plan, Monthly Left or any engine.
+ */
+function geodeDebtPaymentActiveCompletions(state) {
+  var list = (state && Array.isArray(state.debtPaymentEvents)) ? state.debtPaymentEvents : [];
+  var seen = Object.create(null);
+  var completionsById = Object.create(null);
+  var valid = [];
+  var i;
+  for (i = 0; i < list.length; i++) {
+    var e = list[i];
+    if (!e || typeof e !== 'object' || Array.isArray(e)) continue;
+    if (e.eventType !== 'completion' && e.eventType !== 'reversal') continue;
+    if (typeof e.id !== 'string' || !e.id || seen[e.id]) continue;
+    if (typeof e.paymentId !== 'string' || !e.paymentId) continue;
+    if (typeof e.debtId !== 'string' || !e.debtId) continue;
+    if (!geodeDebtPaymentYmValid(e.occurrenceYm)) continue;
+    if (typeof e.recordedAt !== 'number' || !isFinite(e.recordedAt)) continue;
+    if (e.eventType === 'completion' && (typeof e.amount !== 'number' || !isFinite(e.amount) || e.amount <= 0)) continue;
+    if (e.eventType === 'reversal' && (typeof e.reversesEventId !== 'string' || !e.reversesEventId)) continue;
+    seen[e.id] = true;
+    valid.push(e);
+    if (e.eventType === 'completion') completionsById[e.id] = e;
+  }
+  var reversed = Object.create(null);
+  for (i = 0; i < valid.length; i++) {
+    var r = valid[i];
+    if (r.eventType !== 'reversal') continue;
+    var target = completionsById[r.reversesEventId];
+    if (target && target.paymentId === r.paymentId && target.occurrenceYm === r.occurrenceYm) reversed[target.id] = true;
+  }
+  var activeFor = Object.create(null);
+  for (i = 0; i < valid.length; i++) {
+    var c = valid[i];
+    if (c.eventType !== 'completion' || reversed[c.id]) continue;
+    var key = c.paymentId + '|' + c.occurrenceYm;
+    var prev = activeFor[key];
+    if (!prev || c.recordedAt < prev.recordedAt || (c.recordedAt === prev.recordedAt && c.id < prev.id)) activeFor[key] = c;
+  }
+  var out = [];
+  for (i = 0; i < valid.length; i++) {
+    var ev = valid[i];
+    if (ev.eventType === 'completion' && activeFor[ev.paymentId + '|' + ev.occurrenceYm] === ev) out.push(ev);
+  }
+  return out;
+}
+
+/** DP-3: recorded-payment summary for one debt, matched on each event's own debtId. Never stored. */
+function geodeDebtPaymentSummary(state, debtId) {
+  var out = { amount: 0, count: 0, firstRecordedAt: null, latestAmount: 0, latestRecordedAt: null };
+  var id = String(debtId || '');
+  if (!id) return out;
+  var list = geodeDebtPaymentActiveCompletions(state);
+  var pence = 0;
+  var first = null;
+  var latest = null;
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    if (e.debtId !== id) continue;
+    out.count++;
+    pence += Math.round(e.amount * 100);
+    if (!first || e.recordedAt < first.recordedAt || (e.recordedAt === first.recordedAt && e.id < first.id)) first = e;
+    if (!latest || e.recordedAt > latest.recordedAt || (e.recordedAt === latest.recordedAt && e.id > latest.id)) latest = e;
+  }
+  out.amount = pence / 100;
+  if (first) out.firstRecordedAt = first.recordedAt;
+  if (latest) {
+    out.latestRecordedAt = latest.recordedAt;
+    out.latestAmount = latest.amount;
+  }
+  return out;
+}
+
 /** Stage 81B-1: optional debt health / provider-review metadata (display + persistence only; no balance math). */
 function geodeNormalizeDebtHealthFields(state) {
   state = state || S;
@@ -6635,22 +6717,6 @@ function geodeDebtProviderReviewNudgeCopy(debt) {
     return base + ' A fresh provider check helps keep Beynd aligned.';
   }
   return base;
-}
-
-/** Read-only: whether a paid debt-linked payment counts since last provider confirmation. */
-function geodeDebtPaymentQualifiesSinceProviderReview(p, reviewAt) {
-  if (!p || String(p.status || '') !== 'paid') return false;
-  reviewAt = String(reviewAt || '').slice(0, 10);
-  if (!reviewAt || !/^\d{4}-\d{2}-\d{2}$/.test(reviewAt)) return true;
-  if (p.rec === 'yes') {
-    var paidYm = String(p.lastPaidYM || '').slice(0, 7);
-    if (!paidYm || paidYm.length < 7) paidYm = currentYM();
-    var reviewYm = reviewAt.slice(0, 7);
-    return paidYm >= reviewYm;
-  }
-  var payDate = String(p.date || '').slice(0, 10);
-  if (!payDate || payDate.length < 10 || !/^\d{4}-\d{2}-\d{2}$/.test(payDate)) return false;
-  return payDate >= reviewAt;
 }
 
 /** Display-only: adaptive debt review state for Money card disclosure. Payments never feed this state. */
@@ -6738,39 +6804,18 @@ function geodeDebtProgressBridgeHtml(debt, state) {
   return '';
 }
 
-/** Stage 81B-2.2: paid debt-linked payment after last provider save (existing state only). */
-function geodeDebtPaidPaymentSinceProviderReview(debt, state) {
-  if (!debt || !debt.id) return false;
-  state = state || (typeof S !== 'undefined' ? S : null);
-  var reviewAt = String(debt.lastProviderReviewAt || '').slice(0, 10);
-  var pay = (state && state.payments) || [];
-  var pi;
-  for (pi = 0; pi < pay.length; pi++) {
-    var p = pay[pi];
-    if (!p || String(p.debtId || '') !== String(debt.id)) continue;
-    if (geodeDebtPaymentQualifiesSinceProviderReview(p, reviewAt)) return true;
-  }
-  return false;
-}
-
-/** Stage 81B-2.2: show Debt Health inline copy only when awareness is relevant. */
+/** Stage 81B-2.2: show Debt Health inline copy only when awareness is relevant (APR type only). */
 function geodeDebtShouldShowHealthOnCard(debt, state) {
   if (!debt) return false;
   state = state || (typeof S !== 'undefined' ? S : null);
   if (geodeDebtReviewDisclosureState(debt, state) !== 'hidden') return false;
   var it = String(debt.interestType || 'unknown').toLowerCase();
-  if (it === 'unknown' || it === 'variable') return true;
-  if (geodeDebtPaidPaymentSinceProviderReview(debt, state)) return true;
-  return false;
+  return it === 'unknown' || it === 'variable';
 }
 
 /** Stage 81B-2.3: one factual debt-card line — no provider-review narrative. */
 function geodeDebtHealthCardMinimalCopy(debt, state) {
   debt = debt || {};
-  state = state || (typeof S !== 'undefined' ? S : null);
-  if (geodeDebtPaidPaymentSinceProviderReview(debt, state)) {
-    return 'Payment recorded. Your saved balance hasn\u2019t changed.';
-  }
   var it = String(debt.interestType || 'unknown').toLowerCase();
   if (it === 'variable') return 'Variable APR';
   if (it === 'unknown') return 'APR type not set';
@@ -6788,6 +6833,45 @@ function geodeDebtHealthCardHtml(debt, state) {
     '<div data-geode-css="margin-top:8px;font-size:9px;color:var(--tx-3);line-height:1.35">' +
     escHtmlLite(line) +
     '</div>'
+  );
+}
+
+/** DP-3 Money debt card: recorded-payment activity from the ledger. Nothing for zero; never related to the balance. */
+function geodeDebtPaymentActivityHtml(debt, state) {
+  if (!debt || !debt.id) return '';
+  state = state || (typeof S !== 'undefined' ? S : null);
+  var sum = geodeDebtPaymentSummary(state, debt.id);
+  if (!sum.count) return '';
+  function dateLabel(ms, opts) {
+    var d = new Date(ms);
+    if (!isFinite(d.getTime())) return '';
+    try {
+      return d.toLocaleDateString('en-GB', opts);
+    } catch (_eDpaDt) {
+      return '';
+    }
+  }
+  var since = dateLabel(sum.firstRecordedAt, { month: 'short', year: 'numeric' });
+  var latest = dateLabel(sum.latestRecordedAt, { day: 'numeric', month: 'short' });
+  var countLabel = sum.count === 1 ? '1 payment' : sum.count + ' payments';
+  return (
+    '<details data-geode-css="margin-top:10px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(189,183,220,0.14);line-height:1.3">' +
+    '<summary data-geode-css="cursor:pointer;list-style-position:inside;font-size:10px;font-weight:700;color:var(--tx-3);text-transform:uppercase;letter-spacing:1px">Payments recorded' +
+    '<span data-geode-css="display:block;margin-top:3px;font-size:14px;font-weight:700;color:var(--tx-1);text-transform:none;letter-spacing:0">' +
+    escHtmlLite(fmExact(sum.amount) + ' \u00b7 ' + countLabel) +
+    '</span>' +
+    (since
+      ? '<span data-geode-css="display:block;margin-top:2px;font-size:10px;font-weight:400;color:var(--tx-3);text-transform:none;letter-spacing:0">' +
+        escHtmlLite('Since ' + since) +
+        '</span>'
+      : '') +
+    '</summary>' +
+    '<div data-geode-css="margin-top:8px;font-size:10px;color:var(--tx-2);line-height:1.45">' +
+    (latest ? '<div>' + escHtmlLite('Latest: ' + fmExact(sum.latestAmount) + ' \u00b7 ' + latest) + '</div>' : '') +
+    '<div data-geode-css="margin-top:4px">Payments you\u2019ve marked as paid in Beynd. Your saved balance doesn\u2019t change automatically \u2014 check your provider and update it when you can.</div>' +
+    '<div data-geode-css="margin-top:4px;color:var(--tx-3)">Annual and imported payments aren\u2019t included yet.</div>' +
+    '</div>' +
+    '</details>'
   );
 }
 
@@ -12388,9 +12472,9 @@ function geodeSyntheticSpending(latest, pressure) {
 function geodeSyntheticDebtProgress(latestKind) {
   var reps = geodeNudgeRepeatIndex('debt_action_home', 10);
   var msgs = geodeCopy('nudges.debt_action_home.variants', [
-    'Debt moved \u2014 the loudest APR still deserves the first reply.',
-    'Paydown progress \u2014 the fastest win is usually the highest-interest balance.',
-    'Balance shifted \u2014 shrinking the costliest line item frees the rest of your plan.'
+    'Debt in focus \u2014 the highest-APR debt still deserves attention first.',
+    'Steady steps \u2014 extra on the highest-interest debt usually helps most.',
+    'One debt at a time \u2014 the costliest one is usually the best place for extra.'
   ]);
   var isPay = latestKind === 'debt_payment';
   return {
@@ -37010,6 +37094,7 @@ function rDebts(el) {
     }
     var reviewDisclosure = geodeDebtReviewDisclosureHtml(d, S);
     var healthCard = geodeDebtHealthCardHtml(d, S);
+    var paymentActivity = geodeDebtPaymentActivityHtml(d, S);
     var hasReviewDisclosure = !!reviewDisclosure;
     var manageDebtHtml =
       '<details class="geode-manage-disclosure" data-geode-css="margin-top:8px;font-size:9px;color:rgba(189,183,220,0.72);line-height:1.25">' +
@@ -37050,6 +37135,7 @@ function rDebts(el) {
         : '<div></div>') +
       '</div>' +
       healthCard +
+      paymentActivity +
       '<button type="button" class="btn btn-p" data-geode-css="width:100%;margin-top:12px" onclick="geodePayFromDebt(\'' +
       d.id +
       '\')">Schedule extra payment</button>' +

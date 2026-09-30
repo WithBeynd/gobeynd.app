@@ -4,7 +4,7 @@
 // CACHE_VERSION: increment on every release, then commit + push.
 // CACHE_NAME is derived so old caches are deleted on activate and clients never mix versions.
 
-const CACHE_VERSION = 'v1.0.74'; // Stage 80N-P.1 — data-safe runtime release (governance bundle)
+const CACHE_VERSION = 'v1.0.75'; // DP-3 debt payment activity + coaching copy release
 const CACHE_NAME = `beynd-cache-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [

@@ -155,9 +155,9 @@
       "type": "positive",
       "topic": "debt_action_home",
       "variants": [
-        "Debt moved \u2014 the loudest APR still deserves the first reply.",
-        "Paydown progress \u2014 the fastest win is usually the highest-interest balance.",
-        "Balance shifted \u2014 shrinking the costliest line item frees the rest of your plan."
+        "Debt in focus \u2014 the highest-APR debt still deserves attention first.",
+        "Steady steps \u2014 extra on the highest-interest debt usually helps most.",
+        "One debt at a time \u2014 the costliest one is usually the best place for extra."
       ],
       "explain": "Because interest accrues on balances, reducing the highest-APR debt cuts monthly drag the fastest."
     },
