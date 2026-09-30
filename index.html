@@ -13139,7 +13139,7 @@ function getCoreNudges(state) {
       type: 'warning',
       topic: 'debt',
       variants: [
-        'Interest doesn\u2019t wait — but you\u2019re already pushing back. Roughly ' + miStr + '/month is leaving this balance.',
+        'Interest doesn\u2019t wait — this balance is costing roughly ' + miStr + '/month in interest.',
         'This balance is costing you about ' + miStr + '/month in interest.',
         'At current rates, this debt is costing around ' + miStr + '/month — worth chipping at.'
       ]
@@ -15127,15 +15127,9 @@ function geodeHomeNudgeMessage(src, latestKind, pressure, opts) {
   opts = opts || {};
   if (!src) return '';
   var msg = geodeRotateVariantMessage(src, src.topic);
-  var recentDebtPaid = hasRecentActivity(S, 'debt', 14) || e5PaymentsLinkedSince(S, 'debtId', 14);
   var recentGoalFunded = hasRecentActivity(S, 'goal', 14) || e5PaymentsLinkedSince(S, 'goalId', 14);
   var recentInvested = hasRecentInvestmentFlowActivity(S, 14);
-  if (src.topic === 'debt' && recentDebtPaid) {
-    msg +=
-      pressure === 'strong'
-        ? ' Keeping at it reduces interest drag.'
-        : ' You\u2019re making progress here \u2014 staying consistent will keep improving your position.';
-  } else if ((src.topic === 'priority_goal' || src.topic === 'goals_behind') && recentGoalFunded) {
+  if ((src.topic === 'priority_goal' || src.topic === 'goals_behind') && recentGoalFunded) {
     msg += ' Your recent contributions help \u2014 small top-ups are still meaningful.';
   } else if (
     latestKind !== 'expense' &&
@@ -15391,8 +15385,8 @@ function geodeInsightPolishBody(topic, msg, vIx) {
       return debtLines[vIx];
     }
     var softD = [
-      msg.replace(/\bper month in interest on the current balance\.?$/i, 'per month — you\u2019re already chipping away.'),
-      msg.replace(/Interest doesn\u2019t wait/i, 'Interest doesn\u2019t wait — and neither did you'),
+      msg,
+      msg,
       msg.replace(/worth chipping at\.?$/i, 'worth a calm, steady chip.')
     ];
     return geodeHomeInsightShortLine(softD[vIx], 155);
