@@ -1657,6 +1657,7 @@ function load() {
     if (_v !== 'full' && _v !== 'lighter' && _v !== 'encouragement_only') S.adaptiveDisplayModeByFamily[_k] = 'full';
   }
   geodeNormalizeContributionEvents(S);
+  geodeSeedLegacyContributionEvents();
   syncRecurringPayments();
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
@@ -6992,6 +6993,53 @@ function geodeEnsureContributionCompletion(row, source) {
     fields.dueDateSnapshot = '';
     geodeAppendContributionCompletion(fields, source);
   } catch (_eCevEns) {}
+}
+
+/**
+ * FA-3B: the completion a legacy paid row proves, or null. Evidence is the row's own stored fields only: the row must
+ * currently add to an existing goal or investment (geodePaymentBalanceEffect) and name its occurrence — monthly and
+ * annual rows by a valid lastPaidYM (the month the completion was recorded), one-off rows by their due month (never
+ * advanced). A monthly or annual row without lastPaidYM (Smart Import merge, form-saved annual) does not say which
+ * occurrence it completed, and its date may already be the next due date, so it proves none. The due date is kept
+ * only when it lies in the occurrence month.
+ */
+function geodeLegacyContributionSeedFields(state, p) {
+  if (!p || !geodePaymentBalanceEffect(state, p)) return null;
+  var fields = geodeContributionCompletionFields(state, p);
+  if (!fields) return null;
+  if (fields.recurrence !== 'one_off') {
+    if (!geodeContributionYmValid(String(p.lastPaidYM || ''))) return null;
+    fields.occurrenceYm = String(p.lastPaidYM);
+  }
+  if (fields.dueDateSnapshot.slice(0, 7) !== fields.occurrenceYm) fields.dueDateSnapshot = '';
+  return fields;
+}
+
+/**
+ * FA-3B: seed completions for paid occurrences recorded before the ledger existed. Runs on every load, after
+ * normalisation and before syncRecurringPayments resets completed monthly rows; idempotent, so no marker is stored.
+ * Only payments with no ledger history are seeded: once the ledger holds any event for a payment, its transitions
+ * are the recorder's (a form re-save rewrites a paid monthly row's lastPaidYM without a new payment, which the
+ * recorder deliberately leaves unrecorded). Seeded events have source 'migration' and recordedAt is when they were
+ * seeded, not when the payment happened. The row points to the seeded completion only while it still represents that
+ * occurrence (geodeContributionRowRepresents). Observational: no balance changes.
+ */
+function geodeSeedLegacyContributionEvents() {
+  try {
+    if (!S || !Array.isArray(S.payments)) return;
+    if (!Array.isArray(S.contributionEvents)) S.contributionEvents = [];
+    var witnessed = Object.create(null);
+    for (var w = 0; w < S.contributionEvents.length; w++) witnessed[S.contributionEvents[w].paymentId] = true;
+    for (var i = 0; i < S.payments.length; i++) {
+      var p = S.payments[i];
+      var fields = geodeLegacyContributionSeedFields(S, p);
+      if (!fields || witnessed[fields.paymentId]) continue;
+      witnessed[fields.paymentId] = true;
+      var before = geodeContributionEventSnapshot(p);
+      var ev = geodeAppendContributionCompletion(fields, 'migration');
+      if (geodeContributionRowRepresents(before, ev)) p.contributionEventId = ev.id;
+    }
+  } catch (_eCevSeed) {}
 }
 
 /** DP-3: recorded-payment summary for one debt, matched on each event's own debtId. Never stored. */

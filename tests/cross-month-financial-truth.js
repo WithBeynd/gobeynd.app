@@ -74,6 +74,8 @@ const PRODUCTION_FUNCTIONS = [
   'geodeContributionPriorCompletion', 'geodeContributionEventId',
   'geodeAppendContributionCompletion', 'geodeAppendContributionReversal', 'geodeRecordContributionTransition',
   'geodeRecordContributionDeletion', 'geodeEnsureContributionCompletion',
+  // legacy contribution seeding (FA-3B): load seeds completions that legacy paid rows prove
+  'geodeLegacyContributionSeedFields', 'geodeSeedLegacyContributionEvents',
   // Smart Import and backup export / restore extraction
   'geodeSmartImportConfirm', 'exportJSONBackup', 'isPlainObject', 'validateBeyndBackupEnvelope',
   'geodeBeyndBackupRestorableKeyWhitelist', 'geodeBeyndBackupForbiddenDataKeys', 'extractRestorableData',
@@ -155,6 +157,7 @@ function geodePlanReadinessState() { return 'active'; }
 function __reload() {
   S = JSON.parse(__store);
   geodeNormalizeContributionEvents(S);
+  geodeSeedLegacyContributionEvents();
   syncRecurringPayments();
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
@@ -201,6 +204,32 @@ function __countedCheck(goalId) {
     });
     var r = function (v) { return Math.round(v * 100) / 100; };
     return JSON.stringify({ recompute: r(toNum(g.saved)), helper: r(c.total), paidRecurring: r(paidRecurring), helperRecurring: r(c.recurring) });
+  } finally {
+    S = keep;
+  }
+}
+
+/**
+ * FA-3C hypothesis, measured on a copy: what goals and investments would show if base + active contribution
+ * completions − event-derived releases were the authority (the recompute's release clamp and goal display rule).
+ */
+function __eventAuthority() {
+  var keep = S;
+  try {
+    S = JSON.parse(JSON.stringify(keep));
+    var active = geodeContributionActiveCompletions(S);
+    var position = function (entityType, entity, base) {
+      var sum = toNum(base);
+      active.forEach(function (e) { if (e.entityType === entityType && e.entityId === String(entity.id)) sum += e.amount; });
+      var ded = geodeSavingsReleaseDeductionSumForSource(S, entity.id);
+      return ded > 0 ? Math.max(0, Math.round((sum - ded) * 100) / 100) : sum;
+    };
+    var goal = {}, inv = {};
+    (S.goals || []).forEach(function (g) { g.saved = position('goal', g, g.baseSaved); });
+    (S.investments || []).forEach(function (i) { i.balance = position('investment', i, i.baseBalance); });
+    (S.goals || []).forEach(function (g) { goal[g.id] = geodeGoalEffectiveSavedFromState(S, g); });
+    (S.investments || []).forEach(function (i) { inv[i.id] = toNum(i.balance); });
+    return JSON.stringify({ goal: goal, inv: inv });
   } finally {
     S = keep;
   }
@@ -606,7 +635,7 @@ const signature = rows => rows.map(r => ({ rec: r.rec, amount: r.amount })).sort
 function harnessFidelity() {
   scenario('Harness fidelity — shims mirror production boot and render', () => {
     const load = PROGRAM.structural.load;
-    const order = ['geodeNormalizeContributionEvents(S);', 'syncRecurringPayments();', 'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();',
+    const order = ['geodeNormalizeContributionEvents(S);', 'geodeSeedLegacyContributionEvents();', 'syncRecurringPayments();', 'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();',
       'geodeNormalizeSavingsReleases(S);', 'geodeNormalizeDebtPaymentEvents(S);', 'geodeRecomputeBalancesFromPayments();'];
     const at = order.map(c => load.indexOf(c));
     invariant('fidelity.load', 'load() runs the reload-shim sequence in this order', at.every((p, i) => p >= 0 && (i === 0 || p > at[i - 1])), true);
@@ -1723,8 +1752,9 @@ function fa3aLedger() {
     const oldRestored = app.restorable(old);
     const oldApp = new App(oldRestored.state, '2026-06-20');
     oldApp.reload();
-    invariant('FA3A.old-backup', 'A backup from before the ledger is accepted and loads with an empty ledger (nothing seeded), Holiday £1,250',
-      [oldRestored.ok, Object.prototype.hasOwnProperty.call(oldRestored.state, 'contributionEvents'), oldApp.events(), oldApp.snap().goal.gH], [true, false, [], 1250]);
+    invariant('FA3A.old-backup', 'A backup from before the ledger is accepted; loading it seeds the one completion its paid one-off proves (FA-3B migration), Holiday £1,250',
+      [oldRestored.ok, Object.prototype.hasOwnProperty.call(oldRestored.state, 'contributionEvents'), evRows(oldApp), oldApp.snap().goal.gH],
+      [true, false, [['completion', 'id1', 'goal:gH', '2026-06', 250, 'one_off', 'migration']], 1250]);
     const lists = JSON.parse(app.run('JSON.stringify([geodeBeyndBackupRestorableKeyWhitelist(), geodeBeyndBackupForbiddenDataKeys()])'));
     invariant('FA3A.backup.lists', 'contributionEvents is restorable, not forbidden and not excluded from export',
       [lists[0].indexOf('contributionEvents') >= 0, lists[1].indexOf('contributionEvents'), env.excludedTopLevelKeys.indexOf('contributionEvents')], [true, -1, -1]);
@@ -1899,20 +1929,28 @@ function fa3aRollover() {
       debtId: '', payKind: 'goal' }, link);
     const state = baseState({ payments: [paid('m', 'yes', '2026-07-15', '2026-06', { goalId: 'gH' }), paid('o', 'no', '2026-06-02', '', { goalId: 'gH' }),
       paid('mi', 'yes', '2026-07-15', '2026-06', { investId: 'iA', payKind: 'invest' }), paid('b', 'yes', '2026-07-15', '2026-06', { payKind: 'bill' })] });
-    const expected = [['completion', 'm', 'goal:gH', '2026-06', 100, 'monthly', 'rollover_safety_net'], ['completion', 'mi', 'investment:iA', '2026-06', 100, 'monthly', 'rollover_safety_net']];
-    const out = MODES.map(mode => {
+    const seeded = [['completion', 'm', 'goal:gH', '2026-06', 100, 'monthly', 'migration'], ['completion', 'o', 'goal:gH', '2026-06', 100, 'one_off', 'migration'],
+      ['completion', 'mi', 'investment:iA', '2026-06', 100, 'monthly', 'migration']];
+    const loaded = MODES.map(mode => {
       const app = new App(state, '2026-06-20');
       app.reload(); app.render();
-      const june = app.events();
+      const june = [evRows(app), app.state().payments.map(p => !!p.contributionEventId)];
       app.advance('2026-07-02', mode);
-      const july = [evRows(app), app.events().map(e => e.dueDateSnapshot)];
       app.render(); app.reload(); app.advance('2026-08-02', 'reload');
-      return [june, july, app.events().length];
+      return [june, evRows(app)];
     });
-    invariant('FA3A.no-seed', 'Loading and rendering in June records nothing for rows completed before the ledger', out.map(o => o[0]), [[], []]);
-    invariant('FA3A.safety-net', 'At the July rollover (session and reload) the safety net records each completed monthly goal/ISA row once for June, with no due-date snapshot; one-offs and bills record nothing',
-      out.map(o => o[1]), [[expected, ['', '']], [expected, ['', '']]]);
-    invariant('FA3A.safety-net.repeat', 'Later renders, reloads and the August rollover add nothing', out.map(o => o[2]), [2, 2]);
+    invariant('FA3A.legacy-seeded', 'Loading in June seeds each completed goal/ISA row once (FA-3B migration) and points it there; the bill seeds nothing; July and August add nothing',
+      loaded, MODES.map(() => [[seeded, [true, true, true, false]], seeded]));
+    const expected = [['completion', 'm', 'goal:gH', '2026-06', 100, 'monthly', 'rollover_safety_net'], ['completion', 'mi', 'investment:iA', '2026-06', 100, 'monthly', 'rollover_safety_net']];
+    const app = new App(state, '2026-06-20');
+    app.render();
+    app.advance('2026-07-02', 'session');
+    const july = [evRows(app), app.events().map(e => e.dueDateSnapshot)];
+    invariant('FA3A.safety-net', 'Rows completed without capture in a session that never loaded: the July rollover records each completed monthly goal/ISA row once for June, with no due-date snapshot; one-offs and bills record nothing',
+      july, [expected, ['', '']]);
+    app.render(); app.reload(); app.advance('2026-08-02', 'reload');
+    invariant('FA3A.safety-net.repeat', 'Later renders add nothing; the next load seeds only the paid one-off the safety net leaves to migration; the August rollover adds nothing',
+      evRows(app), expected.concat([['completion', 'o', 'goal:gH', '2026-06', 100, 'one_off', 'migration']]));
   });
 }
 
@@ -2086,15 +2124,344 @@ function fa3aOccurrence() {
   });
 }
 
+// FA-3B: load seeds the completions legacy paid rows prove; nothing financial reads the ledger yet.
+
+const FA3B_STEPS = [{ label: 'Catch up on Holiday', amount: 120 }, { label: 'Invest what remains', amount: 120 }];
+/** A payment row as builds before the ledger stored it (paid one-off £250 for Holiday unless overridden). */
+const legacyPay = (id, o) => Object.assign({ id, name: id, amount: 250, date: '2026-06-10', status: 'paid', rec: 'no', lastPaidYM: '', goalId: 'gH',
+  investId: '', debtId: '', payKind: 'goal', createdAt: 1 }, o);
+const legacyInvPay = (id, o) => legacyPay(id, Object.assign({ amount: 200, goalId: '', investId: 'iA', payKind: 'invest' }, o));
+const legacyState = (goal, extra) => baseState(Object.assign({ incomeExplicitlySet: true, goals: [Object.assign(HOLIDAY(), goal)] }, extra));
+const legacyInvState = (inv, extra) => baseState(Object.assign({ incomeExplicitlySet: true, investments: [Object.assign(ISA(), inv)] }, extra));
+const EVENT_RELEASE = { id: 'r_event', sourceType: 'goal', sourceId: 'gH', amount: 200, reason: 'emergency', date: '2026-06-20', ym: '2026-06', relatedYm: '2026-06',
+  remainingBalance: 800, createdAt: 1781949600000, confirmedByUser: true, note: '', balanceMutationMode: 'event_derived' };
+const LEGACY_RELEASE = { id: 'r_legacy', sourceType: 'goal', sourceId: 'gH', amount: 200, reason: 'manual', date: '2026-05-20', ym: '2026-05', createdAt: 1779271200000,
+  confirmedByUser: true };
+const PAYMENT_LOG = [{ ts: 1781517600000, type: 'payment', delta: 250, payKind: 'goal', goalId: 'gH', name: 'pm' },
+  { ts: 1784109600000, type: 'payment', delta: 250, payKind: 'goal', goalId: 'gH', name: 'pm' }];
+
+/** Loads a stored state in the Plan program; without seeding it is the legacy (pre-FA-3B) load. */
+const fa3bLoad = (state, clock, seeding) => {
+  const app = new App(state, clock, PROGRAM.plan);
+  if (!seeding) app.run('geodeSeedLegacyContributionEvents = function () {};');
+  app.setPlan(FA3B_STEPS);
+  app.reload();
+  return app;
+};
+/** Displayed figures, Monthly Left and rows, Plan detail, Home main action and Suggested Actions. */
+const fa3bLook = app => ({ snap: app.snap(), plan: FA3B_STEPS.map(s => app.planView(s)), home: FA3B_STEPS.map(s => app.homeView(s)), suggestions: app.suggestions() });
+/** [payment, entity, occurrence, amount, recurrence, dueDateSnapshot, source] */
+const seededRows = app => app.events().map(e => [e.paymentId, e.entityType + ':' + e.entityId, e.occurrenceYm, e.amount, e.recurrence, e.dueDateSnapshot, e.source]);
+const pointedRows = app => { const ids = app.activeEvents().map(e => e.id); return app.state().payments.filter(p => ids.indexOf(p.contributionEventId) >= 0).map(p => p.id); };
+
+/**
+ * Legacy load (L) beside the seeded load (M), two reloads, repeated seeding, and the hypothetical event-authority
+ * position (E) on the migrated state.
+ */
+function fa3bMigrate(state, clock, kind, entityId) {
+  const legacy = fa3bLoad(state, clock, false);
+  const app = fa3bLoad(state, clock, true);
+  const shownIn = look => (kind === 'goal' ? look.snap.goal : look.snap.inv)[entityId];
+  const L = fa3bLook(legacy), M = fa3bLook(app);
+  const seeded = seededRows(app), events = app.events(), pointers = pointedRows(app), migrated = app.state();
+  const authority = JSON.parse(app.run('__eventAuthority()'));
+  const E = (kind === 'goal' ? authority.goal : authority.inv)[entityId];
+  legacy.reload(); app.reload();
+  const LR = fa3bLook(legacy), R1 = fa3bLook(app);
+  app.render(); app.reload();
+  const R2 = fa3bLook(app);
+  app.run('geodeSeedLegacyContributionEvents(); geodeSeedLegacyContributionEvents();');
+  return {
+    seeded, pointers, E,
+    shown: [shownIn(L), shownIn(M), shownIn(R1), shownIn(R2)],
+    surfaces: same(L, M) && same(LR, R1),
+    rows: same(withoutLedger(migrated), withoutLedger(legacy.state())),
+    idempotent: same(app.events(), events) && same(app.state().payments, migrated.payments) && same(R1.snap, R2.snap),
+    stored: kind === 'goal' ? state.goals[0].saved : state.investments[0].balance
+  };
+}
+
+/**
+ * [key, matrix id, stored state, clock, seeded [payment, occurrence, amount, recurrence, dueDateSnapshot], rows pointed at their
+ *  seeded completion, legacy shown L, hypothetical event authority E, why E differs]
+ */
+const FA3B_GOALS = [
+  ['base-only', 'G0 base £1,000 only', legacyState({}), '2026-08-10', [], [], 1000, 1000],
+  ['one-off', 'G1 base £1,000 + paid one-off £250 due 10 June', legacyState({ saved: 1250 }, { payments: [legacyPay('p1')] }), '2026-08-10',
+    [['p1', '2026-06', 250, 'one_off', '2026-06-10']], ['p1'], 1250, 1250],
+  ['annual-safe', 'G2 base + annual £250 completed June 2026 (lastPaidYM 2026-06, due date already advanced to 10 June 2027)',
+    legacyState({ saved: 1250 }, { payments: [legacyPay('pa', { rec: 'annual', lastPaidYM: '2026-06', date: '2027-06-10' })] }), '2026-08-10',
+    [['pa', '2026-06', 250, 'annual', '']], ['pa'], 1250, 1250],
+  ['monthly-current', 'G3 base + monthly £100 completed this month (lastPaidYM 2026-08, next due 15 September)',
+    legacyState({ saved: 1100 }, { payments: [legacyPay('pm', { amount: 100, rec: 'yes', lastPaidYM: '2026-08', date: '2026-09-15' })] }), '2026-08-20',
+    [['pm', '2026-08', 100, 'monthly', '']], ['pm'], 1100, 1100],
+  ['monthly-prior-unsynced', 'G4 base + monthly £250 completed in June and saved; Beynd next opened on 2 July',
+    legacyState({ saved: 1250 }, { payments: [legacyPay('pm', { rec: 'yes', lastPaidYM: '2026-06', date: '2026-07-15' })] }), '2026-07-02',
+    [['pm', '2026-06', 250, 'monthly', '']], [], 1000, 1250, 'D1: the legacy load resets the June row; event authority keeps the June £250 it rescued'],
+  ['monthly-lost', 'G5 base + monthly £250 already reset at earlier rollovers (June and July survive only in the activity log)',
+    legacyState({}, { payments: [legacyPay('pm', { rec: 'yes', status: 'upcoming', date: '2026-08-15' })], activityLog: PAYMENT_LOG }), '2026-08-05', [], [], 1000, 1000],
+  ['release-event', 'G6 base £1,000 + event-derived release £200', legacyState({ saved: 800 }, { savingsReleases: [EVENT_RELEASE] }), '2026-08-10', [], [], 800, 800],
+  ['release-base-delta', 'G7 legacy base-delta release £200 already inside baseSaved £800',
+    legacyState({ saved: 800, baseSaved: 800 }, { savingsReleases: [LEGACY_RELEASE] }), '2026-08-10', [], [], 800, 800],
+  ['oneoff-release', 'G8 base + paid one-off £250 + event-derived release £200',
+    legacyState({ saved: 1050 }, { payments: [legacyPay('p1')], savingsReleases: [EVENT_RELEASE] }), '2026-08-10',
+    [['p1', '2026-06', 250, 'one_off', '2026-06-10']], ['p1'], 1050, 1050],
+  ['recurring-release', 'G9 base + monthly £250 completed this month + event-derived release £200',
+    legacyState({ saved: 1050 }, { payments: [legacyPay('pm', { rec: 'yes', lastPaidYM: '2026-08', date: '2026-09-15' })], savingsReleases: [EVENT_RELEASE] }),
+    '2026-08-20', [['pm', '2026-08', 250, 'monthly', '']], ['pm'], 1050, 1050],
+  ['deposit-base', 'G10 deposit £50 already folded into baseSaved £1,050', legacyState({ saved: 1050, baseSaved: 1050 },
+    { activityLog: [{ ts: 1783418400000, type: 'goal', delta: 50, goalId: 'gH', goalName: 'Holiday' }] }), '2026-08-10', [], [], 1050, 1050],
+  ['d3-residue', 'G11 old D3 edit wrote the shown £1,250 into baseSaved while the paid one-off £250 remains',
+    legacyState({ saved: 1500, baseSaved: 1250 }, { payments: [legacyPay('p1')] }), '2026-08-10', [['p1', '2026-06', 250, 'one_off', '2026-06-10']], ['p1'], 1500, 1500],
+  ['no-base', 'G12 goal stored without baseSaved (saved £1,250 already includes the paid one-off £250)',
+    (() => { const s = legacyState({ saved: 1250 }, { payments: [legacyPay('p1')] }); delete s.goals[0].baseSaved; return s; })(), '2026-08-10',
+    [['p1', '2026-06', 250, 'one_off', '2026-06-10']], ['p1'], 1500, 1500],
+  ['monthly-ambiguous', 'GA base + monthly £100 paid by a Smart Import merge (no lastPaidYM; import date 3 June)',
+    legacyState({ saved: 1100 }, { payments: [legacyPay('pm', { amount: 100, rec: 'yes', date: '2026-06-03' })] }), '2026-08-10', [], [], 1100, 1000,
+    'ambiguous legacy history: legacy keeps counting the paid row forever; no occurrence month is recorded, so nothing is seeded'],
+  ['annual-ambiguous', 'GB base + annual £250 completed, then form-edited (lastPaidYM lost; date is the advanced 10 June 2027)',
+    legacyState({ saved: 1250 }, { payments: [legacyPay('pa', { rec: 'annual', date: '2027-06-10' })] }), '2026-08-10', [], [], 1250, 1000,
+    'ambiguous legacy history: the stored date may be the completed occurrence or the next one'],
+  ['annual-ambiguous-past', 'GC base + annual £250 saved as paid through the form (no lastPaidYM; date 10 June 2026) — same stored shape as GB',
+    legacyState({ saved: 1250 }, { payments: [legacyPay('pa', { rec: 'annual', date: '2026-06-10' })] }), '2026-08-10', [], [], 1250, 1000,
+    'ambiguous legacy history: indistinguishable from GB'],
+  ['negative', 'GX base + paid one-off of −£50 (not a contribution; legacy subtracts it)',
+    legacyState({ saved: 950 }, { payments: [legacyPay('pn', { amount: -50 })] }), '2026-08-10', [], [], 950, 1000,
+    'other: a negative paid row is not a contribution event'],
+  ['scope', 'GS paid one-off £250 linked to a deleted goal; paid debt and bill rows; upcoming and overdue Holiday one-offs', legacyState({}, {
+    debts: [{ id: 'dC', name: 'Card', balance: 1000, minPayment: 50, apr: 25 }],
+    payments: [legacyPay('pg', { goalId: 'gGone' }), legacyPay('pd', { goalId: '', debtId: 'dC', payKind: 'debt' }), legacyPay('pb', { goalId: '', payKind: 'bill' }),
+      legacyPay('pu', { status: 'upcoming', date: '2026-08-25' }), legacyPay('po', { status: 'overdue', date: '2026-08-01' })] }),
+    '2026-08-10', [], [], 1000, 1000]
+];
+
+/** Investments stay capture-only: Balance keeps its legacy authority (D10 open). */
+const FA3B_INVESTMENTS = [
+  ['base-only', 'I0 ISA balance £5,000 only', legacyInvState({}), '2026-08-10', [], [], 5000, 5000],
+  ['one-off', 'I1 ISA + paid one-off £500', legacyInvState({ balance: 5500 }, { payments: [legacyInvPay('i1', { amount: 500, date: '2026-06-05' })] }), '2026-08-10',
+    [['i1', '2026-06', 500, 'one_off', '2026-06-05']], ['i1'], 5500, 5500],
+  ['monthly-current', 'I2 ISA + monthly £200 completed this month', legacyInvState({ balance: 5200 },
+    { payments: [legacyInvPay('im', { rec: 'yes', lastPaidYM: '2026-08', date: '2026-09-05' })] }), '2026-08-20', [['im', '2026-08', 200, 'monthly', '']], ['im'], 5200, 5200],
+  ['monthly-prior-unsynced', 'I3 ISA + monthly £200 completed in June; next opened on 2 July', legacyInvState({ balance: 5200 },
+    { payments: [legacyInvPay('im', { rec: 'yes', lastPaidYM: '2026-06', date: '2026-07-05' })] }), '2026-07-02', [['im', '2026-06', 200, 'monthly', '']], [], 5000, 5200,
+    'D1: the legacy load resets the June row'],
+  ['monthly-ambiguous', 'I4 ISA + monthly £200 paid with no lastPaidYM', legacyInvState({ balance: 5200 },
+    { payments: [legacyInvPay('im', { rec: 'yes', date: '2026-06-05' })] }), '2026-08-10', [], [], 5200, 5000, 'ambiguous legacy history'],
+  ['annual-safe', 'I5 ISA + annual £200 completed June 2026 (lastPaidYM 2026-06)', legacyInvState({ balance: 5200 },
+    { payments: [legacyInvPay('ia', { rec: 'annual', lastPaidYM: '2026-06', date: '2027-06-05' })] }), '2026-08-10', [['ia', '2026-06', 200, 'annual', '']], ['ia'], 5200, 5200],
+  ['annual-ambiguous', 'I6 ISA + annual £200 paid with no lastPaidYM', legacyInvState({ balance: 5200 },
+    { payments: [legacyInvPay('ia', { rec: 'annual', date: '2027-06-05' })] }), '2026-08-10', [], [], 5200, 5000, 'ambiguous legacy history']
+];
+
+function fa3bMatrix() {
+  [['goal', 'gH', FA3B_GOALS], ['investment', 'iA', FA3B_INVESTMENTS]].forEach(([kind, entityId, cases]) => cases.forEach(c => {
+    const [key, name, state, clock, seeded, pointers, shown, hypothetical, why] = c;
+    const prefix = kind === 'goal' ? 'FA3B.goal.' : 'FA3B.inv.';
+    scenario('FA-3B MIGRATION — ' + name, () => {
+      const r = fa3bMigrate(state, clock, kind, entityId);
+      const entity = kind === 'goal' ? 'goal:' + entityId : 'investment:' + entityId;
+      invariant(prefix + key, 'Seeds ' + (seeded.length ? seeded.map(s => s[0] + ' ' + s[1] + ' £' + s[2]).join(', ') : 'nothing') +
+        '; shown ' + show(shown) + ' before migration, after it and after two reloads (stored ' + show(r.stored) + '); every surface identical to the legacy load; rows unchanged except the pointer; idempotent',
+        { seeded: r.seeded, pointers: r.pointers, shown: r.shown, surfaces: r.surfaces, rows: r.rows, idempotent: r.idempotent },
+        { seeded: seeded.map(s => [s[0], entity].concat(s.slice(1), ['migration'])), pointers, shown: [shown, shown, shown, shown], surfaces: true, rows: true, idempotent: true });
+      const text = 'L legacy ' + show(shown) + ' / M after migration ' + show(r.shown[1]) + ' / E event authority ' + show(r.E);
+      const prefixA = kind === 'goal' ? 'FA3B.authority.' : 'FA3B.authority.inv.';
+      if (shown === hypothetical) invariant(prefixA + key, text + ' — identical', [r.shown[0], r.shown[1], r.E], [shown, shown, hypothetical]);
+      else current(prefixA + key, text + ' — ' + why, [r.shown[0], r.shown[1], r.E], [shown, shown, hypothetical]);
+    });
+  }));
+}
+
+function fa3bOrder() {
+  scenario('FA-3B ORDER — migration runs after normalisation and before syncRecurringPayments', () => {
+    const load = PROGRAM.structural.load;
+    const at = ['geodeNormalizeContributionEvents(S);', 'geodeSeedLegacyContributionEvents();', 'syncRecurringPayments();'].map(c => load.indexOf(c));
+    const app = new App(legacyState({ saved: 1250 }, { payments: [legacyPay('pm', { rec: 'yes', lastPaidYM: '2026-06', date: '2026-07-15' })] }), '2026-07-02');
+    app.reload();
+    const row = app.state().payments[0];
+    const june = app.events();
+    app.render(); app.reload(); app.advance('2026-08-02', 'reload');
+    invariant('FA3B.order.before-sync', 'load() seeds between normalisation and the first rollover; June paid row opened in July: its June £250 is seeded by migration (not left to the rollover safety net), stays active through August; the row is then reset with no pointer',
+      [at.every((p, i) => p >= 0 && (i === 0 || p > at[i - 1])), seededRows(app), app.activeEvents().map(e => e.id), same(app.events(), june), [row.status, row.lastPaidYM, 'contributionEventId' in row]],
+      [true, [['pm', 'goal:gH', '2026-06', 250, 'monthly', '', 'migration']], [june[0].id], true, ['upcoming', '', false]]);
+  });
+}
+
+function fa3bPointers() {
+  const G1 = FA3B_GOALS[1], G2 = FA3B_GOALS[2], G3 = FA3B_GOALS[3];
+  const loaded = (c, clock) => { const app = new App(c[2], clock || c[3]); app.reload(); return { app, seeded: app.events()[0] }; };
+  const tail = (app, n) => evRows(app).slice(n);
+  scenario('FA-3B POINTER — a migrated completion behaves like a native one while the row still represents its occurrence', () => {
+    const after = (c, act) => { const { app, seeded } = loaded(c); act(app); return { app, seeded }; };
+    let { app, seeded } = after(G1, a => a.toggle('p1'));
+    const oneOff = [tail(app, 1), [seeded.id, app.activeEvents().length, app.pointer('p1'), app.snap().goal.gH]];
+    ({ app, seeded } = after(G3, a => a.toggle('pm')));
+    invariant('FA3B.pointer.undo', 'Undo reverses the migrated completion: one-off and this month\'s monthly row; nothing active; pointer removed; Holiday £1,000',
+      [oneOff, [tail(app, 1), [seeded.id, app.activeEvents().length, app.pointer('pm'), app.snap().goal.gH]]],
+      [[[['reversal', 'p1', 'goal:gH', '2026-06', oneOff[1][0], 'mark_completed']], [oneOff[1][0], 0, null, 1000]],
+        [[['reversal', 'pm', 'goal:gH', '2026-08', seeded.id, 'mark_completed']], [seeded.id, 0, null, 1000]]]);
+
+    ({ app, seeded } = after(G3, a => a.editPayment('pm', { amount: 150 })));
+    const monthly = [tail(app, 1), app.pointer('pm') === app.events()[2].id, seeded.id];
+    ({ app, seeded } = after(G2, a => { a.at('2026-09-01'); a.editPayment('pa', { amount: 300 }); }));
+    invariant('FA3B.pointer.edit', 'A paid edit reverses the migrated completion and records the new amount for the same occurrence: monthly £150 (August), annual £300 in September (2026-06)',
+      [monthly, tail(app, 1)],
+      [[[['reversal', 'pm', 'goal:gH', '2026-08', monthly[2], 'payment_form'], ['completion', 'pm', 'goal:gH', '2026-08', 150, 'monthly', 'payment_form']], true, monthly[2]],
+        [['reversal', 'pa', 'goal:gH', '2026-06', seeded.id, 'payment_form'], ['completion', 'pa', 'goal:gH', '2026-06', 300, 'annual', 'payment_form']]]);
+
+    ({ app, seeded } = after(G1, a => a.del('p1')));
+    const deleted = [tail(app, 1), app.activeEvents().length, seeded.id];
+    ({ app, seeded } = after(G2, a => { a.advance('2027-06-05', 'reload'); a.del('pa'); }));
+    invariant('FA3B.pointer.delete', 'Deleting the migrated one-off reverses it; deleting the annual row in June 2027 (stale) leaves the 2026 completion active',
+      [deleted, [app.events(), app.activeEvents().map(e => e.id)]],
+      [[[['reversal', 'p1', 'goal:gH', '2026-06', deleted[2], 'delete_payment']], 0, deleted[2]], [[seeded], [seeded.id]]]);
+
+    const rolled = MODES.map(mode => {
+      ({ app, seeded } = loaded(G3));
+      app.advance('2026-09-02', mode);
+      const row = app.state().payments[0];
+      app.render(); app.reload();
+      return [app.events(), [row.status, 'contributionEventId' in row], app.snap().goal.gH];
+    });
+    invariant('FA3B.pointer.rollover', 'September rollover (session and reload): the migrated August completion survives unchanged and undoubled; the row resets and drops its pointer; Holiday shows the legacy £1,000 (D1 open)',
+      rolled.map(r => [r[0].length, r[0][0].source, r[1], r[2]]), MODES.map(() => [1, 'migration', ['upcoming', false], 1000]));
+
+    ({ app, seeded } = loaded(G2));
+    const pointed = app.pointer('pa') === seeded.id;
+    app.advance('2027-06-05', 'reload');
+    app.at('2027-06-10'); app.toggle('pa');
+    const late = loaded(G2, '2027-07-01');
+    invariant('FA3B.pointer.annual', 'Annual: the migrated 2026 completion is pointed at in 2026; a tap in June 2027 leaves it active (no reversal, no 2027 event); the same row first opened in July 2027 is seeded for 2026 without a pointer',
+      [pointed, app.events(), app.activeEvents().map(e => e.id), seededRows(late.app), late.app.pointer('pa')],
+      [true, [seeded], [seeded.id], [['pa', 'goal:gH', '2026-06', 250, 'annual', '', 'migration']], null]);
+  });
+}
+
+function fa3bParity() {
+  /** [type, payment, entity, occurrence, amount | reversed position, recurrence] — provenance (id, time, source) left out. */
+  const shape = app => { const ev = app.events(); return ev.map(e => [e.eventType, e.paymentId, e.entityType + ':' + e.entityId, e.occurrenceYm,
+    e.eventType === 'completion' ? e.amount : ev.findIndex(x => x.id === e.reversesEventId), e.recurrence || '']); };
+  const look = app => [shape(app), app.activeEvents().length, !!app.pointer('id1'), app.snap().goal.gH];
+  const ACTIONS = [
+    ['undo', app => app.toggle('id1')],
+    ['undo-recomplete', app => { app.toggle('id1'); app.toggle('id1'); }],
+    ['paid-edit', app => app.editPayment('id1', { amount: 300 })],
+    ['delete', app => app.del('id1')],
+    ['rollover', app => { app.advance('2026-07-02', 'session'); app.reload(); app.advance('2026-08-02', 'reload'); }],
+    ['backup-restore', app => { const restored = app.restorable(app.backup()); app.run('S = ' + JSON.stringify(restored.state) + '; save();'); app.reload(); }]
+  ];
+  scenario('FA-3B PARITY — native FA-3A completion vs migrated completion of the same row', () => {
+    const out = [['one-off', holidayOneOff], ['monthly', holidayMonthly]].map(([label, setup]) => {
+      const native = () => freshApp(setup);
+      const migrated = () => { const a = new App(withoutLedger(native().state()), '2026-06-10'); a.reload(); return a; };
+      const n = native().events()[0], m = migrated().events()[0];
+      const fields = e => [e.paymentId, e.entityType, e.entityId, e.occurrenceYm, e.amount, e.recurrence];
+      const differ = COMPLETION_KEYS.filter(k => k !== 'id' && k !== 'recordedAt' && !same(n[k], m[k]));
+      return [label, same(fields(n), fields(m)), differ, ACTIONS.filter(([, act]) => {
+        const a = native(), b = migrated();
+        act(a); act(b);
+        return !same(look(a), look(b));
+      }).map(x => x[0])];
+    });
+    invariant('FA3B.parity.native-migrated', 'Same payment, goal, occurrence, amount and recurrence; undo, re-complete, paid edit, delete, rollover and backup/restore give identical ledgers, active sets, pointers and Holiday; only provenance differs (source; and for a monthly row the pre-advance due date, which migration cannot see)',
+      out, [['one-off', true, ['source'], []], ['monthly', true, ['dueDateSnapshot', 'source'], []]]);
+
+    const covered = setup => { const a = freshApp(setup); const before = a.events(); a.reload(); a.reload(); return same(a.events(), before) && before.length > 0; };
+    const importedThenResaved = a => {
+      const sched = monthlyHoliday(a);
+      a.smartImport([{ name: 'Holiday monthly', amount: 100, date: '2026-06-03', link: 'goal:gH', mergeId: sched }]);
+      a.advance('2026-07-02', 'reload');
+      a.at('2026-07-10'); a.editPayment(sched, { name: 'Holiday monthly (renamed)' });
+    };
+    invariant('FA3B.native.covered', 'Payments the ledger has seen seed nothing on load: monthly completed this month; one-off moved to July after completion; the same with its pointer lost; a June Smart Import merge re-saved through the form in July (lastPaidYM rewritten to July, no July payment)',
+      [covered(holidayMonthly), covered(a => { holidayOneOff(a); a.editPayment('id1', { date: '2026-07-02' }); }),
+        covered(a => { holidayOneOff(a); a.editPayment('id1', { date: '2026-07-02' }); a.run('delete S.payments[0].contributionEventId; save();'); }),
+        covered(importedThenResaved)], [true, true, true, true]);
+  });
+}
+
+function fa3bLifecycle() {
+  const MIXED = legacyState({ saved: 1700 }, { investments: [Object.assign(ISA(), { balance: 5700 })], payments: [legacyPay('p1'),
+    legacyPay('pm', { amount: 100, rec: 'yes', lastPaidYM: '2026-08', date: '2026-09-15' }), legacyPay('pa', { rec: 'annual', lastPaidYM: '2026-06', date: '2027-06-10' }),
+    legacyPay('px', { amount: 100, rec: 'yes', date: '2026-06-03' }), legacyInvPay('i1', { amount: 500, date: '2026-06-05' }), legacyInvPay('ia', { rec: 'annual', date: '2027-06-05' })] });
+  const MIXED_SEEDED = [['p1', 'goal:gH', '2026-06', 250, 'one_off', '2026-06-10', 'migration'], ['pm', 'goal:gH', '2026-08', 100, 'monthly', '', 'migration'],
+    ['pa', 'goal:gH', '2026-06', 250, 'annual', '', 'migration'], ['i1', 'investment:iA', '2026-06', 500, 'one_off', '2026-06-05', 'migration']];
+  const view = app => [app.events(), app.activeEvents().length, app.snap()];
+  scenario('FA-3B IDEMPOTENCY AND RELOAD — one-off, monthly, annual, ISA and ambiguous rows together', () => {
+    const app = new App(MIXED, '2026-08-20');
+    app.reload();
+    const first = view(app), rows = app.state().payments;
+    app.reload(); app.reload(); app.render(); app.render(); app.reload();
+    app.run('geodeSeedLegacyContributionEvents(); geodeSeedLegacyContributionEvents(); geodeSeedLegacyContributionEvents();');
+    invariant('FA3B.idempotent', 'Seeds four completions (ambiguous monthly and annual rows none); four more loads, two renders and three direct runs add nothing and change no row or display; Holiday £1,700, ISA £5,700',
+      [seededRows(app), same(view(app), first), same(app.state().payments, rows), [first[2].goal.gH, first[2].inv.iA]], [MIXED_SEEDED, true, true, [1700, 5700]]);
+    const path = steps => { const a = new App(MIXED, '2026-08-20'); steps(a); return view(a); };
+    const once = path(a => a.reload());
+    invariant('FA3B.reload', 'Load once, load-render-load-load and load-load-load give identical ledgers, active sets and displays (rendering before a reload changes nothing)',
+      [same(path(a => { a.reload(); a.render(); a.reload(); a.reload(); }), once), same(path(a => { a.reload(); a.reload(); a.reload(); }), once)], [true, true]);
+  });
+
+  scenario('FA-3B BACKUP — legacy, native, migrated and ambiguous backups restore without duplicates or invention', () => {
+    const restoreLoad = (env, clock) => { const r = new App({}, clock).restorable(env); const a = new App(r.state, clock); a.reload(); return { r, a }; };
+    const legacyEnv = new App(MIXED, '2026-08-20').backup();
+    const legacy = restoreLoad(legacyEnv, '2026-08-20');
+    invariant('FA3B.backup.legacy', 'A legacy backup (no contributionEvents) restores; the load seeds only the four completions its rows prove; Holiday £1,700, ISA £5,700',
+      ['contributionEvents' in legacyEnv.data, legacy.r.ok, seededRows(legacy.a), legacy.a.snap().goal.gH, legacy.a.snap().inv.iA], [false, true, MIXED_SEEDED, 1700, 5700]);
+    const native = freshApp(a => { holidayOneOff(a); a.at('2026-06-20'); });
+    const nativeBack = restoreLoad(native.backup(), '2026-06-20');
+    invariant('FA3B.backup.native', 'A backup holding a native completion restores and loads with exactly that ledger (no migration copy)',
+      [nativeBack.a.events(), nativeBack.a.pointer('id1')], [native.events(), native.events()[0].id]);
+    const migrated = new App(MIXED, '2026-08-20');
+    migrated.reload();
+    const migratedBack = restoreLoad(migrated.backup(), '2026-08-20');
+    migratedBack.a.reload();
+    invariant('FA3B.backup.migrated', 'A backup holding migrated completions restores, loads and reloads with exactly that ledger and those pointers',
+      [migratedBack.a.events(), migratedBack.a.state().payments.map(p => p.contributionEventId || null)],
+      [migrated.events(), migrated.state().payments.map(p => p.contributionEventId || null)]);
+    const ambiguous = legacyState({ saved: 1350 }, { payments: [legacyPay('px', { amount: 100, rec: 'yes', date: '2026-06-03' }), legacyPay('pa', { rec: 'annual', date: '2027-06-10' })] });
+    const ambiguousBack = restoreLoad(new App(ambiguous, '2026-08-10').backup(), '2026-08-10');
+    invariant('FA3B.backup.ambiguous', 'A legacy backup with only ambiguous paid rows restores with no invented event; Holiday stays £1,350; schema stays 1',
+      [ambiguousBack.a.events(), ambiguousBack.a.snap().goal.gH, ambiguousBack.a.run('GEODE_SCHEMA_VERSION')], [[], 1350, 1]);
+  });
+
+  scenario('FA-3B OBSERVATIONAL — a migrated state with £5,000 fake completions shows exactly what it showed', () => {
+    const app = fa3bLoad(MIXED, '2026-08-20', true);
+    const s = app.state();
+    const fake = (id, paymentId, entityType, entityId) => ({ id, eventType: 'completion', paymentId, entityType, entityId, occurrenceYm: '2026-08', amount: 5000,
+      recurrence: 'one_off', dueDateSnapshot: '', recordedAt: 1, source: 'fake' });
+    const faked = JSON.parse(JSON.stringify(s));
+    faked.contributionEvents = faked.contributionEvents.concat([fake('fake-goal', 'p1-ghost', 'goal', 'gH'), fake('fake-inv', 'i1-ghost', 'investment', 'iA'),
+      fake('fake-row', 'px', 'goal', 'gH')]);
+    const surfaces = state => { const a = fa3bLoad(state, '2026-08-20', true); const direct = fa3bLook(a); a.reload(); return [direct, fa3bLook(a)]; };
+    const real = surfaces(s), withFake = surfaces(faked);
+    invariant('FA3B.observational.fake-event', 'Three active £5,000 completions (Holiday, ISA, the ambiguous row) change nothing: Holiday £1,700, ISA £5,700; Monthly Left, Plan, Home and Suggested Actions identical before and after reload',
+      [same(real, withFake), real[0].snap.goal.gH, real[0].snap.inv.iA], [true, 1700, 5700]);
+  });
+}
+
+/** Completions FA-3B seeds for each legacy fixture: only rows whose stored fields prove a paid occurrence. */
+const MIG_SEEDED = {
+  'goal-completed-one-off': [['p_one_off', 'goal:gH', '2026-06', 250, 'one_off', '2026-06-10', 'migration']],
+  'goal-current-month-recurring-completed': [['p_monthly', 'goal:gH', '2026-08', 100, 'monthly', '', 'migration']],
+  'goal-possible-edit-double-count': [['p_one_off', 'goal:gH', '2026-06', 250, 'one_off', '2026-06-10', 'migration']],
+  'investment-value-plus-completed-contribution': [['p_inv', 'investment:iA', '2026-06', 500, 'one_off', '2026-06-05', 'migration']]
+};
+
 function migrationFixtures() {
   const data = JSON.parse(readSource(FIXTURES_JSON));
   data.fixtures.forEach(f => scenario('MIGRATION FIXTURE — ' + f.id, () => {
     const app = new App(f.state, f.clock);
+    const shownNow = () => { const s = app.snap(); return f.entity.kind === 'goal' ? s.goal[f.entity.id] : s.inv[f.entity.id]; };
+    const legacy = new App(f.state, f.clock);
+    legacy.run('geodeSeedLegacyContributionEvents = function () {};');
+    legacy.reload();
     app.reload();
-    const s = app.snap();
-    const shown = f.entity.kind === 'goal' ? s.goal[f.entity.id] : s.inv[f.entity.id];
-    current('MIG.' + f.id + '.display', 'Displayed before migration', shown, f.displayBeforeMigration);
-    spec('MIG.' + f.id + '.identity', 'Displayed immediately after migration equals ' + show(f.displayBeforeMigration) + '; migration is idempotent; nothing backfilled', f.history);
+    const shown = shownNow(), events = app.events();
+    current('MIG.' + f.id + '.display', 'Displayed before migration', legacy.snap()[f.entity.kind === 'goal' ? 'goal' : 'inv'][f.entity.id], f.displayBeforeMigration);
+    app.reload(); app.reload();
+    invariant('MIG.' + f.id + '.identity', 'Displayed immediately after migration and after two reloads equals ' + show(f.displayBeforeMigration) +
+      '; idempotent; only completions the stored rows prove are seeded (' + f.history.split('.')[0] + ')',
+      [shown, shownNow(), same(app.events(), events), seededRows(app)], [f.displayBeforeMigration, f.displayBeforeMigration, true, MIG_SEEDED[f.id] || []]);
   }));
 }
 
@@ -2113,6 +2480,7 @@ function main() {
   missedRecurring(); investments(); quickSetup(); monthlyLeft(); identity(); identityMatrix(); planActions(); releases(); deposits();
   fa2Goals(); fa2Investments(); fa2Deposits();
   fa3aLedger(); fa3aGoals(); fa3aInvestments(); fa3aSmartImport(); fa3aDeletion(); fa3aIdentity(); fa3aRollover(); fa3aProtection(); fa3aAnnual(); fa3aOccurrence();
+  fa3bOrder(); fa3bMatrix(); fa3bPointers(); fa3bParity(); fa3bLifecycle();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');
