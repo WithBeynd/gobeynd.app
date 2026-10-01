@@ -21136,6 +21136,7 @@ function geodePaymentMonthYmFromDate(iso) {
 /**
  * Merge duplicate linked contributions (same debt OR goal OR investment, same calendar month).
  * Unpaid rows merge together; paid rows are never merged — each completed payment keeps its own identity.
+ * Goal/investment rows merge only with the same frequency, and never when the user added them as separate contributions.
  * Keeps one row per group (oldest createdAt wins id) and summed amounts. Display-only cleanup for state shape.
  */
 function geodeMergeDuplicateLinkedContributionsSameMonth() {
@@ -21150,6 +21151,10 @@ function geodeMergeDuplicateLinkedContributionsSameMonth() {
     else if (p.goalId && !p.debtId && !p.investId) link = 'g|' + String(p.goalId);
     else if (p.investId && !p.debtId && !p.goalId) link = 'i|' + String(p.investId);
     else continue;
+    if (!p.debtId) {
+      if (p.directContribution === true) continue;
+      link += '|' + String(p.rec || 'no');
+    }
     var ym = geodePaymentMonthYmFromDate(p.date);
     if (!ym) continue;
     var key = ym + '|' + link + '|' + (String(p.status || '') === 'paid' ? 'p' : 'u');
@@ -21187,7 +21192,7 @@ function geodeMergeDuplicateLinkedContributionsSameMonth() {
     keep.amount = sumAmt;
     if (minDate) keep.date = minDate;
     if (minCreated > 0) keep.createdAt = minCreated;
-    keep.rec = anyRec ? 'yes' : 'no';
+    if (keep.debtId) keep.rec = anyRec ? 'yes' : 'no';
     if (k.slice(-2) === '|p') {
       keep.status = 'paid';
       keep.lastPaidYM = lastYmPick || (keep.rec === 'yes' ? currentYM() : '');
@@ -21210,11 +21215,16 @@ function geodeMergeDuplicateLinkedContributionsSameMonth() {
   return true;
 }
 
-/** F.3: linked payment save intent — set (default), replace (edit), add (explicit future). */
+/**
+ * F.3: linked payment save intent — set (default; debt Plan scheduling), replace (edit), add (Plan fills a
+ * goal/investment/buffer gap: tops up the reusable Plan row), new (a separate contribution the user adds;
+ * goal/investment saves never reuse another row for it).
+ */
 function geodeNormalizePayLinkedIntent(intent) {
   var lo = String(intent || 'set').toLowerCase();
   if (lo === 'add') return 'add';
   if (lo === 'replace') return 'replace';
+  if (lo === 'new') return 'new';
   return 'set';
 }
 
@@ -21224,8 +21234,11 @@ function geodePayYmFromDateStr(s) {
   return t.length >= 7 ? t.slice(0, 7) : '';
 }
 
-/** F.3: canonical unpaid linked row for month+target (after merge). */
-function geodeFindExistingLinkedPaymentForYm(kind, linkId, ym) {
+/**
+ * F.3: canonical unpaid linked row for month+target (after merge).
+ * rec (goal/investment Plan scheduling): only a row with the same frequency that the user did not add as its own contribution.
+ */
+function geodeFindExistingLinkedPaymentForYm(kind, linkId, ym, rec) {
   if (!S || !Array.isArray(S.payments) || !S.payments.length) return null;
   if (!kind || !linkId || !ym) return null;
   var best = null;
@@ -21239,6 +21252,7 @@ function geodeFindExistingLinkedPaymentForYm(kind, linkId, ym) {
     if (p.debtId && p.goalId) continue;
     if (p.debtId && p.investId) continue;
     if (p.goalId && p.investId) continue;
+    if (rec != null && (p.directContribution === true || String(p.rec || 'no') !== String(rec || 'no'))) continue;
     var st0 = String(p.status || '');
     var pri = st0 === 'upcoming' ? 2 : st0 === 'overdue' ? 1 : 0;
     var ts = typeof p.createdAt === 'number' ? p.createdAt : 0;
@@ -23393,20 +23407,7 @@ function geodePlanDetailActionForStep(state, step, prog, ix) {
     var bufCta = geodeBufferActionCopy(state).cta;
     if (actionState.isCompleted) return out;
     if (!actionState.isActionable && actionState.isScheduledOnly && actionState.scheduled > 0) {
-      var bufSched = actionState.scheduled;
-      setScheduleAction('Adjust scheduled amount', bufCta, bufSched, function () {
-        msub = 'payments';
-        goTab('money');
-        openPayModal(null, {
-          name: 'Emergency buffer',
-          amount: bufSched,
-          date: geodeTodayLocalISO(),
-          status: 'upcoming',
-          rec: true,
-          bufferContribution: true,
-          _geodePayIntent: 'set'
-        });
-      });
+      setScheduleAction('Adjust scheduled amount', bufCta, actionState.scheduled, geodePlanAdjustScheduledRun(state, step));
       return out;
     }
     if (actionState.isActionable && payAmt >= 1) {
@@ -23421,7 +23422,7 @@ function geodePlanDetailActionForStep(state, step, prog, ix) {
           status: 'upcoming',
           rec: true,
           bufferContribution: true,
-          _geodePayIntent: 'set'
+          _geodePayIntent: 'add'
         });
       });
       return out;
@@ -23449,25 +23450,7 @@ function geodePlanDetailActionForStep(state, step, prog, ix) {
     var gid = findGoalIdByName(gnm);
     if (actionState.isCompleted) return out;
     if (!actionState.isActionable && actionState.isScheduledOnly && actionState.scheduled > 0) {
-      var goalSched = actionState.scheduled;
-      setScheduleAction('Adjust scheduled amount', 'Plan a contribution', goalSched, function () {
-        if (!gid) {
-          msub = 'goals';
-          goTab('money');
-          return;
-        }
-        msub = 'payments';
-        goTab('money');
-        openPayModal(null, {
-          name: 'Goal contribution: ' + (gnm || 'goal'),
-          amount: goalSched,
-          date: geodeTodayLocalISO(),
-          status: 'upcoming',
-          rec: true,
-          goalId: gid,
-          _geodePayIntent: 'set'
-        });
-      });
+      setScheduleAction('Adjust scheduled amount', 'Plan a contribution', actionState.scheduled, geodePlanAdjustScheduledRun(state, step));
       return out;
     }
     if (actionState.isActionable && payAmt >= 1) {
@@ -23487,7 +23470,7 @@ function geodePlanDetailActionForStep(state, step, prog, ix) {
           status: 'upcoming',
           rec: true,
           goalId: gid,
-          _geodePayIntent: 'set'
+          _geodePayIntent: 'add'
         });
       });
       return out;
@@ -23542,20 +23525,7 @@ function geodePlanDetailActionForStep(state, step, prog, ix) {
       return out;
     }
     if (invBasis.scheduled > 0) {
-      var invSchedAmt = invBasis.scheduled;
-      setScheduleAction('Adjust scheduled amount', 'Schedule investment', invSchedAmt, function () {
-        msub = 'payments';
-        goTab('money');
-        openPayModal(null, {
-          name: 'Investment contribution' + (invName ? ' (' + invName + ')' : ''),
-          amount: invSchedAmt,
-          date: geodeTodayLocalISO(),
-          status: 'upcoming',
-          rec: true,
-          investId: invId,
-          _geodePayIntent: 'set'
-        });
-      });
+      setScheduleAction('Adjust scheduled amount', 'Schedule investment', invBasis.scheduled, geodePlanAdjustScheduledRun(state, step));
       return out;
     }
     if (actionState.isCompleted || prog.phase === 'done') {
@@ -23572,7 +23542,7 @@ function geodePlanDetailActionForStep(state, step, prog, ix) {
           status: 'upcoming',
           rec: true,
           investId: invId,
-          _geodePayIntent: 'set'
+          _geodePayIntent: 'add'
         });
       });
       return out;
@@ -24210,13 +24180,17 @@ function geodeDebtIdFromPlanStepLabel(state, step) {
 /**
  * Compares paid linked contributions this month vs getMonthPlan step amount (display / Main Action only).
  */
-/** Read-only: unpaid scheduled amount this month toward a plan step (display / progress only). */
-function geodePlanStepScheduledAmount(state, step) {
+/**
+ * Read-only: the unpaid rows this month that count toward a plan step's scheduled amount, each with the amount it
+ * contributes ({ row, amount }; a debt row contributes only its extra above the minimum). Sole definition of
+ * "scheduled" for geodePlanStepScheduledAmount and the Plan "Adjust scheduled amount" action.
+ */
+function geodePlanStepScheduledRows(state, step) {
   state = state || S;
-  if (!step) return 0;
+  if (!step) return [];
   var lb = String(step.label || '');
   var pay = (state && state.payments) ? state.payments : [];
-  if (!pay || !pay.length) return 0;
+  if (!pay || !pay.length) return [];
   var wantDebt = '';
   var wantGoal = '';
   var wantInv = '';
@@ -24250,9 +24224,9 @@ function geodePlanStepScheduledAmount(state, step) {
     } else if (lb === 'Build your emergency fund') {
       egBuf = getFirstEmergencyGoal(state);
     } else {
-      return 0;
+      return [];
     }
-    var sum = 0;
+    var rows = [];
     for (var i = 0; i < pay.length; i++) {
       var p = pay[i];
       if (!p || p.status === 'paid') continue;
@@ -24261,24 +24235,48 @@ function geodePlanStepScheduledAmount(state, step) {
       if (!paymentCountsForMonthlyOutflowDisplay(p)) continue;
       var amt = toNum(p.amount);
       if (amt <= 0) continue;
+      var counted = 0;
       if (lb.indexOf('Reduce high') === 0 || lb.indexOf('Pay down ') === 0) {
-        if (wantDebt) sum += geodeDebtScheduledExtraAmountForPlanProgress(state, wantDebt, p);
+        if (wantDebt) counted = geodeDebtScheduledExtraAmountForPlanProgress(state, wantDebt, p);
       } else if (lb === 'Build your emergency fund') {
         var egId = egBuf && egBuf.id ? String(egBuf.id) : '';
-        if (egId && String(p.goalId || '') === egId) sum += amt;
-        else if (geodePaymentNameLooksLikeBuffer(p.name)) sum += amt;
-        else if (!p.goalId && !p.debtId && !p.investId && String(p.payKind || '') === 'buffer') sum += amt;
-        else if (String(p.name || '').toLowerCase().indexOf('buffer') >= 0) sum += amt;
+        if (egId && String(p.goalId || '') === egId) counted = amt;
+        else if (geodePaymentNameLooksLikeBuffer(p.name)) counted = amt;
+        else if (!p.goalId && !p.debtId && !p.investId && String(p.payKind || '') === 'buffer') counted = amt;
+        else if (String(p.name || '').toLowerCase().indexOf('buffer') >= 0) counted = amt;
       } else if (lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0) {
-        if (wantGoal && String(p.goalId || '') === String(wantGoal)) sum += amt;
+        if (wantGoal && String(p.goalId || '') === String(wantGoal)) counted = amt;
       } else if (lb === 'Invest what remains') {
-        if (wantInv && String(p.investId || '') === String(wantInv)) sum += amt;
+        if (wantInv && String(p.investId || '') === String(wantInv)) counted = amt;
       }
+      if (counted > 0) rows.push({ row: p, amount: counted });
     }
-    return sum;
+    return rows;
   } catch (_eSchedAmt) {
-    return 0;
+    return [];
   }
+}
+
+/** Read-only: unpaid scheduled amount this month toward a plan step (display / progress only). */
+function geodePlanStepScheduledAmount(state, step) {
+  var rows = geodePlanStepScheduledRows(state, step);
+  var sum = 0;
+  for (var i = 0; i < rows.length; i++) sum += rows[i].amount;
+  return sum;
+}
+
+/**
+ * Plan "Adjust scheduled amount" (non-debt): edit the one row that provides the step's scheduled coverage; when
+ * several rows provide it there is no single row to change, so open Payments and let the user choose.
+ */
+function geodePlanAdjustScheduledRun(state, step) {
+  var rows = geodePlanStepScheduledRows(state, step);
+  var id = rows.length === 1 && rows[0].row ? rows[0].row.id : '';
+  return function () {
+    msub = 'payments';
+    goTab('money');
+    if (id) openPayModal(id);
+  };
 }
 
 function geodePlanStepProgress(state, step) {
@@ -24344,13 +24342,16 @@ function geodePlanStepActionState(state, step, opts) {
   var remaining = toNum(prog.remaining);
   var coverageGap = Math.max(0, suggested - applied - scheduled);
   var isCompleted = prog.phase === 'done';
-  var isScheduledOnly = !isCompleted && applied <= 0 && scheduled > 0 && coverageGap < 1;
+  var stepLabel = String(step && step.label || '');
+  var isDebtStep = stepLabel.indexOf('Reduce high') === 0 || stepLabel.indexOf('Pay down ') === 0;
+  // Non-debt steps: paid + scheduled together cover the step; the action amount is only the uncovered gap.
+  var isScheduledOnly = !isCompleted && (applied <= 0 || !isDebtStep) && scheduled > 0 && coverageGap < 1;
   var isInProgress = !isCompleted && applied > 0 && remaining >= 1;
   var isNotStarted = prog.phase === 'none';
-  var isActionable = !isCompleted && ((applied > 0 && remaining >= 1) || coverageGap >= 1);
+  var isActionable = !isCompleted && ((isDebtStep && applied > 0 && remaining >= 1) || coverageGap >= 1);
   var actionAmount = 0;
   if (!isCompleted) {
-    if (applied > 0 && remaining >= 1) actionAmount = remaining;
+    if (isDebtStep && applied > 0 && remaining >= 1) actionAmount = remaining;
     else if (coverageGap >= 1) actionAmount = coverageGap;
   }
   return {
@@ -24870,7 +24871,7 @@ function geodeMainActionFromPriorityStep(state, p1, prog, actionState) {
           status: 'upcoming',
           rec: true,
           bufferContribution: true,
-          _geodePayIntent: 'set'
+          _geodePayIntent: 'add'
         });
       }
     };
@@ -24915,7 +24916,7 @@ function geodeMainActionFromPriorityStep(state, p1, prog, actionState) {
           status: 'upcoming',
           rec: true,
           goalId: gid,
-          _geodePayIntent: 'set'
+          _geodePayIntent: 'add'
         });
       }
     };
@@ -24992,7 +24993,7 @@ function geodeMainActionFromPriorityStep(state, p1, prog, actionState) {
           status: 'upcoming',
           rec: true,
           investId: invId,
-          _geodePayIntent: 'set'
+          _geodePayIntent: 'add'
         });
       }
     };
@@ -26844,14 +26845,17 @@ function openSuggestedAction(idx) {
     prefill.name = 'Goal contribution: ' + (a.targetName || 'goal');
     prefill.goalId = a.targetId || '';
     prefill.rec = true;
+    prefill._geodePayIntent = 'add';
   } else if (a.type === 'investment_contribution') {
     prefill.name = 'Investment contribution' + (a.targetName ? ' (' + a.targetName + ')' : '');
     prefill.investId = a.targetId || '';
     prefill.rec = true;
+    prefill._geodePayIntent = 'add';
   } else if (a.type === 'buffer_contribution') {
     prefill.name = 'Emergency buffer';
     prefill.rec = true;
     prefill.bufferContribution = true;
+    prefill._geodePayIntent = 'add';
   }
   openPayModal(null, prefill);
 }
@@ -37286,7 +37290,7 @@ function geodePayFromGoal(goalId) {
     status: 'upcoming',
     rec: true,
     goalId: g.id,
-    _geodePayIntent: 'set'
+    _geodePayIntent: 'new'
   });
 }
 function geodePayFromInvest(invId) {
@@ -37302,7 +37306,7 @@ function geodePayFromInvest(invId) {
     status: 'upcoming',
     rec: true,
     investId: inv.id,
-    _geodePayIntent: 'set'
+    _geodePayIntent: 'new'
   });
 }
 // (Removed) Quick spending “essentials only” flow — Quick Setup wizard is the single structured setup path.
@@ -38014,7 +38018,7 @@ function openPayModal(id, prefill) {
     else if (prefill && prefill._geodePayIntent) {
       window._geodePayLinkedIntent = geodeNormalizePayLinkedIntent(prefill._geodePayIntent);
     } else {
-      window._geodePayLinkedIntent = 'set';
+      window._geodePayLinkedIntent = 'new';
     }
   } catch (_ePayIntent) {}
   var escOpt = function(s) {
@@ -38562,6 +38566,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     return fm(amtNum) + (isDone ? ' contributed \u2713' : ' scheduled \u2713');
   }
   function geodeUpsertLinkedPaymentForThisMonth() {
+    if (!debtid && payLinkedIntent === 'new') return false;
     try {
       geodeMergeDuplicateLinkedContributionsSameMonth();
     } catch (_ePreUps) {}
@@ -38569,8 +38574,8 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     var existing = null;
     var kindLabel = '';
     if (debtid) { kindLabel = 'Payment'; existing = geodeFindExistingLinkedPaymentForYm('debt', debtid, ym); }
-    else if (gid) { kindLabel = 'Contribution'; existing = geodeFindExistingLinkedPaymentForYm('goal', gid, ym); }
-    else if (invid) { kindLabel = 'Contribution'; existing = geodeFindExistingLinkedPaymentForYm('invest', invid, ym); }
+    else if (gid) { kindLabel = 'Contribution'; existing = geodeFindExistingLinkedPaymentForYm('goal', gid, ym, rec); }
+    else if (invid) { kindLabel = 'Contribution'; existing = geodeFindExistingLinkedPaymentForYm('invest', invid, ym, rec); }
     if (existing) {
       savedPayBefore = geodeDebtPaymentEventSnapshot(existing);
       existing.name = nm;
@@ -38582,7 +38587,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
       var exD = String(existing.date || '').slice(0, 10);
       var newD = String(dt || '').slice(0, 10);
       existing.date = exD && newD && exD < newD ? existing.date : dt;
-      existing.rec = existing.rec === 'yes' || rec === 'yes' ? 'yes' : 'no';
+      if (debtid) existing.rec = existing.rec === 'yes' || rec === 'yes' ? 'yes' : 'no';
       if (st === 'paid') {
         existing.status = 'paid';
         if (existing.rec === 'yes') existing.lastPaidYM = currentYM();
@@ -38652,6 +38657,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     if (!didUpsert) {
       var row={id:uid(),name:nm,amount:Number(am),date:dt,status:st,rec:rec,lastPaidYM:'',goalId:gid,investId:invid,debtId:debtid,payKind:payKind,createdAt:Date.now()};
       if(rec==='yes'&&st==='paid')row.lastPaidYM=currentYM();
+      if (payLinkedIntent === 'new' && (gid || invid)) row.directContribution = true;
       S.payments.push(row);
       savedPayRow = row;
       savedPayRowId = row.id;
@@ -39236,7 +39242,7 @@ function openPayQuick(kind) {
       status: 'upcoming',
       rec: true,
       goalId: g0 ? g0.id : '',
-      _geodePayIntent: 'set'
+      _geodePayIntent: 'new'
     });
     return;
   }
@@ -39248,7 +39254,7 @@ function openPayQuick(kind) {
       status: 'upcoming',
       rec: true,
       investId: i0 ? i0.id : '',
-      _geodePayIntent: 'set'
+      _geodePayIntent: 'new'
     });
     return;
   }

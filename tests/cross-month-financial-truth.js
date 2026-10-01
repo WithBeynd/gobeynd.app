@@ -69,8 +69,12 @@ const PRODUCTION_FUNCTIONS = [
   'appendActivityLog', 'trimActivityLogForRetention'
 ];
 
-/** Read-only structural checks: the reload and render shims below must mirror these production bodies. */
-const STRUCTURAL_FUNCTIONS = ['load', 'render'];
+/**
+ * Read-only structural checks: the reload and render shims below must mirror these production bodies, and the
+ * App.contribute / App.planSchedule intents must mirror what the payment modal's callers pass.
+ */
+const STRUCTURAL_FUNCTIONS = ['load', 'render', 'openPayModal', 'geodePayFromGoal', 'geodePayFromInvest', 'geodePayFromDebt',
+  'openPayQuick', 'geodePlanDetailActionForStep', 'geodeMainActionFromPriorityStep', 'openSuggestedAction'];
 
 /**
  * Test-only environment. Everything here is a side effect the scenarios do not observe (UI, toasts, caches,
@@ -145,12 +149,39 @@ function __snapshot() {
     homeOverduePayments: geodeOverdueItems().filter(function (x) { return x.kind === 'payment'; }).length,
     rows: (S.payments || []).map(function (p) {
       return { id: p.id, amount: toNum(p.amount), rec: p.rec, status: p.status, effective: geodePaymentEffectiveStatus(p),
-        date: p.date, lastPaidYM: p.lastPaidYM || '', goalId: p.goalId || '', investId: p.investId || '',
-        countsInMonthlyLeft: paymentCountsForMonthlyOutflow(p) };
+        date: p.date, lastPaidYM: p.lastPaidYM || '', goalId: p.goalId || '', investId: p.investId || '', debtId: p.debtId || '',
+        direct: p.directContribution === true, countsInMonthlyLeft: paymentCountsForMonthlyOutflow(p) };
     }),
     activity: (S.activityLog || []).map(function (e) { return { type: e.type, delta: e.delta }; })
   });
 }
+`;
+
+/**
+ * Plan, Home and Suggested Actions entry points. They run in a second program: their production dependencies are
+ * extracted transitively, and the real Suggested Actions reconciliation, cache invalidation and emergency-buffer
+ * linking replace the base program's shims of the same names.
+ */
+const PLAN_ENTRY_FUNCTIONS = ['geodePlanDetailActionForStep', 'geodePlanStepActionState', 'geodePlanStepScheduledRows',
+  'geodePlanStepScheduledAmount', 'geodeMainActionFromPriorityStep', 'getSuggestedActions', 'geodeHomePrepareSuggestedActionsList',
+  'openSuggestedAction', 'geodeReconcileFrozenSuggestedActionsAfterLinkedSave', 'geodeInvalidateDecisionCaches',
+  'geodeEnsureEmergencyBufferGoalForPayment'];
+
+/** Production top-level constants the extracted Suggested Actions code reads. */
+const PLAN_CONSTANTS = ['_FOLLOWTHROUGH_MS_2D', '_FOLLOWTHROUGH_MS_3D', 'SUGGESTED_REFRESH_COOLDOWN_MS', 'SUGGESTED_LEFTOVER_FRAC',
+  'SUGGESTED_LEFTOVER_FLOOR', 'SUGGESTED_MAX_BATCH_AGE_MS', 'ADAPTIVE_MIN_EVIDENCE', 'ADAPTIVE_ROLL_WINDOW', 'geodeCoachingCopy'];
+
+/** Plan-program environment: UI entry points and plan sizing, which these scenarios do not test. */
+const PLAN_SHIMS = String.raw`
+var msub = '';
+/** getMonthPlan sizing is not under test: each scenario fixes the month's plan steps. */
+var __plan = { steps: [] };
+function getMonthPlan() { return __plan; }
+/** The payment modal is UI: record what it was opened with; App.saveModal performs its save. */
+var __opened = null;
+function openPayModal(id, prefill) { __opened = { id: id || null, prefill: prefill ? JSON.parse(JSON.stringify(prefill)) : null }; }
+function openInvModal() {}
+function setTimeout(fn) { fn(); }
 `;
 
 function readSource(file) {
@@ -191,9 +222,9 @@ function extractFunction(src, name) {
 const JS_WORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'typeof', 'new', 'do', 'else',
   'try', 'with', 'void', 'delete', 'in', 'of', 'instanceof', 'throw', 'super', 'this']);
 
-/** Names a function calls that it does not declare itself (strings and comments stripped first). */
+/** Names a function calls that it does not declare itself (regex literals, strings and comments stripped first). */
 function calledNames(text) {
-  const stripped = text.replace(/(\/\*[\s\S]*?\*\/)|(\/\/[^\n]*)|('(?:\\.|[^'\\\n])*')|("(?:\\.|[^"\\\n])*")|(`(?:\\.|[^`\\])*`)/g, ' ');
+  const stripped = text.replace(/((?<=(?:^|[=(,:[!&|?{};]|\breturn)\s*)\/(?![*/])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[a-z]*)|(\/\*[\s\S]*?\*\/)|(\/\/[^\n]*)|('(?:\\.|[^'\\\n])*')|("(?:\\.|[^"\\\n])*")|(`(?:\\.|[^`\\])*`)/gm, ' ');
   const local = new Set();
   let m;
   const fnDecl = /function\s*([A-Za-z_$][\w$]*)?\s*\(([^)]*)\)/g;
@@ -201,10 +232,10 @@ function calledNames(text) {
     if (m[1]) local.add(m[1]);
     m[2].split(',').map(s => s.trim()).filter(Boolean).forEach(p => local.add(p));
   }
-  const call = /(^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(/g;
+  const call = /(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g;
   const out = new Set();
   while ((m = call.exec(stripped))) {
-    if (!JS_WORDS.has(m[2]) && !local.has(m[2])) out.add(m[2]);
+    if (!JS_WORDS.has(m[1]) && !local.has(m[1])) out.add(m[1]);
   }
   return out;
 }
@@ -230,7 +261,34 @@ function buildProgram() {
   if (unresolved.length) {
     throw new HarnessError('unresolved dependencies (extract the production function or add a documented shim):\n    ' + unresolved.join('\n    '));
   }
-  return { script, extracted, structural };
+  return { script, extracted, structural, plan: buildPlanProgram(src, foundation, extracted) };
+}
+
+/** Base program + PLAN_SHIMS + the PLAN_ENTRY_FUNCTIONS dependency closure; a name nothing defines is an error. */
+function buildPlanProgram(src, foundation, extracted) {
+  const constants = PLAN_CONSTANTS.map(n => {
+    const m = src.match(new RegExp('\\nvar ' + n + ' = [^\\n]*;\\n'));
+    if (!m) throw new HarnessError('production constant not found in index.html: ' + n);
+    return m[0].trim();
+  });
+  const baseCode = TEST_SHIMS + '\n' + PLAN_SHIMS + '\n' + foundation + '\n' + extracted.map(f => f.text).join('\n') + '\n' + constants.join('\n') + '\n';
+  const probe = vm.createContext({ console: { log() {}, info() {}, warn() {}, error() {} } });
+  new vm.Script(baseCode, { filename: 'cross-month-plan-probe.js' }).runInContext(probe);
+  const planShims = new Set();
+  PLAN_SHIMS.replace(/function\s+([A-Za-z_$][\w$]*)\s*\(/g, (_, n) => planShims.add(n));
+  const have = new Map();
+  const queue = PLAN_ENTRY_FUNCTIONS.slice();
+  while (queue.length) {
+    const n = queue.shift();
+    if (have.has(n) || planShims.has(n)) continue;
+    if (PLAN_ENTRY_FUNCTIONS.indexOf(n) < 0 && vm.runInContext('typeof ' + n, probe) !== 'undefined') continue;
+    const f = extractFunction(src, n);
+    have.set(n, f);
+    calledNames(f.text).forEach(c => queue.push(c));
+  }
+  const planExtracted = [...have.values()];
+  const code = baseCode + planExtracted.map(f => f.text).join('\n') + '\n';
+  return { script: new vm.Script(code, { filename: 'cross-month-plan-program.js' }), extracted: planExtracted };
 }
 
 // ───────────────────────────── simulated app ─────────────────────────────
@@ -238,7 +296,8 @@ function buildProgram() {
 const apps = [];
 
 class App {
-  constructor(state, clock) {
+  /** program: PROGRAM (default) or PROGRAM.plan for Plan / Home / Suggested Actions scenarios. */
+  constructor(state, clock, program) {
     this.warnings = [];
     const warnings = this.warnings;
     this.ctx = vm.createContext({
@@ -248,7 +307,7 @@ class App {
         error(...a) { warnings.push(a.map(String).join(' ')); }
       }
     });
-    PROGRAM.script.runInContext(this.ctx);
+    (program || PROGRAM).script.runInContext(this.ctx);
     this.at(clock);
     this.run('S = ' + JSON.stringify(state) + '; save();');
     this.timeline = [];
@@ -273,14 +332,17 @@ class App {
     return s;
   }
   rows() { return this.snap().rows; }
-  /** Payment form save (geodeSavePayApply). New rows use the default 'set' intent, edits use 'replace'. */
+  /**
+   * Payment form save (geodeSavePayApply) with the intent openPayModal assigns: 'replace' when editing a row,
+   * 'new' for a contribution the user adds (plain modal, goal/investment cards, quick add).
+   */
   contribute(o) {
     const before = new Set(this.state().payments.map(p => p.id));
-    const gid = o.goalId || '', invid = o.investId || '';
-    const kind = gid ? 'goal' : invid ? 'invest' : 'bill';
-    this.run('window._geodePayLinkedIntent = ' + JSON.stringify(o.intent || (o.id ? 'replace' : 'set')) + ';');
+    const gid = o.goalId || '', invid = o.investId || '', debtid = o.debtId || '';
+    const kind = gid ? 'goal' : invid ? 'invest' : debtid ? 'debt' : 'bill';
+    this.run('window._geodePayLinkedIntent = ' + JSON.stringify(o.intent || (o.id ? 'replace' : 'new')) + ';');
     this.call('geodeSavePayApply', [o.id || null, o.name || 'Contribution', String(o.amount), o.date, o.status, o.rec || 'no',
-      o.date, gid, invid, '', kind, Number(o.amount)]);
+      o.date, gid, invid, debtid, kind, Number(o.amount)]);
     const added = this.state().payments.filter(p => !before.has(p.id));
     return added.length ? added[0].id : null;
   }
@@ -290,11 +352,56 @@ class App {
     this.contribute(Object.assign({ id, name: p.name, amount: p.amount, date: p.date, status: p.status, rec: p.rec,
       goalId: p.goalId, investId: p.investId }, changes));
   }
-  /**
-   * Plan-generated scheduling. Today a Plan apply reaches geodeSavePayApply through openPayModal with the 'set'
-   * intent, indistinguishable from a user save. When FA-1 introduces a Plan-origin marker, set it here.
-   */
+  /** The 'set' save path: debt Plan actions reuse the same-month row and replace its amount (goal/investment/buffer gaps use 'add'). */
   planSchedule(o) { return this.contribute(Object.assign({ intent: 'set' }, o)); }
+  /** Plan program only: fix the month's plan steps that Plan, Home and Suggested Actions read. */
+  setPlan(steps) { this.run('__plan = { steps: ' + JSON.stringify(steps) + ' };'); }
+  /** What Plan detail shows for a step, with the shared action state behind it. */
+  planView(step) {
+    this.ctx.__stepJson = JSON.stringify(step);
+    return JSON.parse(this.run(`(function () {
+      var step = JSON.parse(__stepJson), st = geodePlanStepActionState(S, step), a = geodePlanDetailActionForStep(S, step, st.progress, 0);
+      return JSON.stringify({ label: a.show ? a.label : '', amount: a.show ? a.amount : null, applied: st.applied, scheduled: st.scheduled,
+        gap: st.coverageGap, actionable: st.isActionable, scheduledOnly: st.isScheduledOnly, actionAmount: st.actionAmount });
+    })()`));
+  }
+  /** What the Home main action shows for a step. */
+  homeView(step) {
+    this.ctx.__stepJson = JSON.stringify(step);
+    return JSON.parse(this.run('(function () { var a = geodeMainActionFromPriorityStep(S, JSON.parse(__stepJson)); return JSON.stringify({ cta: a.cta, amount: a.amount }); })()'));
+  }
+  /** Home render: rebuilds the Suggested Actions list (window._geodeSuggestedActions) from the frozen batch and the plan. */
+  suggestions() {
+    this.run('geodeHomePrepareSuggestedActionsList();');
+    return JSON.parse(this.run('JSON.stringify((window._geodeSuggestedActions || []).map(function (a) { return { type: a.type, amount: a.amount }; }))'));
+  }
+  planTap(step, amount) { return this.tap('(function () { var step = JSON.parse(__stepJson); geodePlanDetailActionForStep(S, step, geodePlanStepActionState(S, step).progress, 0).run(); })()', step, amount); }
+  homeTap(step, amount) { return this.tap('geodeMainActionFromPriorityStep(S, JSON.parse(__stepJson)).run()', step, amount); }
+  suggestedTap(index, amount) { return this.tap('openSuggestedAction(' + index + ')', null, amount); }
+  /** Runs a surface's action; when it opened the payment modal, saves it (amount: what the user typed, else the prefill). */
+  tap(code, step, amount) {
+    this.ctx.__stepJson = JSON.stringify(step || null);
+    this.run('__opened = null; msub = "";');
+    this.run(code);
+    const opened = JSON.parse(this.run('JSON.stringify(__opened)'));
+    const out = { msub: this.run('msub'), id: opened ? opened.id : null, intent: null };
+    if (opened) out.intent = this.saveModal(opened, amount);
+    return out;
+  }
+  /** Mirrors openPayModal (intent, buffer flag, edit form filled from the row) and savePay (pre-save merge, then save). */
+  saveModal(opened, amount) {
+    const row = opened.id ? this.state().payments.filter(p => p.id === opened.id)[0] : null;
+    const f = row ? { name: row.name, amount: row.amount, date: row.date, status: row.status, rec: row.rec === 'yes',
+      goalId: row.goalId, investId: row.investId, debtId: row.debtId } : opened.prefill;
+    const intent = row ? 'replace' : f._geodePayIntent ? this.call('geodeNormalizePayLinkedIntent', [f._geodePayIntent]) : 'new';
+    this.run('window._geodePayPrefillBufferContribution = ' + JSON.stringify(!row && f.bufferContribution === true) + ';');
+    this.merge();
+    this.contribute({ id: row ? row.id : null, intent, name: f.name, amount: amount != null ? amount : f.amount, date: f.date,
+      status: f.status, rec: f.rec ? 'yes' : 'no', goalId: f.goalId, investId: f.investId, debtId: f.debtId });
+    return intent;
+  }
+  /** rPayments and savePay run the legacy same-month merge before showing or saving payments. */
+  merge() { return this.call('geodeMergeDuplicateLinkedContributionsSameMonth'); }
   toggle(id) { this.call('togglePay', [id]); }
   completeAllUnpaid() { this.state().payments.filter(p => p.status !== 'paid').forEach(p => this.toggle(p.id)); }
   del(id) { this.call('delPay', [id]); }
@@ -324,7 +431,7 @@ const DEFECTS = {
   D1: 'Recurring goal/investment contributions lose prior months at rollover (syncRecurringPayments resets the row; geodeRecomputeBalancesFromPayments rebuilds from currently-paid rows only).',
   D2: 'Quick Setup "Monthly essentials" housing/food/transport are stored as one-off expenses and drop out of later months (geodeQsDone).',
   D3: 'Goal/investment edit forms write the displayed total into baseSaved/baseBalance, re-adding paid rows and re-deducting releases (saveGoal, saveInv).',
-  D4: 'Same-month linked save overwrites or merges a different unpaid row for the same goal/investment (geodeSavePayApply upsert, geodeMergeDuplicateLinkedContributionsSameMonth).',
+  D4: 'Same-month linked save overwrites or merges a different unpaid row for the same goal/investment (geodeSavePayApply upsert, geodeMergeDuplicateLinkedContributionsSameMonth). Repaired in FA-1; guarded by the IDENTITY and FA-1 checks.',
   D5: 'An unpaid voluntary one-off contribution keeps reducing every later month\'s Monthly Left (paymentCountsForMonthlyOutflow overdue rule).',
   D6: 'Same-session rollover and reload disagree: the persisted g.saved / inv.balance cache stays stale until the next recompute.',
   D7: 'A savings release sized against a balance that rollover later shrinks hides later contributions (release deduction clamps at 0).',
@@ -415,6 +522,25 @@ function harnessFidelity() {
       render.indexOf('syncRecurringPayments();') >= 0 && render.indexOf('geodeRecomputeBalancesFromPayments') < 0, true);
     const dupes = PROGRAM.extracted.filter(f => f.declarations > 1).map(f => f.name + ' ×' + f.declarations);
     invariant('fidelity.declarations', 'extracted production functions declared exactly once', dupes, []);
+
+    const modal = PROGRAM.structural.openPayModal;
+    const modalAt = ["if (p) window._geodePayLinkedIntent = 'replace';", 'geodeNormalizePayLinkedIntent(prefill._geodePayIntent)',
+      "window._geodePayLinkedIntent = 'new';"].map(c => modal.indexOf(c));
+    invariant('fidelity.intent.modal', 'openPayModal intent: edit → replace, prefill → its own intent, otherwise → new (App.contribute)',
+      modalAt.every((p, i) => p >= 0 && (i === 0 || p > modalAt[i - 1])), true);
+    const intents = name => (PROGRAM.structural[name].match(/_geodePayIntent\s*[:=]\s*'(\w+)'/g) || []).map(m => m.replace(/.*'(\w+)'/, '$1'));
+    invariant('fidelity.intent.direct', 'User-added goal/investment entry points pass the new intent; debt entry points keep set',
+      ['geodePayFromGoal', 'geodePayFromInvest', 'openPayQuick', 'geodePayFromDebt'].map(n => [n, intents(n)]),
+      [['geodePayFromGoal', ['new']], ['geodePayFromInvest', ['new']], ['openPayQuick', ['set', 'new', 'new']], ['geodePayFromDebt', ['set']]]);
+    invariant('fidelity.intent.plan', 'Plan prefills in source order: debt keeps set; buffer/goal/investment gap actions add; untouched fallbacks set',
+      ['geodePlanDetailActionForStep', 'geodeMainActionFromPriorityStep', 'openSuggestedAction'].map(n => [n, intents(n)]),
+      [['geodePlanDetailActionForStep', ['set', 'set', 'set', 'add', 'set', 'add', 'set', 'add', 'set']],
+        ['geodeMainActionFromPriorityStep', ['set', 'add', 'add', 'add']], ['openSuggestedAction', ['set', 'add', 'add', 'add']]]);
+    invariant('fidelity.adjust', 'Non-debt "Adjust scheduled amount" runs geodePlanAdjustScheduledRun (edit by id / Payments); debt keeps its prefill',
+      (PROGRAM.structural.geodePlanDetailActionForStep.match(/setScheduleAction\('Adjust scheduled amount'[^\n]*/g) || [])
+        .map(l => l.indexOf('geodePlanAdjustScheduledRun(state, step)') >= 0), [false, true, true, true]);
+    invariant('fidelity.plan.declarations', 'Plan-program production functions declared exactly once',
+      PROGRAM.plan.extracted.filter(f => f.declarations > 1).map(f => f.name + ' ×' + f.declarations), []);
   });
 }
 
@@ -509,23 +635,18 @@ function goalD() {
     'recurring first': app => { monthlyHoliday(app); app.at('2026-06-06'); app.contribute({ name: 'Holiday extra', amount: 250, date: '2026-06-20', status: 'upcoming', rec: 'no', goalId: 'gH' }); },
     'one-off first': app => { app.contribute({ name: 'Holiday extra', amount: 250, date: '2026-06-20', status: 'upcoming', rec: 'no', goalId: 'gH' }); app.at('2026-06-06'); monthlyHoliday(app); }
   };
-  const known = {
-    'recurring first': { rows: [{ rec: 'yes', amount: 250 }], left: 2750, goal: 1250, julSession: 1250, julReload: 1000, template: [250] },
-    'one-off first': { rows: [{ rec: 'yes', amount: 100 }], left: 2900, goal: 1100, julSession: 1100, julReload: 1000, template: undefined }
-  };
   Object.keys(orders).forEach(order => MODES.forEach(mode => scenario('GOAL D — one-off £250 + recurring £100 in June, ' + order + ' [' + mode + ']', () => {
-    const k = known[order];
     const app = new App(baseState(), '2026-06-05');
     orders[order](app);
     let s = app.snap();
-    target('D.rows', 'Two independent intents: one-off £250 and recurring £100', signature(s.rows), [{ rec: 'no', amount: 250 }, { rec: 'yes', amount: 100 }], k.rows, 'D4');
-    target('D.left', 'June Monthly Left', s.left, 2650, k.left, 'D4');
+    invariant('D.rows', 'Two independent intents: one-off £250 and recurring £100', signature(s.rows), [{ rec: 'no', amount: 250 }, { rec: 'yes', amount: 100 }]);
+    invariant('D.left', 'June Monthly Left', s.left, 2650);
     app.at('2026-06-20'); app.completeAllUnpaid(); s = app.snap();
-    target('D.goal', 'June: both completed', s.goal.gH, 1350, k.goal, 'D4');
+    invariant('D.goal', 'June: both completed', s.goal.gH, 1350);
     app.advance('2026-07-02', mode); s = app.snap();
-    target('D.jul.goal', 'July rollover preserves £1,350', s.goal.gH, 1350, mode === 'reload' ? k.julReload : k.julSession, 'D4');
-    target('D.jul.template', 'July recurring template amount' + (k.template === undefined ? ' (today right only because the £250 was overwritten)' : ''),
-      s.rows.filter(r => r.rec === 'yes').map(r => r.amount), [100], k.template, 'D4');
+    if (mode === 'reload') target('D.jul.goal', 'July rollover preserves £1,350', s.goal.gH, 1350, 1250, 'D1');
+    else current('D.jul.goal', 'July rollover shows £1,350 only because the stale session cache hides D1', s.goal.gH, 1350);
+    invariant('D.jul.template', 'July recurring template amount', s.rows.filter(r => r.rec === 'yes').map(r => r.amount), [100]);
   })));
 }
 
@@ -719,16 +840,16 @@ function identity() {
     app.at('2026-06-10');
     app.contribute({ name: 'Holiday extra', amount: 250, date: '2026-06-10', status: 'paid', rec: 'no', goalId: 'gH' });
     const s = app.snap();
-    target('ID.A.rows', 'Rows stay independent', s.rows.map(r => ({ rec: r.rec, amount: r.amount, status: r.status })).sort((a, b) => a.amount - b.amount),
-      [{ rec: 'yes', amount: 100, status: 'upcoming' }, { rec: 'no', amount: 250, status: 'paid' }], [{ rec: 'yes', amount: 250, status: 'paid' }], 'D4');
+    invariant('ID.A.rows', 'Rows stay independent', s.rows.map(r => ({ rec: r.rec, amount: r.amount, status: r.status })).sort((a, b) => a.amount - b.amount),
+      [{ rec: 'yes', amount: 100, status: 'upcoming' }, { rec: 'no', amount: 250, status: 'paid' }]);
   });
   scenario('IDENTITY B — two separate user one-offs £250 and £50 in June', () => {
     const app = new App(baseState(), '2026-06-05');
     app.contribute({ name: 'Holiday extra', amount: 250, date: '2026-06-20', status: 'upcoming', rec: 'no', goalId: 'gH' });
     app.contribute({ name: 'Holiday small', amount: 50, date: '2026-06-22', status: 'upcoming', rec: 'no', goalId: 'gH' });
     const s = app.snap();
-    target('ID.B.rows', 'Two independent intents', signature(s.rows), [{ rec: 'no', amount: 250 }, { rec: 'no', amount: 50 }], [{ rec: 'no', amount: 50 }], 'D4');
-    target('ID.B.left', 'June Monthly Left', s.left, 2700, 2950, 'D4');
+    invariant('ID.B.rows', 'Two independent intents', signature(s.rows), [{ rec: 'no', amount: 250 }, { rec: 'no', amount: 50 }]);
+    invariant('ID.B.left', 'June Monthly Left', s.left, 2700);
   });
   scenario('IDENTITY C — repeating the same Plan scheduling action (F.3 protection)', () => {
     const app = new App(baseState(), '2026-06-05');
@@ -739,6 +860,403 @@ function identity() {
     inv.planSchedule({ name: 'ISA', amount: 96, date: '2026-06-15', status: 'upcoming', rec: 'yes', investId: 'iA' });
     inv.planSchedule({ name: 'ISA', amount: 120, date: '2026-06-15', status: 'upcoming', rec: 'yes', investId: 'iA' });
     invariant('ID.C.inv.replace', 'Investment: re-schedule £96 → £120 replaces the amount on one row', signature(inv.rows()), [{ rec: 'yes', amount: 120 }]);
+  });
+}
+
+/** Same-month contribution identity: adding is a new intention, editing is the same row, repeating a Plan action reuses its row. */
+function identityMatrix() {
+  const holidayRow = (id, amount, rec, extra) => Object.assign({ id, name: 'Holiday ' + id, amount, date: '2026-06-20', status: 'upcoming', rec,
+    lastPaidYM: '', goalId: 'gH', investId: '', debtId: '', payKind: 'goal', createdAt: 1 }, extra || {});
+  const rowsOf = app => app.rows().map(r => ({ id: r.id, rec: r.rec, amount: r.amount, direct: r.direct }));
+  /** Save → render → reload keeps the same rows (no duplicates, no merge, no marker change). */
+  const survives = (id, app) => {
+    const saved = rowsOf(app);
+    app.render(); const rendered = rowsOf(app);
+    app.reload(); const reloaded = rowsOf(app);
+    invariant(id, 'Rows survive render and reload unchanged', [rendered, reloaded], [saved, saved]);
+  };
+  const goalOneOff = (app, amount, date) => app.contribute({ name: 'Holiday extra', amount, date: date || '2026-06-20', status: 'upcoming', rec: 'no', goalId: 'gH' });
+  const goalPlan = (app, amount, extra) => app.planSchedule(Object.assign({ name: 'Goal contribution: Holiday', amount, date: '2026-06-15', status: 'upcoming', rec: 'yes', goalId: 'gH' }, extra || {}));
+
+  scenario('FA-1 A — goal: recurring £100, then a separate one-off £250', () => {
+    const app = new App(baseState(), '2026-06-05');
+    monthlyHoliday(app); goalOneOff(app, 250);
+    const s = app.snap();
+    invariant('FA1.A.rows', 'Two rows, each with its own frequency and amount', signature(s.rows), [{ rec: 'no', amount: 250 }, { rec: 'yes', amount: 100 }]);
+    invariant('FA1.A.left', 'June allocation £350 → Monthly Left', s.left, 2650);
+    survives('FA1.A.survives', app);
+  });
+  scenario('FA-1 B — goal: one-off £250, then a separate recurring £100', () => {
+    const app = new App(baseState(), '2026-06-05');
+    goalOneOff(app, 250); monthlyHoliday(app);
+    const s = app.snap();
+    invariant('FA1.B.rows', 'Two rows, each with its own frequency and amount', signature(s.rows), [{ rec: 'no', amount: 250 }, { rec: 'yes', amount: 100 }]);
+    invariant('FA1.B.left', 'June allocation £350 → Monthly Left', s.left, 2650);
+    survives('FA1.B.survives', app);
+  });
+  scenario('FA-1 C — goal: one-off £250, then a separate one-off £50', () => {
+    const app = new App(baseState(), '2026-06-05');
+    goalOneOff(app, 250); goalOneOff(app, 50, '2026-06-22');
+    const s = app.snap();
+    invariant('FA1.C.rows', 'Both one-offs kept', signature(s.rows), [{ rec: 'no', amount: 250 }, { rec: 'no', amount: 50 }]);
+    invariant('FA1.C.left', 'June allocation £300 → Monthly Left', s.left, 2700);
+    survives('FA1.C.survives', app);
+  });
+  scenario('FA-1 D — goal: the same Plan action scheduled twice', () => {
+    const app = new App(baseState(), '2026-06-05');
+    goalPlan(app, 100); goalPlan(app, 100);
+    const s = app.snap();
+    invariant('FA1.D.rows', 'One Plan row of £100 (not £200)', signature(s.rows), [{ rec: 'yes', amount: 100 }]);
+    invariant('FA1.D.left', 'June Monthly Left', s.left, 2900);
+    survives('FA1.D.survives', app);
+    goalPlan(app, 50, { intent: 'add' });
+    invariant('FA1.D.add', 'An explicit add intent tops up the same Plan row', signature(app.rows()), [{ rec: 'yes', amount: 150 }]);
+  });
+  scenario('FA-1 E — goal: editing an existing row by id', () => {
+    const app = new App(baseState(), '2026-06-05');
+    goalOneOff(app, 250);
+    const id = monthlyHoliday(app);
+    app.editPayment(id, { amount: 150 });
+    const rows = rowsOf(app);
+    invariant('FA1.E.rows', 'Edited row keeps its id and marker; the one-off is untouched',
+      rows.map(r => [r.id === id, r.rec, r.amount, r.direct]).sort(), [[false, 'no', 250, true], [true, 'yes', 150, true]]);
+    survives('FA1.E.survives', app);
+  });
+  scenario('FA-1 F — goal: Plan scheduling next to contributions the user added', () => {
+    const app = new App(baseState(), '2026-06-05');
+    monthlyHoliday(app);
+    goalPlan(app, 20);
+    invariant('FA1.F.recurring', 'Plan £20 does not overwrite the user\'s recurring £100', signature(app.rows()), [{ rec: 'yes', amount: 100 }, { rec: 'yes', amount: 20 }]);
+    goalPlan(app, 20);
+    invariant('FA1.F.repeat', 'Repeating the Plan action reuses its own row', signature(app.rows()), [{ rec: 'yes', amount: 100 }, { rec: 'yes', amount: 20 }]);
+    const two = new App(baseState(), '2026-06-05');
+    goalOneOff(two, 250); goalPlan(two, 120);
+    invariant('FA1.F.oneoff', 'Plan recurring £120 does not absorb the user\'s one-off £250', signature(two.rows()), [{ rec: 'no', amount: 250 }, { rec: 'yes', amount: 120 }]);
+    survives('FA1.F.survives', app);
+  });
+  scenario('FA-1 G — investment: the same identity rules', () => {
+    const invRec = app => app.contribute({ name: 'ISA monthly', amount: 200, date: '2026-06-15', status: 'upcoming', rec: 'yes', investId: 'iA' });
+    const invOne = (app, amount) => app.contribute({ name: 'ISA extra', amount, date: '2026-06-20', status: 'upcoming', rec: 'no', investId: 'iA' });
+    const invPlan = (app, amount) => app.planSchedule({ name: 'Investment contribution (ISA)', amount, date: '2026-06-15', status: 'upcoming', rec: 'yes', investId: 'iA' });
+    const a = new App(baseState(), '2026-06-05');
+    invRec(a); invOne(a, 500);
+    invariant('FA1.G.recurring-oneoff', 'Recurring £200 + one-off £500 stay two rows; Monthly Left',
+      [signature(a.rows()), a.snap().left], [[{ rec: 'no', amount: 500 }, { rec: 'yes', amount: 200 }], 2300]);
+    survives('FA1.G.survives', a);
+    const c = new App(baseState(), '2026-06-05');
+    invOne(c, 500); invOne(c, 300);
+    invariant('FA1.G.two-oneoffs', 'Two one-offs £500 + £300 kept', signature(c.rows()), [{ rec: 'no', amount: 300 }, { rec: 'no', amount: 500 }]);
+    const d = new App(baseState(), '2026-06-05');
+    invPlan(d, 120); invPlan(d, 120);
+    invariant('FA1.G.plan-repeat', 'Same Plan action twice → one row', signature(d.rows()), [{ rec: 'yes', amount: 120 }]);
+    const f = new App(baseState(), '2026-06-05');
+    invRec(f); invPlan(f, 50);
+    invariant('FA1.G.plan-vs-user', 'Plan £50 does not overwrite the user\'s recurring £200', signature(f.rows()), [{ rec: 'yes', amount: 200 }, { rec: 'yes', amount: 50 }]);
+  });
+  scenario('FA-1 H — debt shared path keeps its existing same-month behaviour', () => {
+    const debts = [{ id: 'dC', name: 'Card', balance: 1000, minPayment: 50, apr: 20 }];
+    const app = new App(baseState({ debts }), '2026-06-05');
+    app.planSchedule({ name: 'Card payment', amount: 50, date: '2026-06-15', status: 'upcoming', rec: 'yes', debtId: 'dC' });
+    app.contribute({ name: 'Extra debt payment: Card', amount: 100, date: '2026-06-20', status: 'upcoming', rec: 'no', debtId: 'dC' });
+    current('FA1.H.upsert', 'A second unpaid same-month debt payment updates the existing row (unchanged debt behaviour)',
+      app.rows().map(r => ({ rec: r.rec, amount: r.amount, direct: r.direct })), [{ rec: 'yes', amount: 100, direct: false }]);
+    const legacy = new App(baseState({ debts, payments: [
+      Object.assign(holidayRow('d1', 50, 'yes'), { goalId: '', debtId: 'dC', payKind: 'debt' }),
+      Object.assign(holidayRow('d2', 100, 'no'), { goalId: '', debtId: 'dC', payKind: 'debt', createdAt: 2 })] }), '2026-06-05');
+    legacy.merge();
+    current('FA1.H.merge', 'Unpaid same-month debt rows still merge (unchanged debt behaviour)', signature(legacy.rows()), [{ rec: 'yes', amount: 150 }]);
+  });
+  scenario('FA-1 LEGACY — saved states without the marker', () => {
+    const app = new App(baseState({ payments: [holidayRow('p1', 100, 'yes', { date: '2026-06-15' })] }), '2026-06-05');
+    app.reload();
+    invariant('FA1.L.no-backfill', 'Reload adds no marker to existing rows', app.state().payments.map(p => 'directContribution' in p), [false]);
+    goalPlan(app, 120);
+    invariant('FA1.L.plan-reuse', 'Plan action reuses an existing unmarked recurring row (F.3 kept for saved states)', signature(app.rows()), [{ rec: 'yes', amount: 120 }]);
+    const two = new App(baseState({ payments: [holidayRow('p1', 250, 'no')] }), '2026-06-05');
+    goalPlan(two, 120);
+    invariant('FA1.L.plan-oneoff', 'Plan recurring action leaves an existing one-off alone', signature(two.rows()), [{ rec: 'no', amount: 250 }, { rec: 'yes', amount: 120 }]);
+  });
+  scenario('FA-1 MERGE — legacy same-month merge no longer combines separate intentions', () => {
+    const mixed = new App(baseState({ payments: [holidayRow('p1', 100, 'yes'), holidayRow('p2', 250, 'no', { createdAt: 2 })] }), '2026-06-05');
+    mixed.merge();
+    invariant('FA1.M.mixed', 'One-off + recurring are not merged', signature(mixed.rows()), [{ rec: 'no', amount: 250 }, { rec: 'yes', amount: 100 }]);
+    const direct = new App(baseState({ payments: [holidayRow('p1', 250, 'no', { directContribution: true }), holidayRow('p2', 50, 'no', { directContribution: true, createdAt: 2 })] }), '2026-06-05');
+    direct.merge();
+    invariant('FA1.M.direct', 'Contributions the user added are not merged', signature(direct.rows()), [{ rec: 'no', amount: 250 }, { rec: 'no', amount: 50 }]);
+    const dup = new App(baseState({ payments: [holidayRow('p1', 100, 'yes'), holidayRow('p2', 100, 'yes', { createdAt: 2 })] }), '2026-06-05');
+    dup.merge();
+    current('FA1.M.legacy-dup', 'Two unmarked recurring rows for the same goal and month still merge (legacy duplicate cleanup)', signature(dup.rows()), [{ rec: 'yes', amount: 200 }]);
+  });
+}
+
+/**
+ * Plan contribution action semantics: a gap action adds only the uncovered gap (topping up the Plan row, never a row
+ * the user added), Adjust edits the one row that provides the coverage (several rows → Payments), and paid +
+ * scheduled together cover a goal/investment/buffer step. Debt keeps its existing behaviour.
+ */
+function planActions() {
+  const GOAL_STEP = { label: 'Catch up on Holiday', amount: 120 };
+  const INV_STEP = { label: 'Invest what remains', amount: 120 };
+  const BUF_STEP = { label: 'Build your emergency fund', amount: 120 };
+  const DEBT_STEP = { label: 'Reduce high-interest Card', amount: 120 };
+  const HOL = { goalId: 'gH', payKind: 'goal' }, EMG = { goalId: 'gE', payKind: 'goal' }, ISAL = { investId: 'iA', payKind: 'invest' };
+  const USER = { directContribution: true }, PAID = { status: 'paid', date: '2026-06-02' };
+  const pay = (id, amount, rec, link, extra) => Object.assign({ id, name: 'Row ' + id, amount, date: '2026-06-15', status: 'upcoming', rec,
+    lastPaidYM: '', goalId: '', investId: '', debtId: '', payKind: 'bill', createdAt: 1 }, link || {}, extra || {});
+  const EMERGENCY = () => ({ id: 'gE', name: 'Emergency fund', amount: 1000, saved: 100, baseSaved: 100, monthly: 0, cat: 'emergency' });
+  const CARD = () => ({ id: 'dC', name: 'Card', balance: 1000, minPayment: 50, apr: 25 });
+  const planApp = (payments, extra) => new App(baseState(Object.assign({ payments, incomeExplicitlySet: true }, extra || {})), '2026-06-05', PROGRAM.plan);
+  const pick = (o, ...keys) => keys.reduce((r, k) => { r[k] = o[k]; return r; }, {});
+  /** Unpaid rows as [id, frequency, amount, user-added]. */
+  const unpaid = app => app.rows().filter(r => r.status !== 'paid').map(r => [r.id, r.rec, r.amount, r.direct]);
+  const outcome = (app, step) => { const v = app.planView(step); return { rows: unpaid(app), scheduled: v.scheduled, left: app.snap().left, next: v.label }; };
+  const tapped = t => [t.msub, t.id, t.intent];
+  /** The helper's rows are exactly the rows whose removal changes the scheduled amount. */
+  const sameRows = (app, step) => {
+    app.ctx.__stepJson = JSON.stringify(step);
+    return JSON.parse(app.run(`(function () {
+      var step = JSON.parse(__stepJson), all = S.payments.slice(), full = geodePlanStepScheduledAmount(S, step), counted = [];
+      var rows = geodePlanStepScheduledRows(S, step), sum = 0;
+      rows.forEach(function (e) { sum += e.amount; });
+      for (var i = 0; i < all.length; i++) {
+        S.payments = all.filter(function (p, j) { return j !== i; });
+        if (geodePlanStepScheduledAmount(S, step) !== full) counted.push(all[i].id);
+      }
+      S.payments = all;
+      return JSON.stringify({ rows: rows.map(function (e) { return e.row.id; }).sort(), counted: counted.sort(), sumMatches: sum === full });
+    })()`));
+  };
+
+  scenario('PLAN A — goal target £120, nothing scheduled', () => {
+    const app = planApp([]);
+    invariant('PA.A.view', 'Plan detail offers the whole step', pick(app.planView(GOAL_STEP), 'label', 'amount'), { label: 'Schedule this step', amount: 120 });
+    invariant('PA.A.tap', 'The gap action opens a new contribution with the add intent', tapped(app.planTap(GOAL_STEP)), ['payments', null, 'add']);
+    invariant('PA.A.result', 'One Plan row £120; Monthly Left £2,880; Plan now offers Adjust', outcome(app, GOAL_STEP),
+      { rows: [['id1', 'yes', 120, false]], scheduled: 120, left: 2880, next: 'Adjust scheduled amount' });
+  });
+  scenario('PLAN B1 — goal: user recurring £100, Plan fills the £20 gap', () => {
+    const app = planApp([pay('u1', 100, 'yes', HOL, USER)]);
+    invariant('PA.B1.view', 'Plan detail offers only the gap', pick(app.planView(GOAL_STEP), 'label', 'amount'), { label: 'Schedule this step', amount: 20 });
+    invariant('PA.B1.tap', 'Gap action uses the add intent', tapped(app.planTap(GOAL_STEP)), ['payments', null, 'add']);
+    invariant('PA.B1.result', 'User £100 kept; Plan £20 added; total £120; Monthly Left £2,880', outcome(app, GOAL_STEP),
+      { rows: [['u1', 'yes', 100, true], ['id1', 'yes', 20, false]], scheduled: 120, left: 2880, next: 'Adjust scheduled amount' });
+    invariant('PA.B1.repeat', 'The refreshed Plan action (two rows → Payments) creates nothing', [tapped(app.planTap(GOAL_STEP)), unpaid(app)],
+      [['payments', null, null], [['u1', 'yes', 100, true], ['id1', 'yes', 20, false]]]);
+  });
+  scenario('PLAN B2 — goal: user recurring £120, Adjust', () => {
+    const app = planApp([pay('u1', 120, 'yes', HOL, USER)]);
+    invariant('PA.B2.view', 'Plan detail offers Adjust for the scheduled £120', pick(app.planView(GOAL_STEP), 'label', 'amount'), { label: 'Adjust scheduled amount', amount: 120 });
+    invariant('PA.B2.edit', 'Adjust edits the user\'s row by id; saved unchanged it stays one £120 row',
+      [tapped(app.planTap(GOAL_STEP)), unpaid(app)], [['payments', 'u1', 'replace'], [['u1', 'yes', 120, true]]]);
+    invariant('PA.B2.edit150', 'Changed to £150 the same row becomes £150; no second row; Monthly Left £2,850',
+      [tapped(app.planTap(GOAL_STEP, 150)), unpaid(app), app.snap().left], [['payments', 'u1', 'replace'], [['u1', 'yes', 150, true]], 2850]);
+  });
+  scenario('PLAN C1 — goal: Plan row £100, Plan fills the £20 gap', () => {
+    const app = planApp([pay('p1', 100, 'yes', HOL)]);
+    invariant('PA.C1.view', 'Plan detail offers only the gap', pick(app.planView(GOAL_STEP), 'label', 'amount'), { label: 'Schedule this step', amount: 20 });
+    invariant('PA.C1.tap', 'Gap action uses the add intent', tapped(app.planTap(GOAL_STEP)), ['payments', null, 'add']);
+    invariant('PA.C1.result', 'The Plan row is topped up to one £120 row', outcome(app, GOAL_STEP),
+      { rows: [['p1', 'yes', 120, false]], scheduled: 120, left: 2880, next: 'Adjust scheduled amount' });
+  });
+  scenario('PLAN C2 — goal: Plan row £120, Adjust', () => {
+    const app = planApp([pay('p1', 120, 'yes', HOL)]);
+    invariant('PA.C2.edit', 'Adjust edits the Plan row by id; changed to £150 it stays one row',
+      [tapped(app.planTap(GOAL_STEP, 150)), unpaid(app)], [['payments', 'p1', 'replace'], [['p1', 'yes', 150, false]]]);
+  });
+  scenario('PLAN D1 — goal: user one-off £100, Plan fills the £20 gap', () => {
+    const app = planApp([pay('u1', 100, 'no', HOL, USER)]);
+    invariant('PA.D1.view', 'Plan detail offers only the gap', pick(app.planView(GOAL_STEP), 'label', 'amount'), { label: 'Schedule this step', amount: 20 });
+    app.planTap(GOAL_STEP);
+    invariant('PA.D1.result', 'One-off £100 stays one-off; Plan £20 added; total £120', outcome(app, GOAL_STEP),
+      { rows: [['u1', 'no', 100, true], ['id1', 'yes', 20, false]], scheduled: 120, left: 2880, next: 'Adjust scheduled amount' });
+  });
+  scenario('PLAN D2 — goal: user one-off £120, Adjust', () => {
+    const app = planApp([pay('u1', 120, 'no', HOL, USER)]);
+    invariant('PA.D2.edit', 'Adjust edits the one-off by id; it stays one-off; no second row',
+      [tapped(app.planTap(GOAL_STEP)), unpaid(app)], [['payments', 'u1', 'replace'], [['u1', 'no', 120, true]]]);
+    invariant('PA.D2.edit150', 'Changed to £150 the same one-off becomes £150', [app.planTap(GOAL_STEP, 150).id, unpaid(app)], ['u1', [['u1', 'no', 150, true]]]);
+  });
+  scenario('PLAN E1 — goal: user £50 + £50, Plan fills the £20 gap', () => {
+    const app = planApp([pay('u1', 50, 'yes', HOL, USER), pay('u2', 50, 'yes', HOL, Object.assign({ createdAt: 2 }, USER))]);
+    app.planTap(GOAL_STEP);
+    invariant('PA.E1.result', 'Both user rows survive; Plan £20 added; total £120', outcome(app, GOAL_STEP),
+      { rows: [['u1', 'yes', 50, true], ['u2', 'yes', 50, true], ['id1', 'yes', 20, false]], scheduled: 120, left: 2880, next: 'Adjust scheduled amount' });
+  });
+  scenario('PLAN E2 — goal: user £60 + £60, Adjust', () => {
+    const app = planApp([pay('u1', 60, 'yes', HOL, USER), pay('u2', 60, 'yes', HOL, Object.assign({ createdAt: 2 }, USER))]);
+    invariant('PA.E2.view', 'Plan detail offers Adjust for the scheduled £120', pick(app.planView(GOAL_STEP), 'label', 'amount'), { label: 'Adjust scheduled amount', amount: 120 });
+    invariant('PA.E2.payments', 'Two rows: Adjust opens Payments and changes nothing; total £120',
+      [tapped(app.planTap(GOAL_STEP)), outcome(app, GOAL_STEP)],
+      [['payments', null, null], { rows: [['u1', 'yes', 60, true], ['u2', 'yes', 60, true]], scheduled: 120, left: 2880, next: 'Adjust scheduled amount' }]);
+  });
+  scenario('PLAN F — goal: Plan £20 + user £100, Adjust', () => {
+    const app = planApp([pay('p1', 20, 'yes', HOL), pay('u1', 100, 'yes', HOL, Object.assign({ createdAt: 2 }, USER))]);
+    invariant('PA.F.payments', 'Two rows: Adjust opens Payments and changes nothing; total £120',
+      [tapped(app.planTap(GOAL_STEP)), outcome(app, GOAL_STEP)],
+      [['payments', null, null], { rows: [['p1', 'yes', 20, false], ['u1', 'yes', 100, true]], scheduled: 120, left: 2880, next: 'Adjust scheduled amount' }]);
+  });
+  scenario('PLAN G — goal: paid £50 + user scheduled £70 covers the £120 step', () => {
+    const app = planApp([pay('u0', 50, 'no', HOL, Object.assign({}, USER, PAID)), pay('u1', 70, 'yes', HOL, Object.assign({ createdAt: 2 }, USER))]);
+    app.setPlan([GOAL_STEP]);
+    invariant('PA.G.state', 'Covered: no gap, not actionable, scheduled-only; Plan offers Adjust £70',
+      app.planView(GOAL_STEP), { label: 'Adjust scheduled amount', amount: 70, applied: 50, scheduled: 70, gap: 0, actionable: false, scheduledOnly: true, actionAmount: 0 });
+    invariant('PA.G.home', 'Home routes to the plan instead of scheduling another payment', app.homeView(GOAL_STEP), { cta: 'View plan', amount: null });
+    invariant('PA.G.suggested', 'Suggested Actions offer nothing for the covered step', app.suggestions(), []);
+    invariant('PA.G.adjust', 'Adjust edits the one scheduled row; nothing is added',
+      [tapped(app.planTap(GOAL_STEP)), unpaid(app), app.snap().left], [['payments', 'u1', 'replace'], [['u1', 'yes', 70, true]], 2880]);
+  });
+  scenario('PLAN G2 — goal: paid £50 + user scheduled £30 leaves a £40 gap', () => {
+    const app = planApp([pay('u0', 50, 'no', HOL, Object.assign({}, USER, PAID)), pay('u1', 30, 'yes', HOL, Object.assign({ createdAt: 2 }, USER))]);
+    app.setPlan([GOAL_STEP]);
+    invariant('PA.G2.view', 'Plan detail offers the £40 gap, not £70', pick(app.planView(GOAL_STEP), 'label', 'amount'), { label: 'Schedule remaining amount', amount: 40 });
+    invariant('PA.G2.home', 'Home offers the same £40', app.homeView(GOAL_STEP), { cta: 'Plan a contribution', amount: 40 });
+    invariant('PA.G2.suggested', 'Suggested Actions offer the same £40', app.suggestions(), [{ type: 'goal_contribution', amount: 40 }]);
+    invariant('PA.G2.tap', 'Gap action uses the add intent', tapped(app.planTap(GOAL_STEP)), ['payments', null, 'add']);
+    const v = app.planView(GOAL_STEP);
+    invariant('PA.G2.result', 'User £30 kept; Plan £40 added; scheduled £70 + paid £50 = £120',
+      [unpaid(app), v.scheduled, v.applied, app.snap().left, v.label], [[['u1', 'yes', 30, true], ['id1', 'yes', 40, false]], 70, 50, 2880, 'Adjust scheduled amount']);
+  });
+  scenario('PLAN G2P — goal: paid £50 + Plan scheduled £30 leaves a £40 gap', () => {
+    const app = planApp([pay('u0', 50, 'no', HOL, Object.assign({}, USER, PAID)), pay('p1', 30, 'yes', HOL, { createdAt: 2 })]);
+    app.planTap(GOAL_STEP);
+    const v = app.planView(GOAL_STEP);
+    invariant('PA.G2P.result', 'The Plan row tops up £30 → £70; paid £50 + scheduled £70 = £120',
+      [unpaid(app), v.scheduled, v.applied, app.snap().left], [[['p1', 'yes', 70, false]], 70, 50, 2880]);
+  });
+  scenario('PLAN HOME / SUGGESTED — gap actions share the Plan semantics', () => {
+    const home = planApp([pay('u1', 100, 'yes', HOL, USER)]);
+    invariant('PA.H.home', 'Home main action fills the £20 gap with add; user row kept',
+      [home.homeView(GOAL_STEP), tapped(home.homeTap(GOAL_STEP)), unpaid(home)],
+      [{ cta: 'Plan a contribution', amount: 20 }, ['payments', null, 'add'], [['u1', 'yes', 100, true], ['id1', 'yes', 20, false]]]);
+    invariant('PA.H.home.after', 'Home then routes to the plan', home.homeView(GOAL_STEP), { cta: 'View plan', amount: null });
+    const sa = planApp([pay('p1', 100, 'yes', HOL)]);
+    sa.setPlan([GOAL_STEP]);
+    invariant('PA.H.suggested', 'Suggested Action tops up the Plan row by the £20 gap',
+      [sa.suggestions(), tapped(sa.suggestedTap(0)), unpaid(sa)],
+      [[{ type: 'goal_contribution', amount: 20 }], ['', null, 'add'], [['p1', 'yes', 120, false]]]);
+    invariant('PA.H.suggested.after', 'Suggested Actions then offer nothing', sa.suggestions(), []);
+  });
+
+  scenario('PLAN SA — stale Suggested Action after the gap is filled elsewhere', () => {
+    const viaPlan = planApp([pay('u1', 100, 'yes', HOL, USER)]);
+    viaPlan.setPlan([GOAL_STEP]);
+    invariant('PA.SA.frozen', 'Home freezes a £20 goal Suggested Action', [viaPlan.suggestions(), viaPlan.state().lastSuggestedActions.map(a => [a.type, a.amount])],
+      [[{ type: 'goal_contribution', amount: 20 }], [['goal_contribution', 20]]]);
+    viaPlan.planTap(GOAL_STEP);
+    invariant('PA.SA.plan.reconciled', 'Filling the gap from Plan detail removes the frozen goal action (linked-save reconciliation)',
+      viaPlan.state().lastSuggestedActions.map(a => a.type), []);
+    invariant('PA.SA.plan.home', 'Next Home render offers nothing; the card slot opens nothing; total stays £120',
+      [viaPlan.suggestions(), tapped(viaPlan.suggestedTap(0)), outcome(viaPlan, GOAL_STEP).scheduled], [[], ['', null, null], 120]);
+
+    const viaUser = planApp([pay('u1', 100, 'yes', HOL, USER)]);
+    viaUser.setPlan([GOAL_STEP]);
+    viaUser.suggestions();
+    viaUser.contribute({ name: 'Holiday extra', amount: 20, date: '2026-06-20', status: 'upcoming', rec: 'no', goalId: 'gH' });
+    invariant('PA.SA.user', 'A £20 the user adds from the goal card also reconciles; Home then offers nothing',
+      [viaUser.state().lastSuggestedActions.map(a => a.type), viaUser.suggestions(), outcome(viaUser, GOAL_STEP).scheduled], [[], [], 120]);
+
+    const partial = planApp([pay('u1', 100, 'yes', HOL, USER)]);
+    partial.setPlan([GOAL_STEP]);
+    partial.suggestions();
+    partial.contribute({ name: 'Holiday extra', amount: 15, date: '2026-06-20', status: 'upcoming', rec: 'no', goalId: 'gH' });
+    invariant('PA.SA.partial', 'After £15 of the £20 is added elsewhere, Home offers £5 and tapping it reaches exactly £120',
+      [partial.suggestions(), tapped(partial.suggestedTap(0)), outcome(partial, GOAL_STEP).scheduled], [[{ type: 'goal_contribution', amount: 5 }], ['', null, 'add'], 120]);
+
+    const buffer = planApp([], { goals: [HOLIDAY(), EMERGENCY()] });
+    buffer.setPlan([BUF_STEP]);
+    buffer.suggestions();
+    buffer.contribute({ name: 'Emergency fund', amount: 120, date: '2026-06-20', status: 'upcoming', rec: 'yes', goalId: 'gE' });
+    current('PA.SA.buffer.frozen', 'A buffer gap filled from the goal card is not a buffer save, so the frozen buffer action stays in the batch',
+      buffer.state().lastSuggestedActions.map(a => [a.type, a.amount]), [['buffer_contribution', 120]]);
+    invariant('PA.SA.buffer.home', 'The next Home render still drops it (plan signature changed → batch refreshed); nothing to tap',
+      [buffer.suggestions(), tapped(buffer.suggestedTap(0)), outcome(buffer, BUF_STEP).scheduled], [[], ['', null, null], 120]);
+
+    const noRender = planApp([pay('u1', 100, 'yes', HOL, USER)]);
+    noRender.setPlan([GOAL_STEP]);
+    noRender.suggestions();
+    noRender.planTap(GOAL_STEP);
+    current('PA.SA.no-render', 'openSuggestedAction trusts the list from the last Home render (every save calls render(), which rebuilds it): replaying the pre-save list adds £20 again',
+      [tapped(noRender.suggestedTap(0)), outcome(noRender, GOAL_STEP).scheduled], [['', null, 'add'], 140]);
+  });
+
+  scenario('PLAN INVESTMENT — same semantics for the investment step', () => {
+    const none = planApp([]);
+    none.setPlan([INV_STEP]);
+    current('PA.I0.view', 'Nothing scheduled: Plan detail label for the first investment action (existing copy)', pick(none.planView(INV_STEP), 'label', 'amount'),
+      { label: 'Schedule remaining amount', amount: 120 });
+    invariant('PA.I0.suggested', 'Suggested Action schedules £120 with add; one Plan row',
+      [none.suggestions(), tapped(none.suggestedTap(0)), unpaid(none)], [[{ type: 'investment_contribution', amount: 120 }], ['', null, 'add'], [['id1', 'yes', 120, false]]]);
+    const i1 = planApp([pay('v1', 100, 'yes', ISAL, USER)]);
+    invariant('PA.I1.edit', 'User £100: Adjust edits that row by id; changed to £120 no row is added beside it',
+      [pick(i1.planView(INV_STEP), 'label', 'amount'), tapped(i1.planTap(INV_STEP, 120)), unpaid(i1), i1.snap().left],
+      [{ label: 'Adjust scheduled amount', amount: 100 }, ['payments', 'v1', 'replace'], [['v1', 'yes', 120, true]], 2880]);
+    const i2 = planApp([pay('v1', 100, 'yes', ISAL)]);
+    invariant('PA.I2.edit', 'Plan £100: Adjust edits the Plan row by id', [tapped(i2.planTap(INV_STEP, 120)), unpaid(i2)],
+      [['payments', 'v1', 'replace'], [['v1', 'yes', 120, false]]]);
+    const multi = planApp([pay('v1', 60, 'yes', ISAL, USER), pay('v2', 60, 'yes', ISAL, Object.assign({ createdAt: 2 }, USER))]);
+    invariant('PA.I.multi', 'Two investment rows: Adjust opens Payments and changes nothing', [tapped(multi.planTap(INV_STEP)), unpaid(multi)],
+      [['payments', null, null], [['v1', 'yes', 60, true], ['v2', 'yes', 60, true]]]);
+    const covered = planApp([pay('v1', 120, 'yes', ISAL, USER)]);
+    covered.setPlan([INV_STEP]);
+    invariant('PA.I.covered', 'Scheduled investment: Home routes to the plan and Suggested Actions offer nothing',
+      [covered.homeView(INV_STEP).cta, covered.suggestions()], ['View plan', []]);
+  });
+
+  scenario('PLAN BUFFER — emergency buffer step', () => {
+    const goals = { goals: [HOLIDAY(), EMERGENCY()] };
+    const links = app => app.rows().filter(r => r.status !== 'paid').map(r => [r.id, r.goalId]);
+    const none = planApp([], goals);
+    invariant('PA.BUF.none', 'Nothing scheduled: the buffer action schedules £120 with add, linked to the emergency goal',
+      [pick(none.planView(BUF_STEP), 'label', 'amount'), tapped(none.planTap(BUF_STEP)), unpaid(none), links(none)],
+      [{ label: 'Schedule this step', amount: 120 }, ['payments', null, 'add'], [['id1', 'yes', 120, false]], [['id1', 'gE']]]);
+    const user = planApp([pay('u1', 100, 'yes', EMG, USER)], goals);
+    user.planTap(BUF_STEP);
+    invariant('PA.BUF.user', 'User buffer £100 kept; Plan £20 added; total £120', outcome(user, BUF_STEP),
+      { rows: [['u1', 'yes', 100, true], ['id1', 'yes', 20, false]], scheduled: 120, left: 2880, next: 'Adjust scheduled amount' });
+    invariant('PA.BUF.user.adjust', 'Then two rows: Adjust opens Payments and changes nothing', [tapped(user.planTap(BUF_STEP)), unpaid(user)],
+      [['payments', null, null], [['u1', 'yes', 100, true], ['id1', 'yes', 20, false]]]);
+    const plan = planApp([pay('p1', 100, 'yes', EMG)], goals);
+    plan.planTap(BUF_STEP);
+    invariant('PA.BUF.plan', 'Plan buffer row £100 is topped up to one £120 row', unpaid(plan), [['p1', 'yes', 120, false]]);
+    invariant('PA.BUF.plan.adjust', 'Adjust edits that one row by id', [tapped(plan.planTap(BUF_STEP, 150)), unpaid(plan)],
+      [['payments', 'p1', 'replace'], [['p1', 'yes', 150, false]]]);
+    const legacy = planApp([pay('l1', 120, 'yes', null, { name: 'Rainy day pot' })], goals);
+    invariant('PA.BUF.name-only', 'A row counted only by its buffer-like name: Adjust opens that exact row; editing leaves it unlinked',
+      [pick(legacy.planView(BUF_STEP), 'label', 'amount'), tapped(legacy.planTap(BUF_STEP)), unpaid(legacy), links(legacy)],
+      [{ label: 'Adjust scheduled amount', amount: 120 }, ['payments', 'l1', 'replace'], [['l1', 'yes', 120, false]], [['l1', '']]]);
+    const multi = planApp([pay('u1', 60, 'yes', EMG, USER), pay('l1', 60, 'yes', null, { name: 'Emergency buffer', createdAt: 2 })], goals);
+    invariant('PA.BUF.multi', 'Linked £60 + name-matched £60: Adjust opens Payments and changes nothing', [tapped(multi.planTap(BUF_STEP)), unpaid(multi)],
+      [['payments', null, null], [['u1', 'yes', 60, true], ['l1', 'yes', 60, false]]]);
+    const partial = planApp([pay('b0', 50, 'no', EMG, Object.assign({}, USER, PAID)), pay('u1', 30, 'yes', EMG, Object.assign({ createdAt: 2 }, USER))], goals);
+    invariant('PA.BUF.partial.view', 'Paid £50 + scheduled £30: the buffer action offers the £40 gap', pick(partial.planView(BUF_STEP), 'label', 'amount'),
+      { label: 'Schedule remaining amount', amount: 40 });
+    partial.planTap(BUF_STEP);
+    const pv = partial.planView(BUF_STEP);
+    invariant('PA.BUF.partial', 'User £30 kept; Plan £40 added; paid £50 + scheduled £70 = £120', [unpaid(partial), pv.applied, pv.scheduled, pv.label],
+      [[['u1', 'yes', 30, true], ['id1', 'yes', 40, false]], 50, 70, 'Adjust scheduled amount']);
+    const mixed = planApp([pay('u1', 60, 'yes', EMG, USER), pay('l1', 40, 'yes', null, { name: 'Emergency buffer' }), pay('k1', 25, 'yes', null, { name: 'Buffer top-up' }),
+      pay('c1', 30, 'yes', HOL, { name: 'Car buffer' }), pay('h1', 70, 'yes', HOL), pay('n1', 15, 'yes', null, { name: 'Netflix' })], goals);
+    invariant('PA.BUF.rows', 'Scheduled-rows helper returns exactly the rows the scheduled amount counts (buffer name rules included)',
+      sameRows(mixed, BUF_STEP), { rows: ['c1', 'k1', 'l1', 'u1'], counted: ['c1', 'k1', 'l1', 'u1'], sumMatches: true });
+    invariant('PA.GOAL.rows', 'Same check for the goal step', sameRows(mixed, GOAL_STEP), { rows: ['c1', 'h1'], counted: ['c1', 'h1'], sumMatches: true });
+  });
+
+  scenario('PLAN DEBT — debt Plan actions keep their existing behaviour', () => {
+    const debts = { debts: [CARD()] };
+    const app = planApp([], debts);
+    invariant('PA.DEBT.tap', 'Debt gap action still uses set', [pick(app.planView(DEBT_STEP), 'label', 'amount'), tapped(app.planTap(DEBT_STEP))],
+      [{ label: 'Schedule this step', amount: 120 }, ['payments', null, 'set']]);
+    invariant('PA.DEBT.adjust', 'Debt Adjust still opens a set prefill (no row id) and re-saving keeps one row',
+      [pick(app.planView(DEBT_STEP), 'label', 'amount'), tapped(app.planTap(DEBT_STEP)), unpaid(app)],
+      [{ label: 'Adjust scheduled amount', amount: 120 }, ['payments', null, 'set'], [['id1', 'yes', 120, false]]]);
+    const covered = planApp([pay('d0', 50, 'no', { debtId: 'dC', payKind: 'debt' }, Object.assign({ name: 'Extra debt payment: Card' }, PAID)),
+      pay('d1', 70, 'yes', { debtId: 'dC', payKind: 'debt' }, { name: 'Extra debt payment: Card', createdAt: 2 })], debts);
+    covered.setPlan([DEBT_STEP]);
+    current('PA.DEBT.covered', 'Debt paid £50 + scheduled £70 keeps the debt action state (remaining £70 offered; debt is outside FA-1C)',
+      [pick(covered.planView(DEBT_STEP), 'label', 'amount', 'actionable', 'scheduledOnly', 'actionAmount'), covered.homeView(DEBT_STEP)],
+      [{ label: 'Schedule remaining amount', amount: 70, actionable: true, scheduledOnly: false, actionAmount: 70 }, { cta: 'Schedule extra payment', amount: 70 }]);
+    current('PA.DEBT.covered.tap', 'Its set action reuses the scheduled debt row (no duplicate)', [tapped(covered.planTap(DEBT_STEP)), unpaid(covered)],
+      [['payments', null, 'set'], [['d1', 'yes', 70, false]]]);
   });
 }
 
@@ -803,7 +1321,7 @@ function main() {
   }
   harnessFidelity();
   goalA(); goalB(); goalC(); goalD(); goalE(); goalF(); goalG(); goalH();
-  missedRecurring(); investments(); quickSetup(); monthlyLeft(); identity(); releases(); deposits();
+  missedRecurring(); investments(); quickSetup(); monthlyLeft(); identity(); identityMatrix(); planActions(); releases(); deposits();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');
