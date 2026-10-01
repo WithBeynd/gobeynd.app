@@ -1,0 +1,148 @@
+{
+  "about": "Legacy state fixtures for the future goal/investment authority migration (FA-5). Each fixture is a state shape the current app can hold today. displayBeforeMigration is the amount the current app displays for the entity after a reload at the fixture clock; the migration-day target is that the same amount is displayed immediately after migration. Fixtures are not migrated here.",
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "goal-base-only",
+      "clock": "2026-08-10",
+      "entity": { "kind": "goal", "id": "gH" },
+      "displayBeforeMigration": 1000,
+      "history": "Opening amount only. CERTAIN.",
+      "state": {
+        "income": 3000,
+        "goals": [{ "id": "gH", "name": "Holiday", "amount": 2000, "saved": 1000, "baseSaved": 1000, "monthly": 0, "cat": "other" }],
+        "investments": [], "payments": [], "expenses": [], "debts": [], "savingsReleases": [], "debtPaymentEvents": [], "activityLog": []
+      }
+    },
+    {
+      "id": "goal-completed-one-off",
+      "clock": "2026-08-10",
+      "entity": { "kind": "goal", "id": "gH" },
+      "displayBeforeMigration": 1250,
+      "history": "Completed one-off linked contribution still present as a paid row. HIGH-CONFIDENCE (amount/date may have been edited after completion).",
+      "state": {
+        "income": 3000,
+        "goals": [{ "id": "gH", "name": "Holiday", "amount": 2000, "saved": 1250, "baseSaved": 1000, "monthly": 0, "cat": "other" }],
+        "investments": [],
+        "payments": [
+          { "id": "p_one_off", "name": "Holiday top-up", "amount": 250, "date": "2026-06-10", "status": "paid", "rec": "no", "lastPaidYM": "", "goalId": "gH", "investId": "", "debtId": "", "payKind": "goal", "createdAt": 1781085600000 }
+        ],
+        "expenses": [], "debts": [], "savingsReleases": [], "debtPaymentEvents": [], "activityLog": []
+      }
+    },
+    {
+      "id": "goal-current-month-recurring-completed",
+      "clock": "2026-08-20",
+      "entity": { "kind": "goal", "id": "gH" },
+      "displayBeforeMigration": 1100,
+      "history": "Recurring row completed this month (lastPaidYM = current month; due date already advanced). HIGH-CONFIDENCE for the current-month occurrence only.",
+      "state": {
+        "income": 3000,
+        "goals": [{ "id": "gH", "name": "Holiday", "amount": 2000, "saved": 1100, "baseSaved": 1000, "monthly": 100, "cat": "other" }],
+        "investments": [],
+        "payments": [
+          { "id": "p_monthly", "name": "Holiday monthly", "amount": 100, "date": "2026-09-15", "status": "paid", "rec": "yes", "lastPaidYM": "2026-08", "goalId": "gH", "investId": "", "debtId": "", "payKind": "goal", "createdAt": 1780653600000 }
+        ],
+        "expenses": [], "debts": [], "savingsReleases": [], "debtPaymentEvents": [], "activityLog": []
+      }
+    },
+    {
+      "id": "goal-recurring-history-unrecoverable",
+      "clock": "2026-08-05",
+      "entity": { "kind": "goal", "id": "gH" },
+      "displayBeforeMigration": 1000,
+      "history": "June and July were completed, then reset at rollover. Only activity-log telemetry remains. UNRECOVERABLE: must not be backfilled.",
+      "state": {
+        "income": 3000,
+        "goals": [{ "id": "gH", "name": "Holiday", "amount": 2000, "saved": 1000, "baseSaved": 1000, "monthly": 100, "cat": "other" }],
+        "investments": [],
+        "payments": [
+          { "id": "p_monthly", "name": "Holiday monthly", "amount": 100, "date": "2026-08-15", "status": "upcoming", "rec": "yes", "lastPaidYM": "", "goalId": "gH", "investId": "", "debtId": "", "payKind": "goal", "createdAt": 1780653600000 }
+        ],
+        "expenses": [], "debts": [], "savingsReleases": [], "debtPaymentEvents": [],
+        "activityLog": [
+          { "ts": 1781517600000, "type": "payment", "delta": 100, "payKind": "goal", "goalId": "gH", "name": "Holiday monthly" },
+          { "ts": 1784109600000, "type": "payment", "delta": 100, "payKind": "goal", "goalId": "gH", "name": "Holiday monthly" }
+        ]
+      }
+    },
+    {
+      "id": "goal-after-manual-deposit",
+      "clock": "2026-08-10",
+      "entity": { "kind": "goal", "id": "gH" },
+      "displayBeforeMigration": 1050,
+      "history": "A + deposit of 50 already folded into baseSaved (doDep). AMBIGUOUS split between opening amount and deposit.",
+      "state": {
+        "income": 3000,
+        "goals": [{ "id": "gH", "name": "Holiday", "amount": 2000, "saved": 1050, "baseSaved": 1050, "monthly": 0, "cat": "other" }],
+        "investments": [], "payments": [], "expenses": [], "debts": [], "savingsReleases": [], "debtPaymentEvents": [],
+        "activityLog": [{ "ts": 1783418400000, "type": "goal", "delta": 50, "goalId": "gH", "goalName": "Holiday" }]
+      }
+    },
+    {
+      "id": "goal-after-event-derived-release",
+      "clock": "2026-08-10",
+      "entity": { "kind": "goal", "id": "gH" },
+      "displayBeforeMigration": 800,
+      "history": "Event-derived savings release of 200. CERTAIN; stays in savingsReleases and is subtracted once.",
+      "state": {
+        "income": 3000,
+        "goals": [{ "id": "gH", "name": "Holiday", "amount": 2000, "saved": 800, "baseSaved": 1000, "monthly": 0, "cat": "other" }],
+        "investments": [], "payments": [], "expenses": [], "debts": [],
+        "savingsReleases": [
+          { "id": "r_event", "sourceType": "goal", "sourceId": "gH", "amount": 200, "reason": "emergency", "date": "2026-06-20", "ym": "2026-06", "relatedYm": "2026-06", "remainingBalance": 800, "createdAt": 1781949600000, "confirmedByUser": true, "note": "", "balanceMutationMode": "event_derived" }
+        ],
+        "debtPaymentEvents": [], "activityLog": []
+      }
+    },
+    {
+      "id": "goal-after-legacy-base-delta-release",
+      "clock": "2026-08-10",
+      "entity": { "kind": "goal", "id": "gH" },
+      "displayBeforeMigration": 800,
+      "history": "Legacy release record without balanceMutationMode (normalised to base_delta); the deduction is already inside baseSaved. CERTAIN; must not be subtracted again.",
+      "state": {
+        "income": 3000,
+        "goals": [{ "id": "gH", "name": "Holiday", "amount": 2000, "saved": 800, "baseSaved": 800, "monthly": 0, "cat": "other" }],
+        "investments": [], "payments": [], "expenses": [], "debts": [],
+        "savingsReleases": [
+          { "id": "r_legacy", "sourceType": "goal", "sourceId": "gH", "amount": 200, "reason": "manual", "date": "2026-05-20", "ym": "2026-05", "createdAt": 1779271200000, "confirmedByUser": true }
+        ],
+        "debtPaymentEvents": [], "activityLog": []
+      }
+    },
+    {
+      "id": "goal-possible-edit-double-count",
+      "clock": "2026-08-10",
+      "entity": { "kind": "goal", "id": "gH" },
+      "displayBeforeMigration": 1500,
+      "history": "Goal edited after a completed 250 one-off: the edit wrote the displayed 1250 into baseSaved, so the row is counted twice. AMBIGUOUS: the true amount may be 1250, but Beynd cannot prove it, so migration preserves the display and leaves correction to the user.",
+      "state": {
+        "income": 3000,
+        "goals": [{ "id": "gH", "name": "Holiday trip", "amount": 2000, "saved": 1500, "baseSaved": 1250, "monthly": 0, "cat": "other" }],
+        "investments": [],
+        "payments": [
+          { "id": "p_one_off", "name": "Holiday top-up", "amount": 250, "date": "2026-06-10", "status": "paid", "rec": "no", "lastPaidYM": "", "goalId": "gH", "investId": "", "debtId": "", "payKind": "goal", "createdAt": 1781085600000 }
+        ],
+        "expenses": [], "debts": [], "savingsReleases": [], "debtPaymentEvents": [],
+        "activityLog": [{ "ts": 1781344800000, "type": "goal", "delta": 250, "goalId": "gH", "goalName": "Holiday trip" }]
+      }
+    },
+    {
+      "id": "investment-value-plus-completed-contribution",
+      "clock": "2026-08-10",
+      "entity": { "kind": "investment", "id": "iA" },
+      "displayBeforeMigration": 5500,
+      "history": "Entered value 5000 plus a completed one-off contribution of 500. Value is user-entered (no valuation date); contribution HIGH-CONFIDENCE.",
+      "state": {
+        "income": 3000,
+        "goals": [],
+        "investments": [{ "id": "iA", "name": "ISA", "type": "isa", "balance": 5500, "baseBalance": 5000 }],
+        "payments": [
+          { "id": "p_inv", "name": "ISA top-up", "amount": 500, "date": "2026-06-05", "status": "paid", "rec": "no", "lastPaidYM": "", "goalId": "", "investId": "iA", "debtId": "", "payKind": "invest", "createdAt": 1780653600000 }
+        ],
+        "expenses": [], "debts": [], "savingsReleases": [], "debtPaymentEvents": [], "activityLog": []
+      }
+    }
+  ]
+}
