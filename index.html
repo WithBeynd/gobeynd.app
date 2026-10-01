@@ -1390,6 +1390,8 @@ var S = {
   savingsReleases: [],
   /** DP-1: append-only debt payment completion/reversal events (historical memory only; no engine reads this). */
   debtPaymentEvents: [],
+  /** FA-3A: append-only goal/investment contribution completion/reversal events (historical memory only; no engine reads this yet). */
+  contributionEvents: [],
   /** Monthly totals keyed by YYYY-MM (one object per month, overwritten on update). */
   snapshots: {},
   /** Snapshot fields for “since last update” (totals + leftThisMonth); persisted on save. */
@@ -1654,6 +1656,7 @@ function load() {
     var _v = S.adaptiveDisplayModeByFamily[_k];
     if (_v !== 'full' && _v !== 'lighter' && _v !== 'encouragement_only') S.adaptiveDisplayModeByFamily[_k] = 'full';
   }
+  geodeNormalizeContributionEvents(S);
   syncRecurringPayments();
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
@@ -6641,6 +6644,356 @@ function geodeDebtPaymentActiveCompletions(state) {
   return out;
 }
 
+/**
+ * FA-3A: goal/investment contribution ledger — append-only memory of each paid occurrence of a goal- or
+ * investment-linked payment row (completion) and of each undo (reversal). Observational only: no balance, Plan,
+ * Monthly Left or recompute path reads it. Capture never edits or removes an event; events whose payment or
+ * goal/investment no longer exists stay valid. Debt rows are recorded in debtPaymentEvents instead.
+ */
+function geodeNormalizeContributionEvents(state) {
+  state = state || S;
+  if (!Array.isArray(state.contributionEvents)) {
+    state.contributionEvents = [];
+    return;
+  }
+  state.contributionEvents = geodeContributionLedger(state.contributionEvents).kept;
+}
+
+/** FA-3A: YYYY-MM with month 01–12. */
+function geodeContributionYmValid(ym) {
+  return typeof ym === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(ym);
+}
+
+function geodeContributionEventValid(e) {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return false;
+  if (e.eventType !== 'completion' && e.eventType !== 'reversal') return false;
+  if (typeof e.id !== 'string' || !e.id) return false;
+  if (typeof e.paymentId !== 'string' || !e.paymentId) return false;
+  if (e.entityType !== 'goal' && e.entityType !== 'investment') return false;
+  if (typeof e.entityId !== 'string' || !e.entityId) return false;
+  if (!geodeContributionYmValid(e.occurrenceYm)) return false;
+  if (typeof e.recordedAt !== 'number' || !isFinite(e.recordedAt)) return false;
+  if (e.eventType === 'reversal') return typeof e.reversesEventId === 'string' && !!e.reversesEventId;
+  if (typeof e.amount !== 'number' || !isFinite(e.amount) || e.amount <= 0) return false;
+  return e.recurrence === 'monthly' || e.recurrence === 'one_off' || e.recurrence === 'annual';
+}
+
+/**
+ * FA-3A: the ledger rules, shared by the normaliser and every reader. Invalid and duplicate-id events are dropped;
+ * a reversal counts only if it targets a completion with the same paymentId + occurrenceYm (one reversal per
+ * completion); at most one unreversed completion per paymentId + occurrenceYm. Earliest recordedAt wins, then
+ * lowest id — independent of array order. kept: surviving events in array order; active: unreversed completions.
+ */
+function geodeContributionLedger(list) {
+  list = Array.isArray(list) ? list : [];
+  var seen = Object.create(null);
+  var valid = [];
+  var completionsById = Object.create(null);
+  var i;
+  for (i = 0; i < list.length; i++) {
+    var e = list[i];
+    if (!geodeContributionEventValid(e) || seen[e.id]) continue;
+    seen[e.id] = true;
+    valid.push(e);
+    if (e.eventType === 'completion') completionsById[e.id] = e;
+  }
+  function earlier(a, b) {
+    if (a.recordedAt !== b.recordedAt) return a.recordedAt < b.recordedAt;
+    return a.id < b.id;
+  }
+  var reversalFor = Object.create(null);
+  for (i = 0; i < valid.length; i++) {
+    var r = valid[i];
+    if (r.eventType !== 'reversal') continue;
+    var target = completionsById[r.reversesEventId];
+    if (!target || target.paymentId !== r.paymentId || target.occurrenceYm !== r.occurrenceYm) continue;
+    if (!reversalFor[target.id] || earlier(r, reversalFor[target.id])) reversalFor[target.id] = r;
+  }
+  var activeFor = Object.create(null);
+  for (i = 0; i < valid.length; i++) {
+    var c = valid[i];
+    if (c.eventType !== 'completion' || reversalFor[c.id]) continue;
+    var key = c.paymentId + '|' + c.occurrenceYm;
+    if (!activeFor[key] || earlier(c, activeFor[key])) activeFor[key] = c;
+  }
+  var kept = [];
+  var active = [];
+  for (i = 0; i < valid.length; i++) {
+    var ev = valid[i];
+    if (ev.eventType === 'reversal') {
+      var rt = completionsById[ev.reversesEventId];
+      if (rt && reversalFor[rt.id] === ev) kept.push(ev);
+    } else if (reversalFor[ev.id]) {
+      kept.push(ev);
+    } else if (activeFor[ev.paymentId + '|' + ev.occurrenceYm] === ev) {
+      kept.push(ev);
+      active.push(ev);
+    }
+  }
+  return { kept: kept, active: active };
+}
+
+/** FA-3A: unreversed completions. A reversal never carries value of its own. Read-only; never feeds an engine. */
+function geodeContributionActiveCompletions(state) {
+  return geodeContributionLedger(state && state.contributionEvents).active;
+}
+
+/** FA-3A: the active completion for paymentId + occurrenceYm, or null. */
+function geodeContributionActiveCompletion(state, paymentId, occurrenceYm) {
+  var list = geodeContributionActiveCompletions(state);
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].paymentId === paymentId && list[i].occurrenceYm === occurrenceYm) return list[i];
+  }
+  return null;
+}
+
+/**
+ * FA-3A: the goal or investment a completed row adds to — the link priority and existence rule of
+ * geodePaymentBalanceEffect (goal before investment; a missing goal/investment means none).
+ */
+function geodeContributionEntityRef(state, p) {
+  if (!p) return null;
+  if (p.goalId) {
+    var hasGoal = (state.goals || []).some(function (g) { return g && g.id === p.goalId; });
+    return hasGoal ? { entityType: 'goal', entityId: String(p.goalId) } : null;
+  }
+  if (p.investId) {
+    var hasInv = (state.investments || []).some(function (v) { return v && v.id === p.investId; });
+    return hasInv ? { entityType: 'investment', entityId: String(p.investId) } : null;
+  }
+  return null;
+}
+
+function geodeContributionRecurrence(row) {
+  var rec = String((row && row.rec) || '');
+  return rec === 'yes' ? 'monthly' : rec === 'annual' ? 'annual' : 'one_off';
+}
+
+/**
+ * FA-3A: month of a row's paid occurrence, from the row's own evidence — never today's date.
+ * Monthly and annual: lastPaidYM, the completion month recorded on the row (togglePay has already advanced the due
+ * date); when none was recorded (form save of an annual row, Smart Import merge) the due-date month.
+ * One-off: due-date month (one-off dates are never advanced on completion).
+ */
+function geodeContributionOccurrenceYm(row) {
+  if (!row) return '';
+  var rec = String(row.rec || '');
+  if (rec === 'yes' || rec === 'annual') {
+    var paidYm = String(row.lastPaidYM || '');
+    if (geodeContributionYmValid(paidYm)) return paidYm;
+  }
+  var dueYm = String(row.date || '').slice(0, 7);
+  return geodeContributionYmValid(dueYm) ? dueYm : '';
+}
+
+/** FA-3A: fields needed to classify a contribution row transition, captured before the row is mutated. */
+function geodeContributionEventSnapshot(p) {
+  if (!p) return null;
+  var ref = geodeContributionEntityRef(S, p);
+  return {
+    id: String(p.id || ''),
+    status: String(p.status || ''),
+    rec: String(p.rec || ''),
+    date: String(p.date || ''),
+    lastPaidYM: String(p.lastPaidYM || ''),
+    contributing: !!ref,
+    eventId: String(p.contributionEventId || '')
+  };
+}
+
+/** FA-3A: the completion a row's paid occurrence would record (no id or timestamp yet), or null if it records none. */
+function geodeContributionCompletionFields(state, row) {
+  var paymentId = String(row.id || '');
+  var ref = geodeContributionEntityRef(state, row);
+  if (!paymentId || !ref) return null;
+  var amount = Math.round(toNum(row.amount) * 100) / 100;
+  if (!isFinite(amount) || amount <= 0) return null;
+  var occYm = geodeContributionOccurrenceYm(row);
+  if (!occYm) return null;
+  return {
+    paymentId: paymentId,
+    entityType: ref.entityType,
+    entityId: ref.entityId,
+    occurrenceYm: occYm,
+    amount: amount,
+    recurrence: geodeContributionRecurrence(row),
+    dueDateSnapshot: String(row.date || '').slice(0, 10)
+  };
+}
+
+/** FA-3A: the active completion the row's contributionEventId names (same payment), whatever its occurrence. */
+function geodeContributionPointerTarget(state, before) {
+  if (!before || !before.id || !before.eventId) return null;
+  var active = geodeContributionActiveCompletions(state);
+  for (var i = 0; i < active.length; i++) {
+    if (active[i].id === before.eventId && active[i].paymentId === before.id) return active[i];
+  }
+  return null;
+}
+
+function geodeContributionYmAdd(ym, months) {
+  var m = Number(ym.slice(5, 7)) - 1 + months;
+  var y = Number(ym.slice(0, 4)) + Math.floor(m / 12);
+  m = ((m % 12) + 12) % 12;
+  return String(y) + '-' + ('0' + (m + 1)).slice(-2);
+}
+
+/**
+ * FA-3A.1: whether the row, as the transition found it (`before`), still represents `event`'s occurrence. Only then may
+ * the transition reverse or replace that completion: a pointer is not lasting authority over a row's history.
+ * Recurring rows: the row's own occurrence month (lastPaidYM, else due month) must be the event's, and today must fall
+ * inside that occurrence's period — monthly: its month; annual: twelve months, ending at the row's next due date when
+ * completion advanced it sooner. One-off rows have a single occurrence: the due month matches it, or the pointer names
+ * a one-off completion (a paid row's date can be edited without changing its occurrence).
+ */
+function geodeContributionRowRepresents(before, event) {
+  if (!before || !event || event.paymentId !== before.id) return false;
+  var occYm = event.occurrenceYm;
+  if (before.rec !== 'yes' && before.rec !== 'annual') {
+    return geodeContributionOccurrenceYm(before) === occYm || (before.eventId === event.id && event.recurrence === 'one_off');
+  }
+  if (geodeContributionOccurrenceYm(before) !== occYm) return false;
+  var endYm = geodeContributionYmAdd(occYm, before.rec === 'yes' ? 1 : 12);
+  var nextDueYm = before.date.slice(0, 7);
+  if (before.rec === 'annual' && geodeContributionYmValid(before.lastPaidYM) && geodeContributionYmValid(nextDueYm) &&
+      nextDueYm > occYm && nextDueYm < endYm) {
+    endYm = nextDueYm;
+  }
+  return currentYM() < endYm;
+}
+
+/**
+ * FA-3A: active completion of the row's paid occurrence as `before` saw it — the one its contributionEventId points
+ * to, else the active completion for the same paymentId + occurrenceYm — provided the row still represents it.
+ */
+function geodeContributionPriorCompletion(state, before) {
+  if (!before || !before.id) return null;
+  var pointed = geodeContributionPointerTarget(state, before);
+  if (pointed && geodeContributionRowRepresents(before, pointed)) return pointed;
+  var occYm = geodeContributionOccurrenceYm(before);
+  var keyed = occYm ? geodeContributionActiveCompletion(state, before.id, occYm) : null;
+  return keyed && geodeContributionRowRepresents(before, keyed) ? keyed : null;
+}
+
+function geodeContributionEventId(state) {
+  var list = Array.isArray(state.contributionEvents) ? state.contributionEvents : [];
+  var id = '';
+  var clash = true;
+  while (clash) {
+    id = 'cev_' + uid();
+    clash = false;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].id === id) { clash = true; break; }
+    }
+  }
+  return id;
+}
+
+/** FA-3A: append a completion unless its paymentId + occurrenceYm already has an active one; returns the active completion. */
+function geodeAppendContributionCompletion(fields, source) {
+  var existing = geodeContributionActiveCompletion(S, fields.paymentId, fields.occurrenceYm);
+  if (existing) return existing;
+  var ev = {
+    id: geodeContributionEventId(S),
+    eventType: 'completion',
+    paymentId: fields.paymentId,
+    entityType: fields.entityType,
+    entityId: fields.entityId,
+    occurrenceYm: fields.occurrenceYm,
+    amount: fields.amount,
+    recurrence: fields.recurrence,
+    dueDateSnapshot: fields.dueDateSnapshot,
+    recordedAt: Date.now(),
+    source: String(source || '')
+  };
+  S.contributionEvents.push(ev);
+  return ev;
+}
+
+function geodeAppendContributionReversal(completion, source) {
+  S.contributionEvents.push({
+    id: geodeContributionEventId(S),
+    eventType: 'reversal',
+    paymentId: completion.paymentId,
+    entityType: completion.entityType,
+    entityId: completion.entityId,
+    occurrenceYm: completion.occurrenceYm,
+    reversesEventId: completion.id,
+    recordedAt: Date.now(),
+    source: String(source || '')
+  });
+}
+
+/**
+ * FA-3A: record an explicit change to a payment row. `before` is a geodeContributionEventSnapshot taken before
+ * mutation (null for a row created in this action); `after` is the live row after mutation.
+ * Becomes paid: append a completion for its paid occurrence unless one is already active.
+ * Stops being paid: append a reversal of that occurrence's active completion.
+ * Stays paid: if the amount, goal/investment or recurrence changed, reverse the active completion and append its
+ * replacement for the same occurrence. A paid row without a recorded completion gains one only when it was not
+ * contributing before; completions from before the ledger existed are left to migration.
+ * Reversals and replacements touch a completion only while the row still represents its occurrence
+ * (geodeContributionRowRepresents); otherwise the history is left as recorded.
+ * The row pointer (contributionEventId) references the active completion of the row's current paid occurrence and
+ * is removed whenever the row is left without one.
+ */
+function geodeRecordContributionTransition(before, after, source) {
+  try {
+    if (!S || !after) return;
+    if (!Array.isArray(S.contributionEvents)) S.contributionEvents = [];
+    var wasPaid = !!before && before.status === 'paid';
+    var prior = wasPaid ? geodeContributionPriorCompletion(S, before) : null;
+    var next = String(after.status || '') === 'paid' ? geodeContributionCompletionFields(S, after) : null;
+    delete after.contributionEventId;
+    if (prior && next && prior.entityType === next.entityType && prior.entityId === next.entityId &&
+        prior.amount === next.amount && prior.recurrence === next.recurrence) {
+      after.contributionEventId = prior.id;
+      return;
+    }
+    if (prior) geodeAppendContributionReversal(prior, source);
+    if (!next) return;
+    if (prior) {
+      next.occurrenceYm = prior.occurrenceYm;
+      next.dueDateSnapshot = prior.dueDateSnapshot;
+    } else if (wasPaid && before.contributing) {
+      return;
+    } else if (before && !wasPaid) {
+      next.dueDateSnapshot = String(before.date || '').slice(0, 10);
+    }
+    after.contributionEventId = geodeAppendContributionCompletion(next, source).id;
+  } catch (_eCev) {}
+}
+
+/**
+ * FA-3A: deleting a row reverses the paid occurrence it still represents; completions of earlier occurrences stay
+ * (orphaned once the row is gone).
+ */
+function geodeRecordContributionDeletion(row, source) {
+  try {
+    if (!S || !row || String(row.status || '') !== 'paid') return;
+    if (!Array.isArray(S.contributionEvents)) S.contributionEvents = [];
+    var prior = geodeContributionPriorCompletion(S, geodeContributionEventSnapshot(row));
+    if (prior) geodeAppendContributionReversal(prior, source);
+  } catch (_eCevDel) {}
+}
+
+/**
+ * FA-3A: syncRecurringPayments is about to reset this completed monthly row — make sure its paid occurrence is
+ * recorded first (a completion from before the ledger existed has none). The due date may already be advanced,
+ * so no due-date snapshot is kept.
+ */
+function geodeEnsureContributionCompletion(row, source) {
+  try {
+    if (!S || !row || String(row.status || '') !== 'paid') return;
+    if (!Array.isArray(S.contributionEvents)) S.contributionEvents = [];
+    if (geodeContributionPointerTarget(S, geodeContributionEventSnapshot(row))) return;
+    var fields = geodeContributionCompletionFields(S, row);
+    if (!fields) return;
+    fields.dueDateSnapshot = '';
+    geodeAppendContributionCompletion(fields, source);
+  } catch (_eCevEns) {}
+}
+
 /** DP-3: recorded-payment summary for one debt, matched on each event's own debtId. Never stored. */
 function geodeDebtPaymentSummary(state, debtId) {
   var out = { amount: 0, count: 0, firstRecordedAt: null, latestAmount: 0, latestRecordedAt: null };
@@ -8232,9 +8585,11 @@ function syncRecurringPayments() {
     for (var i = 0; i < S.payments.length; i++) {
       var p = S.payments[i];
       if (p.rec === 'yes' && p.status === 'paid' && p.lastPaidYM && p.lastPaidYM !== ym) {
+        geodeEnsureContributionCompletion(p, 'rollover_safety_net');
         p.status = 'upcoming';
         p.lastPaidYM = '';
         delete p.debtPaymentCompletionEventId;
+        delete p.contributionEventId;
         changed = true;
       }
     }
@@ -11871,6 +12226,7 @@ function geodeSmartImportConfirm() {
       if (mergeMode === 'merge' && r && r.existingDupKind === 'payment' && r.existingDupId) {
         var pex = (S.payments || []).filter(function (p) { return String(p.id || '') === String(r.existingDupId); })[0];
         if (pex) {
+          var cevBefore = geodeContributionEventSnapshot(pex);
           pex.name = name;
           pex.amount = am;
           pex.date = dt;
@@ -11882,6 +12238,7 @@ function geodeSmartImportConfirm() {
           pex.debtId = did;
           pex.payKind = pk;
           if (!pex.createdAt) pex.createdAt = Date.now();
+          geodeRecordContributionTransition(cevBefore, pex, 'smart_import');
           try { evaluatePaymentFollowthrough(pex); } catch (e2) {}
           appendActivityLog('payment', am, { payKind: pk, goalId: gid, investId: invid, debtId: did, name: name });
           geodeSmartImportRememberLearn(name, 'payment', linkRaw, '');
@@ -11894,6 +12251,7 @@ function geodeSmartImportConfirm() {
         }
       }
       S.payments.push(row);
+      geodeRecordContributionTransition(null, row, 'smart_import');
       try { evaluatePaymentFollowthrough(row); } catch (e2) {}
       appendActivityLog('payment', am, { payKind: pk, goalId: gid, investId: invid, debtId: did, name: name });
       geodeSmartImportRememberLearn(name, 'payment', linkRaw, '');
@@ -38601,6 +38959,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
   var savedPayRow = null;
   var savedPayRowId = '';
   var savedPayBefore = null;
+  var savedPayContributionBefore = null;
   function geodeLinkedTargetNameForToast() {
     if (debtid) {
       var d = (S.debts || []).filter(function (x) { return String(x.id || '') === String(debtid); })[0];
@@ -38638,6 +38997,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     else if (invid) { kindLabel = 'Contribution'; existing = geodeFindExistingLinkedPaymentForYm('invest', invid, ym, rec); }
     if (existing) {
       savedPayBefore = geodeDebtPaymentEventSnapshot(existing);
+      savedPayContributionBefore = geodeContributionEventSnapshot(existing);
       existing.name = nm;
       if (payLinkedIntent === 'add') {
         existing.amount = toNum(existing.amount) + amtNum;
@@ -38694,6 +39054,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     var ex=S.payments.filter(function(x){return x.id===id;})[0];
     if(!ex)return;
     savedPayBefore = geodeDebtPaymentEventSnapshot(ex);
+    savedPayContributionBefore = geodeContributionEventSnapshot(ex);
     ex.name=nm;
     ex.amount=Number(am);
     ex.date=dt;
@@ -38743,6 +39104,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     }
   }
   geodeRecordDebtPaymentTransition(savedPayBefore, savedPayRow, 'payment_form');
+  geodeRecordContributionTransition(savedPayContributionBefore, savedPayRow, 'payment_form');
   try {
     geodeMergeDuplicateLinkedContributionsSameMonth();
   } catch (ePost) {}
@@ -38810,6 +39172,7 @@ function togglePay(id){
   var p=S.payments.filter(function(x){return x.id===id;})[0];
   if(!p)return;
   var _dpeBefore = geodeDebtPaymentEventSnapshot(p);
+  var _cevBefore = geodeContributionEventSnapshot(p);
   if(p.status==='paid'){
     p.status='upcoming';
     p.lastPaidYM='';
@@ -38840,6 +39203,7 @@ function togglePay(id){
     } catch (eTpLog) {}
   }
   geodeRecordDebtPaymentTransition(_dpeBefore, p, 'mark_completed');
+  geodeRecordContributionTransition(_cevBefore, p, 'mark_completed');
   geodeRecomputeBalancesFromPayments();
   save();
   geodeInvalidateDecisionCaches();
@@ -38851,6 +39215,7 @@ function togglePay(id){
 }
 function delPay(id){
   geodeInvalidateDecisionCaches();
+  geodeRecordContributionDeletion(S.payments.filter(function (p) { return p.id === id; })[0], 'delete_payment');
   S.payments = S.payments.filter(function (p) {
     return p.id !== id;
   });
@@ -40534,6 +40899,7 @@ function geodeBeyndBackupRestorableKeyWhitelist() {
     'investments',
     'savingsReleases',
     'debtPaymentEvents',
+    'contributionEvents',
     'snapshots',
     'lastSnapshot',
     'lastShownNudgeTopics',

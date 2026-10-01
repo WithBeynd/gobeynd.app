@@ -66,9 +66,23 @@ const PRODUCTION_FUNCTIONS = [
   'geodeNormalizeDebtPaymentEvents', 'geodeDebtPaymentEventSnapshot', 'geodeDebtPaymentOccurrenceYm',
   'geodeDebtPaymentActiveCompletion', 'geodeDebtPaymentEventId', 'geodeRecordDebtPaymentTransition',
   'geodeDebtPaymentYmValid', 'geodeDebtPaymentPointerTarget',
+  // contribution ledger (FA-3A): captured on the same payment paths; nothing reads it for balances yet
+  'geodeNormalizeContributionEvents', 'geodeContributionYmValid', 'geodeContributionEventValid', 'geodeContributionLedger',
+  'geodeContributionActiveCompletions', 'geodeContributionActiveCompletion', 'geodeContributionEntityRef',
+  'geodeContributionRecurrence', 'geodeContributionOccurrenceYm', 'geodeContributionEventSnapshot',
+  'geodeContributionCompletionFields', 'geodeContributionPointerTarget', 'geodeContributionYmAdd', 'geodeContributionRowRepresents',
+  'geodeContributionPriorCompletion', 'geodeContributionEventId',
+  'geodeAppendContributionCompletion', 'geodeAppendContributionReversal', 'geodeRecordContributionTransition',
+  'geodeRecordContributionDeletion', 'geodeEnsureContributionCompletion',
+  // Smart Import and backup export / restore extraction
+  'geodeSmartImportConfirm', 'exportJSONBackup', 'isPlainObject', 'validateBeyndBackupEnvelope',
+  'geodeBeyndBackupRestorableKeyWhitelist', 'geodeBeyndBackupForbiddenDataKeys', 'extractRestorableData',
   // activity log
   'appendActivityLog', 'trimActivityLogForRetention'
 ];
+
+/** Production top-level constants the extracted base functions read. */
+const BASE_CONSTANTS = ['GEODE_SCHEMA_VERSION'];
 
 /**
  * Read-only structural checks: the reload and render shims below must mirror these production bodies, and the
@@ -105,7 +119,19 @@ function __memStorage() { var m = {}; return { getItem: function (k) { return Ob
 var localStorage = __memStorage(), sessionStorage = __memStorage();
 var __fields = {};
 var window = {};
-var document = { getElementById: function (id) { return Object.prototype.hasOwnProperty.call(__fields, id) ? { value: __fields[id] } : null; } };
+/** A boolean field is a checkbox. */
+var document = { getElementById: function (id) {
+  if (!Object.prototype.hasOwnProperty.call(__fields, id)) return null;
+  return typeof __fields[id] === 'boolean' ? { checked: __fields[id], value: 'on' } : { value: __fields[id] };
+} };
+/** Backup export: the confirm is accepted and the downloaded file is captured in __downloads. */
+var __downloads = [];
+function confirm() { return true; }
+function Blob(parts) { this.text = parts.join(''); }
+var URL = { createObjectURL: function (b) { __downloads.push(b.text); return 'blob:' + __downloads.length; }, revokeObjectURL: function () {} };
+document.createElement = function () { return { click: function () {} }; };
+document.body = { appendChild: function () {}, removeChild: function () {} };
+function geodeSmartImportRememberLearn() {} function geodeSmartImportShowHandoffModal() {}
 
 var __uidN = 0;
 function uid() { __uidN++; return 'id' + __uidN; }
@@ -128,6 +154,7 @@ function geodePlanReadinessState() { return 'active'; }
 /** Mirrors load(): the subset of its boot sequence that touches payments, goals, investments and releases. */
 function __reload() {
   S = JSON.parse(__store);
+  geodeNormalizeContributionEvents(S);
   syncRecurringPayments();
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
@@ -263,13 +290,20 @@ function calledNames(text) {
   return out;
 }
 
+function extractConstant(src, name) {
+  const m = src.match(new RegExp('\\nvar ' + name + ' = [^\\n]*;\\n'));
+  if (!m) throw new HarnessError('production constant not found in index.html: ' + name);
+  return m[0].trim();
+}
+
 function buildProgram() {
   const src = readSource(INDEX_HTML);
   const foundation = readSource(FOUNDATION_JS);
   const extracted = PRODUCTION_FUNCTIONS.map(n => extractFunction(src, n));
   const structural = {};
   STRUCTURAL_FUNCTIONS.forEach(n => { structural[n] = extractFunction(src, n).text; });
-  const code = TEST_SHIMS + '\n' + foundation + '\n' + extracted.map(f => f.text).join('\n') + '\n';
+  const baseConstants = BASE_CONSTANTS.map(n => extractConstant(src, n)).join('\n');
+  const code = TEST_SHIMS + '\n' + foundation + '\n' + extracted.map(f => f.text).join('\n') + '\n' + baseConstants + '\n';
   const script = new vm.Script(code, { filename: 'cross-month-harness-program.js' });
 
   // Every name the extracted functions call must resolve to a real production function or a declared shim.
@@ -284,16 +318,12 @@ function buildProgram() {
   if (unresolved.length) {
     throw new HarnessError('unresolved dependencies (extract the production function or add a documented shim):\n    ' + unresolved.join('\n    '));
   }
-  return { script, extracted, structural, plan: buildPlanProgram(src, foundation, extracted) };
+  return { script, extracted, structural, src, plan: buildPlanProgram(src, foundation, extracted) };
 }
 
 /** Base program + PLAN_SHIMS + the PLAN_ENTRY_FUNCTIONS dependency closure; a name nothing defines is an error. */
 function buildPlanProgram(src, foundation, extracted) {
-  const constants = PLAN_CONSTANTS.map(n => {
-    const m = src.match(new RegExp('\\nvar ' + n + ' = [^\\n]*;\\n'));
-    if (!m) throw new HarnessError('production constant not found in index.html: ' + n);
-    return m[0].trim();
-  });
+  const constants = BASE_CONSTANTS.concat(PLAN_CONSTANTS).map(n => extractConstant(src, n));
   const baseCode = TEST_SHIMS + '\n' + PLAN_SHIMS + '\n' + foundation + '\n' + extracted.map(f => f.text).join('\n') + '\n' + constants.join('\n') + '\n';
   const probe = vm.createContext({ console: { log() {}, info() {}, warn() {}, error() {} } });
   new vm.Script(baseCode, { filename: 'cross-month-plan-probe.js' }).runInContext(probe);
@@ -466,6 +496,25 @@ class App {
     return JSON.parse(this.run('JSON.stringify(geodeApplySavingsRelease(' + JSON.stringify({ sourceType: 'goal', sourceId: goalId, amount, reason: 'emergency' }) + '))'));
   }
   quickSetup(data) { this.run('window._geodeQS = ' + JSON.stringify({ quickSetupData: data }) + '; geodeQsDone();'); }
+  /** Contribution ledger as stored, and the active completions its rules derive. */
+  events() { return this.state().contributionEvents; }
+  activeEvents() { return JSON.parse(this.run('JSON.stringify(geodeContributionActiveCompletions(S))')); }
+  pointer(id) { const p = this.state().payments.filter(x => x.id === id)[0]; return (p && p.contributionEventId) || null; }
+  /** Smart Import confirm for payment review rows { name, amount, date, link ('goal:id' | 'invest:id' | ''), mergeId }. */
+  smartImport(items) {
+    const fields = {};
+    const rows = items.map((it, i) => {
+      Object.assign(fields, { ['gim-inc-' + i]: true, ['gim-type-' + i]: 'payment', ['gim-name-' + i]: it.name, ['gim-amt-' + i]: String(it.amount),
+        ['gim-date-' + i]: it.date, ['gim-link-' + i]: it.link || '', ['gim-merge-' + i]: it.mergeId ? 'merge' : 'add' });
+      return it.mergeId ? { existingDupKind: 'payment', existingDupId: it.mergeId } : {};
+    });
+    this.run('__fields = ' + JSON.stringify(fields) + '; window._geodeSmartImportN = ' + items.length + '; window._geodeSmartImportRows = ' + JSON.stringify(rows) + ';');
+    this.call('geodeSmartImportConfirm');
+  }
+  /** exportJSONBackup: the envelope it downloads. */
+  backup() { this.run('__downloads = []; exportJSONBackup();'); return JSON.parse(this.run('__downloads[0]')); }
+  /** extractRestorableData — the restore extraction step (no live restore calls it yet). */
+  restorable(envelope) { this.ctx.__argsJson = JSON.stringify([envelope]); return JSON.parse(this.run('JSON.stringify(extractRestorableData.apply(null, JSON.parse(__argsJson)))')); }
 }
 
 // ───────────────────────────── results ─────────────────────────────
@@ -480,7 +529,8 @@ const DEFECTS = {
   D7: 'A savings release sized against a balance that rollover later shrinks hides later contributions (release deduction clamps at 0).',
   D8: 'Undoing a recurring completion does not revert the due-date advance, so complete → undo cycles push the next due date into later months (togglePay).',
   D9: 'Editing a recurring template while its current month is completed rewrites the recorded occurrence amount (single mutable row).',
-  D10: 'Entering an investment value adds currently-paid contributions on top of the entered value (saveInv baseBalance + paid rows).'
+  D10: 'Entering an investment value adds currently-paid contributions on top of the entered value (saveInv baseBalance + paid rows).',
+  D11: 'Annual recurrence lifecycle: completing an annual row moves its due date a year ahead at once and nothing resets it, so the completed occurrence drops out of Monthly Left and Plan, next year\'s row still shows paid, and tapping it undoes instead of completing (togglePay).'
 };
 
 const results = [];
@@ -556,7 +606,7 @@ const signature = rows => rows.map(r => ({ rec: r.rec, amount: r.amount })).sort
 function harnessFidelity() {
   scenario('Harness fidelity — shims mirror production boot and render', () => {
     const load = PROGRAM.structural.load;
-    const order = ['syncRecurringPayments();', 'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();',
+    const order = ['geodeNormalizeContributionEvents(S);', 'syncRecurringPayments();', 'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();',
       'geodeNormalizeSavingsReleases(S);', 'geodeNormalizeDebtPaymentEvents(S);', 'geodeRecomputeBalancesFromPayments();'];
     const at = order.map(c => load.indexOf(c));
     invariant('fidelity.load', 'load() runs the reload-shim sequence in this order', at.every((p, i) => p >= 0 && (i === 0 || p > at[i - 1])), true);
@@ -1597,6 +1647,445 @@ function fa2Deposits() {
   });
 }
 
+// FA-3A: goal/investment payment paths record contribution events; nothing financial reads them yet.
+
+const COMPLETION_KEYS = ['id', 'eventType', 'paymentId', 'entityType', 'entityId', 'occurrenceYm', 'amount', 'recurrence', 'dueDateSnapshot', 'recordedAt', 'source'];
+const REVERSAL_KEYS = ['id', 'eventType', 'paymentId', 'entityType', 'entityId', 'occurrenceYm', 'reversesEventId', 'recordedAt', 'source'];
+/** completion: [type, payment, entity, occurrence, amount, recurrence, source]; reversal: [type, payment, entity, occurrence, reverses, source]. */
+const evRow = e => e.eventType === 'completion'
+  ? ['completion', e.paymentId, e.entityType + ':' + e.entityId, e.occurrenceYm, e.amount, e.recurrence, e.source]
+  : ['reversal', e.paymentId, e.entityType + ':' + e.entityId, e.occurrenceYm, e.reversesEventId, e.source];
+const evRows = app => app.events().map(evRow);
+const activeTotal = app => round(app.activeEvents().reduce((s, e) => s + e.amount, 0));
+const withoutLedger = state => {
+  const c = JSON.parse(JSON.stringify(state));
+  delete c.contributionEvents;
+  c.payments.forEach(p => { delete p.contributionEventId; });
+  return c;
+};
+/** Every row (and two rows that do not exist) gets a £5,000 May completion it points to. */
+const withFakeLedger = state => {
+  const c = withoutLedger(state);
+  const fake = (id, paymentId, entityType, entityId) => ({ id, eventType: 'completion', paymentId, entityType, entityId, occurrenceYm: '2026-05',
+    amount: 5000, recurrence: 'monthly', dueDateSnapshot: '', recordedAt: 1, source: 'fake' });
+  c.contributionEvents = c.payments.map((p, i) => {
+    p.contributionEventId = 'fake' + i;
+    return fake('fake' + i, String(p.id), p.goalId ? 'goal' : 'investment', String(p.goalId || p.investId || 'iA'));
+  }).concat([fake('fake-goal', 'ghost-goal', 'goal', 'gH'), fake('fake-inv', 'ghost-inv', 'investment', 'iA')]);
+  return c;
+};
+
+function fa3aLedger() {
+  scenario('FA-3A LEDGER — state, normalisation and the active set', () => {
+    const src = PROGRAM.src;
+    const sStart = src.indexOf('\nvar S = {');
+    const fresh = freshApp();
+    fresh.reload();
+    invariant('FA3A.state.default', 'The canonical state declares contributionEvents: []; a stored state without it loads with []',
+      [src.slice(sStart, src.indexOf('\n};', sStart)).indexOf('\n  contributionEvents: [],') >= 0, fresh.events()], [true, []]);
+
+    const C = (id, paymentId, ym, amount, recordedAt, extra) => Object.assign({ id, eventType: 'completion', paymentId, entityType: 'goal', entityId: 'gH',
+      occurrenceYm: ym, amount, recurrence: 'one_off', dueDateSnapshot: ym + '-10', recordedAt, source: 'test' }, extra || {});
+    const R = (id, reverses, paymentId, ym, recordedAt) => ({ id, eventType: 'reversal', paymentId, entityType: 'goal', entityId: 'gH', occurrenceYm: ym,
+      reversesEventId: reverses, recordedAt, source: 'test' });
+    const ISA_LINK = { entityType: 'investment', entityId: 'iA' };
+    const valid = { c1: C('c1', 'p1', '2026-05', 100, 1), c3: C('c3', 'p2', '2026-05', 50, 3, ISA_LINK), r3: R('r3', 'c3', 'p2', '2026-05', 4),
+      c4: C('c4', 'p2', '2026-05', 75, 8, ISA_LINK) };
+    const stored = [null, 7, 'x', [], valid.c1, C('c1', 'p1', '2026-05', 999, 1), C('c2', 'p1', '2026-05', 100, 2),
+      C('bad-amount', 'p3', '2026-05', 0, 1), C('bad-entity', 'p3', '2026-05', 10, 1, { entityType: 'debt' }), C('bad-ym', 'p3', '2026-13', 10, 1),
+      C('bad-rec', 'p3', '2026-05', 10, 1, { recurrence: 'weekly' }), C('bad-time', 'p3', '2026-05', 10, '1'), C('bad-payment', '', '2026-05', 10, 1),
+      valid.c3, valid.r3, R('r3-again', 'c3', 'p2', '2026-05', 5), R('r-missing', 'zz', 'p1', '2026-05', 6), R('r-other-month', 'c1', 'p1', '2026-04', 7), valid.c4];
+    const app = new App(baseState({ contributionEvents: stored }), '2026-06-05');
+    app.reload();
+    const once = app.events();
+    app.reload();
+    invariant('FA3A.state.normalise', 'Malformed values load as []; invalid events, duplicate ids, unmatched or repeated reversals and a second active completion for one occurrence are dropped; valid events kept unmodified; idempotent',
+      [['{}', 'x', null, 42].map(v => { const a = new App(baseState({ contributionEvents: v === '{}' ? {} : v }), '2026-06-05'); a.reload(); return a.events(); }),
+        once, app.events()], [[[], [], [], []], [valid.c1, valid.c3, valid.r3, valid.c4], [valid.c1, valid.c3, valid.r3, valid.c4]]);
+    invariant('FA3A.active', 'Active completions: one per occurrence (c1 £100, c4 £75); total £175', [app.activeEvents().map(e => e.id), activeTotal(app)], [['c1', 'c4'], 175]);
+    invariant('FA3A.reversal', 'The reversed c3 (£50) is not active and its reversal carries no value; with the ledger, Holiday and ISA still show base £1,000 / £5,000',
+      [app.activeEvents().some(e => e.id === 'c3' || e.id === 'r3'), app.snap().goal.gH, app.snap().inv.iA], [false, 1000, 5000]);
+  });
+
+  scenario('FA-3A LEDGER — backup export, restore extraction and schema', () => {
+    const app = freshApp(holidayOneOff, { _schemaVersion: 1 });
+    const stored = app.events();
+    const env = app.backup();
+    const restored = app.restorable(env);
+    const back = new App(restored.state, '2026-06-20');
+    back.reload();
+    invariant('FA3A.backup', 'Backup carries the ledger; restore extraction keeps it; the restored state loads it unchanged, with the row pointer, Holiday £1,250',
+      [stored.length, env.data.contributionEvents, restored.ok, restored.strippedKeys.indexOf('contributionEvents'), back.events(), back.pointer('id1'), back.snap().goal.gH],
+      [1, stored, true, -1, stored, stored[0].id, 1250]);
+    const old = JSON.parse(JSON.stringify(env));
+    delete old.data.contributionEvents;
+    old.data.payments.forEach(p => { delete p.contributionEventId; });
+    const oldRestored = app.restorable(old);
+    const oldApp = new App(oldRestored.state, '2026-06-20');
+    oldApp.reload();
+    invariant('FA3A.old-backup', 'A backup from before the ledger is accepted and loads with an empty ledger (nothing seeded), Holiday £1,250',
+      [oldRestored.ok, Object.prototype.hasOwnProperty.call(oldRestored.state, 'contributionEvents'), oldApp.events(), oldApp.snap().goal.gH], [true, false, [], 1250]);
+    const lists = JSON.parse(app.run('JSON.stringify([geodeBeyndBackupRestorableKeyWhitelist(), geodeBeyndBackupForbiddenDataKeys()])'));
+    invariant('FA3A.backup.lists', 'contributionEvents is restorable, not forbidden and not excluded from export',
+      [lists[0].indexOf('contributionEvents') >= 0, lists[1].indexOf('contributionEvents'), env.excludedTopLevelKeys.indexOf('contributionEvents')], [true, -1, -1]);
+    const newer = app.restorable(Object.assign({}, env, { schemaVersion: 2 }));
+    current('FA3A.schema', 'Schema stays 1 in FA-3A (bump deferred to the authority switch); a backup marked newer is refused whole, never extracted without its ledger',
+      [app.run('GEODE_SCHEMA_VERSION'), env.schemaVersion, newer.ok, Object.keys(newer.state).length], [1, 1, false, 0]);
+  });
+}
+
+function fa3aGoals() {
+  scenario('FA-3A GOAL — togglePay capture (monthly £100 due 15 June)', () => {
+    const app = freshApp();
+    const id = monthlyHoliday(app);
+    invariant('FA3A.goal.schedule', 'Scheduling records nothing', app.events(), []);
+    app.at('2026-06-10'); app.toggle(id);
+    const c = app.events()[0];
+    invariant('FA3A.goal.toggle.complete', 'Completing records one June completion (£100, monthly, due date before the advance); the row points to it; Holiday £1,100',
+      [evRows(app), Object.keys(c), c.dueDateSnapshot, app.pointer(id), app.snap().goal.gH],
+      [[['completion', id, 'goal:gH', '2026-06', 100, 'monthly', 'mark_completed']], COMPLETION_KEYS, '2026-06-15', c.id, 1100]);
+    const recorded = app.events();
+    app.run('(function () { var p = S.payments.filter(function (x) { return x.id === ' + JSON.stringify(id) + '; })[0];' +
+      ' geodeRecordContributionTransition(geodeContributionEventSnapshot(p), p, "repeat"); geodeRecordContributionTransition(null, p, "repeat");' +
+      ' geodeEnsureContributionCompletion(p, "repeat"); })()');
+    app.render(); app.render(); app.render(); app.reload(); app.reload();
+    invariant('FA3A.goal.toggle.double', 'Recording the same completion again (as unchanged, as new, via the safety net), three renders and two reloads add nothing',
+      [app.events(), app.pointer(id), app.snap().goal.gH], [recorded, c.id, 1100]);
+    app.toggle(id);
+    const r = app.events()[1];
+    invariant('FA3A.goal.toggle.undo', 'Undo appends exactly one reversal of that completion; nothing active; pointer removed; Holiday £1,000',
+      [evRows(app), Object.keys(r), app.activeEvents().length, app.pointer(id), app.snap().goal.gH],
+      [[evRow(c), ['reversal', id, 'goal:gH', '2026-06', c.id, 'mark_completed']], REVERSAL_KEYS, 0, null, 1000]);
+    app.toggle(id);
+    const again = app.events();
+    invariant('FA3A.goal.toggle.recomplete', 'Re-completing appends a new June completion: completion, reversal, completion; one active (the new one); Holiday £1,100',
+      [again.map(e => e.eventType + ' ' + e.occurrenceYm), again[2].id !== c.id, app.activeEvents().map(e => e.id), app.pointer(id), app.snap().goal.gH],
+      [['completion 2026-06', 'reversal 2026-06', 'completion 2026-06'], true, [again[2].id], again[2].id, 1100]);
+  });
+
+  scenario('FA-3A GOAL — payment form capture', () => {
+    const app = freshApp();
+    const one = app.contribute({ name: 'Holiday top-up', amount: 250, date: '2026-06-02', status: 'paid', rec: 'no', goalId: 'gH' });
+    const monthly = app.contribute({ name: 'Holiday monthly', amount: 100, date: '2026-06-15', status: 'paid', rec: 'yes', goalId: 'gH' });
+    const later = app.contribute({ name: 'Holiday extra', amount: 40, date: '2026-06-20', status: 'upcoming', rec: 'no', goalId: 'gH' });
+    app.editPayment(later, { status: 'paid' });
+    invariant('FA3A.goal.form.complete', 'Saved as paid (new one-off, new monthly) or edited to paid: one completion each — one-off for its due month, monthly for its completion month; Holiday £1,390',
+      [evRows(app), app.events().map(e => e.dueDateSnapshot), app.snap().goal.gH],
+      [[['completion', one, 'goal:gH', '2026-06', 250, 'one_off', 'payment_form'], ['completion', monthly, 'goal:gH', '2026-06', 100, 'monthly', 'payment_form'],
+        ['completion', later, 'goal:gH', '2026-06', 40, 'one_off', 'payment_form']], ['2026-06-02', '2026-06-15', '2026-06-20'], 1390]);
+    const first = app.events()[0];
+    app.editPayment(one, { name: 'Holiday top-up (renamed)' });
+    app.editPayment(one, {});
+    const unchanged = app.events().length;
+    app.editPayment(one, { amount: 300 });
+    const replaced = app.events()[4];
+    invariant('FA3A.goal.form.edit-paid', 'Renaming or re-saving a paid row records nothing; changing it to £300 reverses its completion and records £300 for the same occurrence and due date; Holiday £1,440',
+      [unchanged, evRows(app).slice(3), replaced.dueDateSnapshot, app.activeEvents().map(e => [e.paymentId, e.amount]), app.pointer(one), app.snap().goal.gH],
+      [3, [['reversal', one, 'goal:gH', '2026-06', first.id, 'payment_form'], ['completion', one, 'goal:gH', '2026-06', 300, 'one_off', 'payment_form']],
+        '2026-06-02', [[monthly, 100], [later, 40], [one, 300]], replaced.id, 1440]);
+    app.editPayment(one, { goalId: '', investId: 'iA' });
+    invariant('FA3A.goal.form.relink', 'Moving the paid £300 to the ISA reverses the goal completion and records it for the ISA, same occurrence; Holiday £1,140, ISA £5,300',
+      [evRows(app).slice(5), app.snap().goal.gH, app.snap().inv.iA],
+      [[['reversal', one, 'goal:gH', '2026-06', replaced.id, 'payment_form'], ['completion', one, 'investment:iA', '2026-06', 300, 'one_off', 'payment_form']], 1140, 5300]);
+    const monthlyEvent = app.events()[1];
+    app.editPayment(monthly, { status: 'upcoming' });
+    invariant('FA3A.goal.form.unpay', 'Editing the paid monthly row back to upcoming reverses its completion; Holiday £1,040',
+      [evRows(app).slice(7), app.pointer(monthly), app.snap().goal.gH], [[['reversal', monthly, 'goal:gH', '2026-06', monthlyEvent.id, 'payment_form']], null, 1040]);
+  });
+
+  scenario('FA-3A SCOPE — debt, bill and unlinked rows record no contribution events', () => {
+    const app = freshApp(null, { debts: [{ id: 'dC', name: 'Card', balance: 1000, minPayment: 50, apr: 25 }] });
+    app.contribute({ name: 'Card payment', amount: 50, date: '2026-06-02', status: 'paid', rec: 'no', debtId: 'dC' });
+    app.contribute({ name: 'Gym', amount: 30, date: '2026-06-02', status: 'paid', rec: 'no' });
+    app.contribute({ name: 'Old goal', amount: 20, date: '2026-06-02', status: 'paid', rec: 'no', goalId: 'gGone' });
+    invariant('FA3A.scope', 'Debt payment recorded in debtPaymentEvents only; bill and missing-goal rows record nothing', [app.events(), app.state().debtPaymentEvents.length], [[], 1]);
+  });
+}
+
+function fa3aInvestments() {
+  scenario('FA-3A INVESTMENT — capture only (Balance stays legacy)', () => {
+    let app = freshApp();
+    const id = completeOn10June(app, { name: 'ISA monthly', amount: 200, rec: 'yes', investId: 'iA' });
+    invariant('FA3A.inv.toggle.complete', 'Completing records a June £200 monthly completion for the ISA; ISA £5,200',
+      [evRows(app), app.pointer(id) === app.events()[0].id, app.snap().inv.iA], [[['completion', id, 'investment:iA', '2026-06', 200, 'monthly', 'mark_completed']], true, 5200]);
+    app = freshApp();
+    const one = app.contribute({ name: 'ISA top-up', amount: 300, date: '2026-06-02', status: 'paid', rec: 'no', investId: 'iA' });
+    invariant('FA3A.inv.form.complete', 'Saving a paid one-off records a June £300 completion for the ISA; ISA £5,300',
+      [evRows(app), app.snap().inv.iA], [[['completion', one, 'investment:iA', '2026-06', 300, 'one_off', 'payment_form']], 5300]);
+  });
+}
+
+function fa3aSmartImport() {
+  scenario('FA-3A SMART IMPORT — new rows and merges', () => {
+    const app = freshApp();
+    app.smartImport([{ name: 'Holiday transfer', amount: 150, date: '2026-06-01', link: 'goal:gH' }, { name: 'ISA transfer', amount: 80, date: '2026-06-02', link: 'invest:iA' },
+      { name: 'Holiday later', amount: 60, date: '2026-06-20', link: 'goal:gH' }, { name: 'Gym', amount: 30, date: '2026-06-01', link: '' }]);
+    const ids = app.state().payments.map(p => p.id);
+    invariant('FA3A.import.create', 'Past-dated goal/ISA imports arrive paid and record one completion each; the future-dated import and the bill record nothing',
+      [app.state().payments.map(p => p.status), evRows(app)],
+      [['paid', 'paid', 'upcoming', 'paid'], [['completion', ids[0], 'goal:gH', '2026-06', 150, 'one_off', 'smart_import'], ['completion', ids[1], 'investment:iA', '2026-06', 80, 'one_off', 'smart_import']]]);
+    const sched = monthlyHoliday(app);
+    const merge = amount => app.smartImport([{ name: 'Holiday monthly', amount, date: '2026-06-03', link: 'goal:gH', mergeId: sched }]);
+    merge(100);
+    const merged = app.events();
+    invariant('FA3A.import.merge', 'Merging a past-dated import into the scheduled monthly row makes it paid and records its June completion (from the import date)',
+      [app.state().payments.filter(p => p.id === sched)[0].status, evRow(merged[2]), app.pointer(sched)], ['paid', ['completion', sched, 'goal:gH', '2026-06', 100, 'monthly', 'smart_import'], merged[2].id]);
+    merge(100);
+    app.render(); app.reload();
+    invariant('FA3A.import.idempotent', 'Importing the same transaction into the same row again, then render and reload, records nothing', app.events(), merged);
+    merge(120);
+    invariant('FA3A.import.merge-amount', 'A merge that changes the paid amount reverses the June completion and records £120 for the same occurrence',
+      evRows(app).slice(3), [['reversal', sched, 'goal:gH', '2026-06', merged[2].id, 'smart_import'], ['completion', sched, 'goal:gH', '2026-06', 120, 'monthly', 'smart_import']]);
+  });
+}
+
+function fa3aDeletion() {
+  scenario('FA-3A DELETE — only the current occurrence is reversed', () => {
+    let app = freshApp(holidayOneOff);
+    const c = app.events()[0];
+    app.del('id1');
+    invariant('FA3A.delete.current', 'Deleting a completed one-off reverses its completion; nothing active; Holiday £1,000',
+      [evRows(app), app.activeEvents().length, app.snap().goal.gH], [[evRow(c), ['reversal', 'id1', 'goal:gH', '2026-06', c.id, 'delete_payment']], 0, 1000]);
+    app = freshApp(holidayMonthly);
+    const june = app.events()[0];
+    app.advance('2026-07-02', 'session');
+    app.at('2026-07-10'); app.toggle('id1');
+    const july = app.events()[1];
+    app.del('id1');
+    invariant('FA3A.delete.historical', 'Deleting a monthly row completed in June and July reverses July only; June stays active',
+      [app.events().map(e => e.eventType + ' ' + e.occurrenceYm), app.events()[2].reversesEventId, app.activeEvents().map(e => e.id)],
+      [['completion 2026-06', 'completion 2026-07', 'reversal 2026-07'], july.id, [june.id]]);
+    app = freshApp(holidayMonthly);
+    app.advance('2026-07-02', 'reload');
+    app.del('id1');
+    invariant('FA3A.delete.upcoming', 'Deleting it while July is still upcoming records nothing; June stays active', [app.events().length, app.activeEvents().map(e => e.occurrenceYm)], [1, ['2026-06']]);
+  });
+}
+
+function fa3aIdentity() {
+  scenario('FA-3A IDENTITY — three direct contributions in one month', () => {
+    const app = freshApp();
+    const ids = [50, 75, 100].map(amount => app.contribute({ name: 'Holiday top-up', amount, date: '2026-06-02', status: 'paid', rec: 'no', goalId: 'gH' }));
+    app.merge();
+    const ev = app.events();
+    invariant('FA3A.direct.multi', '£50, £75, £100: three rows, three completions with distinct ids for the three rows, no merge; active total £225; Holiday £1,225',
+      [app.state().payments.map(p => p.id), ev.map(e => e.paymentId), new Set(ev.map(e => e.id)).size, ev.map(e => e.amount), activeTotal(app), app.snap().goal.gH],
+      [ids, ids, 3, [50, 75, 100], 225, 1225]);
+    const sched = app.planSchedule({ name: 'Holiday plan', amount: 120, date: '2026-06-20', status: 'upcoming', rec: 'yes', goalId: 'gH' });
+    app.merge();
+    invariant('FA3A.fa1.pointer', 'A same-month Plan save afterwards creates its own row; paid rows, their pointers and the ledger are untouched',
+      [sched !== null, app.state().payments.filter(p => p.status === 'paid').map(p => p.contributionEventId), app.events()], [true, ev.map(e => e.id), ev]);
+  });
+}
+
+function fa3aRollover() {
+  MODES.forEach(mode => scenario('FA-3A ROLLOVER — June completion through July and August [' + mode + ']', () => {
+    const app = freshApp(holidayMonthly);
+    const june = app.events();
+    app.advance('2026-07-02', mode);
+    const row = app.state().payments[0];
+    const julyShown = app.snap().goal.gH;
+    invariant('FA3A.rollover.jul', 'July rollover: the June event is unchanged and not duplicated; the row is reset and its pointer removed',
+      [app.events(), row.status, row.lastPaidYM, 'contributionEventId' in row], [june, 'upcoming', '', false]);
+    app.render(); app.reload();
+    app.advance('2026-08-02', 'reload');
+    invariant('FA3A.rollover.aug', 'Renders, reloads and the August reload leave the ledger unchanged', app.events(), june);
+    current('FA3A.rollover.display', 'Holiday still shows the legacy value in July and August: the ledger is not authoritative until FA-3C (D1 open)',
+      [julyShown, app.snap().goal.gH], by(mode, { session: [1250, 1000], reload: [1000, 1000] }));
+  }));
+
+  scenario('FA-3A ROLLOVER — completions from before the ledger', () => {
+    const paid = (id, rec, date, lastPaidYM, link) => Object.assign({ id, name: id, amount: 100, date, status: 'paid', rec, lastPaidYM, goalId: '', investId: '',
+      debtId: '', payKind: 'goal' }, link);
+    const state = baseState({ payments: [paid('m', 'yes', '2026-07-15', '2026-06', { goalId: 'gH' }), paid('o', 'no', '2026-06-02', '', { goalId: 'gH' }),
+      paid('mi', 'yes', '2026-07-15', '2026-06', { investId: 'iA', payKind: 'invest' }), paid('b', 'yes', '2026-07-15', '2026-06', { payKind: 'bill' })] });
+    const expected = [['completion', 'm', 'goal:gH', '2026-06', 100, 'monthly', 'rollover_safety_net'], ['completion', 'mi', 'investment:iA', '2026-06', 100, 'monthly', 'rollover_safety_net']];
+    const out = MODES.map(mode => {
+      const app = new App(state, '2026-06-20');
+      app.reload(); app.render();
+      const june = app.events();
+      app.advance('2026-07-02', mode);
+      const july = [evRows(app), app.events().map(e => e.dueDateSnapshot)];
+      app.render(); app.reload(); app.advance('2026-08-02', 'reload');
+      return [june, july, app.events().length];
+    });
+    invariant('FA3A.no-seed', 'Loading and rendering in June records nothing for rows completed before the ledger', out.map(o => o[0]), [[], []]);
+    invariant('FA3A.safety-net', 'At the July rollover (session and reload) the safety net records each completed monthly goal/ISA row once for June, with no due-date snapshot; one-offs and bills record nothing',
+      out.map(o => o[1]), [[expected, ['', '']], [expected, ['', '']]]);
+    invariant('FA3A.safety-net.repeat', 'Later renders, reloads and the August rollover add nothing', out.map(o => o[2]), [2, 2]);
+  });
+}
+
+function fa3aProtection() {
+  const STEPS = [{ label: 'Catch up on Holiday', amount: 120 }, { label: 'Invest what remains', amount: 120 }];
+  /** Monthly Left, goal/ISA shown, rows, Plan detail, Home main action and Suggested Actions — before and after a reload. */
+  const surfaces = (state, clock) => {
+    const a = new App(state, clock, PROGRAM.plan);
+    a.setPlan(STEPS);
+    const look = () => ({ snap: a.snap(), plan: STEPS.map(s => a.planView(s)), home: STEPS.map(s => a.homeView(s)), suggestions: a.suggestions() });
+    const direct = look();
+    a.reload();
+    return { direct, reloaded: look() };
+  };
+  const CASES = [
+    ['goal-monthly', 'goal monthly £100', app => { completeOn10June(app, { name: 'Holiday monthly', amount: 100, rec: 'yes', goalId: 'gH' }); }, [2900, 2900, 2900, 2900, 2900]],
+    ['goal-oneoff', 'goal one-off £100', app => { completeOn10June(app, { name: 'Holiday top-up', amount: 100, rec: 'no', goalId: 'gH' }); }, [2900, 2900, 2900, 3000, 3000]],
+    ['inv-monthly', 'investment monthly £200', app => { completeOn10June(app, { name: 'ISA monthly', amount: 200, rec: 'yes', investId: 'iA' }); }, [2800, 2800, 2800, 2800, 2800]],
+    ['direct-multi', 'direct £50 + £75 + £100', app => {
+      [50, 75, 100].forEach(amount => app.contribute({ name: 'Holiday top-up', amount, date: '2026-06-02', status: 'paid', rec: 'no', goalId: 'gH' }));
+      app.at('2026-06-10');
+    }, [2775, 2775, 2775, 3000, 3000]]
+  ];
+  CASES.forEach(([key, name, setup, left]) => scenario('FA-3A PROTECTION — ' + name + ': Monthly Left, Plan, Home, Suggested Actions', () => {
+    const app = new App(baseState({ incomeExplicitlySet: true }), '2026-06-05', PROGRAM.plan);
+    app.setPlan(STEPS);
+    setup(app);
+    const checks = [];
+    const check = (label, clock) => {
+      const s = app.state();
+      const real = surfaces(s, clock);
+      checks.push([label, real.direct.snap.left, same(real, surfaces(withoutLedger(s), clock)) && same(real, surfaces(withFakeLedger(s), clock))]);
+    };
+    check('June', '2026-06-10');
+    app.render(); check('June render', '2026-06-10');
+    app.reload(); check('June reload', '2026-06-10');
+    app.advance('2026-07-02', 'session'); check('July', '2026-07-02');
+    app.reload(); check('July reload', '2026-07-02');
+    const labels = ['June', 'June render', 'June reload', 'July', 'July reload'];
+    invariant('FA3A.protect.' + key, 'Every surface identical with the ledger removed or replaced by £5,000 completions; Monthly Left (legacy) ' +
+      left.map(v => '£' + v.toLocaleString('en-GB')).join(' / '), checks, labels.map((l, i) => [l, left[i], true]));
+  }));
+
+  scenario('FA-3A PROTECTION — release: base £1,000 + one-off £250 + release £200', () => {
+    const app = freshApp(a => { holidayOneOff(a); a.release('gH', 200); });
+    const ledger = app.events();
+    const state = app.state();
+    invariant('FA3A.release', 'One £250 completion; the release adds no contribution event and keeps its single record; Holiday £1,050 throughout',
+      [evRows(app), state.savingsReleases.length, crossMonth(app, 'goal', 'gH'), app.events()],
+      [[['completion', 'id1', 'goal:gH', '2026-06', 250, 'one_off', 'mark_completed']], 1, steady(1050), ledger]);
+    const shownAfterReload = s => { const a = new App(s, '2026-06-20'); a.reload(); return a.snap().goal.gH; };
+    invariant('FA3A.release.inert', 'With the ledger removed or replaced the release still deducts once: Holiday £1,050 after reload',
+      [shownAfterReload(state), shownAfterReload(withoutLedger(state)), shownAfterReload(withFakeLedger(state))], [1050, 1050, 1050]);
+  });
+}
+
+/** An annual Holiday contribution £250 due on `due`, completed on `completedOn`; returns { app, id, event }. */
+const completedAnnual = (due, completedOn, program) => {
+  const app = new App(baseState({ incomeExplicitlySet: true }), '2026-06-05', program);
+  const id = app.contribute({ name: 'Holiday annual', amount: 250, date: due, status: 'upcoming', rec: 'annual', goalId: 'gH' });
+  app.at(completedOn); app.toggle(id);
+  return { app, id, event: app.events()[0] };
+};
+
+/** Annual recurrence lifecycle (D11): characterised, not repaired. Whatever the row does, each year's completion stays recorded. */
+function fa3aAnnual() {
+  scenario('FA-3A ANNUAL — annual Holiday contribution £250 due 10 June (D11)', () => {
+    const STEP = { label: 'Catch up on Holiday', amount: 250 };
+    const app = new App(baseState({ incomeExplicitlySet: true }), '2026-06-05', PROGRAM.plan);
+    app.setPlan([STEP]);
+    const id = app.contribute({ name: 'Holiday annual', amount: 250, date: '2026-06-10', status: 'upcoming', rec: 'annual', goalId: 'gH' });
+    const plan = () => { const v = app.planView(STEP); return { applied: v.applied, scheduled: v.scheduled, gap: v.gap }; };
+    const row = () => app.state().payments.filter(p => p.id === id)[0];
+    invariant('FA3A.annual.before', 'Before completion: Monthly Left £2,750; Plan sees £250 scheduled', { left: app.snap().left, plan: plan() },
+      { left: 2750, plan: { applied: 0, scheduled: 250, gap: 0 } });
+    app.at('2026-06-10'); app.toggle(id);
+    const c = app.events()[0];
+    invariant('FA3A.annual.complete', 'Completion recorded for June 2026: £250, annual, due 10 June 2026 (before the one-year advance)',
+      [evRow(c), c.dueDateSnapshot], [['completion', id, 'goal:gH', '2026-06', 250, 'annual', 'mark_completed'], '2026-06-10']);
+    current('FA3A.annual.advance', 'Completing moves the due date to 10 June 2027 at once (lastPaidYM 2026-06); Holiday £1,250',
+      [row().date, row().lastPaidYM, app.snap().goal.gH], ['2027-06-10', '2026-06', 1250]);
+    target('FA3A.annual.left', 'The June completion still counts in June\'s Monthly Left (£2,750)', app.snap().left, 2750, 3000, 'D11');
+    target('FA3A.annual.plan', 'Plan recognises the £250 just completed', plan(), { applied: 250, scheduled: 0, gap: 0 }, { applied: 0, scheduled: 0, gap: 250 }, 'D11');
+    app.advance('2027-06-05', 'reload');
+    target('FA3A.annual.next-year', 'June 2027: the row is the upcoming 2027 occurrence and Plan sees it scheduled', [row().status, plan()],
+      ['upcoming', { applied: 0, scheduled: 250, gap: 0 }], ['paid', { applied: 250, scheduled: 0, gap: 0 }], 'D11');
+    invariant('FA3A.annual.ledger', 'A year of renders and reloads leaves the 2026 completion untouched', app.events(), [c]);
+    app.at('2027-06-10'); app.toggle(id);
+    target('FA3A.annual.next-year-tap', 'Tapping the row in June 2027 completes the 2027 occurrence', [row().status, row().lastPaidYM], ['paid', '2027-06'], ['upcoming', ''], 'D11');
+    invariant('FA3A.annual.history-survives-next-year-tap', 'That tap leaves the 2026 completion active: no reversal, no 2027 completion, pointer removed',
+      [app.events(), app.activeEvents().map(e => e.id), app.pointer(id)], [[c], [c.id], null]);
+    current('FA3A.annual.tap.display', 'Holiday shows £1,000 after the tap (legacy row display; the ledger is not authoritative until FA-3C)', app.snap().goal.gH, 1000);
+  });
+
+  scenario('FA-3A ANNUAL — undo and edit within the same occurrence', () => {
+    let { app, id, event } = completedAnnual('2026-06-10', '2026-06-10');
+    app.toggle(id);
+    invariant('FA3A.annual.undo.same-occurrence', 'Undo straight after completing reverses the 2026 completion once; nothing active',
+      [evRows(app), app.activeEvents().length], [[evRow(event), ['reversal', id, 'goal:gH', '2026-06', event.id, 'mark_completed']], 0]);
+    ({ app, id, event } = completedAnnual('2026-06-10', '2026-06-10'));
+    app.advance('2026-12-01', 'reload');
+    app.toggle(id);
+    invariant('FA3A.annual.undo.later-same-occurrence', 'Undo in December 2026, before the next due date, still reverses it',
+      [evRows(app).map(r => r[0] + ' ' + r[3]), app.activeEvents().length], [['completion 2026-06', 'reversal 2026-06'], 0]);
+    ({ app, id, event } = completedAnnual('2026-06-10', '2026-06-10'));
+    app.at('2026-07-01');
+    app.editPayment(id, { amount: 300 });
+    invariant('FA3A.annual.edit.same-occurrence', 'Changing it to £300 in July 2026 reverses the completion and records £300 for the 2026 occurrence',
+      evRows(app).slice(1), [['reversal', id, 'goal:gH', '2026-06', event.id, 'payment_form'], ['completion', id, 'goal:gH', '2026-06', 300, 'annual', 'payment_form']]);
+  });
+
+  scenario('FA-3A ANNUAL — a later occurrence never rewrites the 2026 completion', () => {
+    let { app, id, event } = completedAnnual('2026-06-10', '2026-06-10');
+    app.advance('2027-06-05', 'reload');
+    app.editPayment(id, { amount: 300 });
+    invariant('FA3A.annual.edit.next-year', 'Editing the stale row to £300 in June 2027 records nothing and drops its pointer; the 2026 completion stays active at £250',
+      [app.events(), app.pointer(id)], [[event], null]);
+    ({ app, id, event } = completedAnnual('2026-06-10', '2026-06-10'));
+    app.advance('2027-06-05', 'reload');
+    app.del(id);
+    invariant('FA3A.delete.stale-annual', 'Deleting the stale row in June 2027 leaves the 2026 completion active (orphaned)', [app.events(), app.activeEvents().map(e => e.id)], [[event], [event.id]]);
+    ({ app, id, event } = completedAnnual('2026-03-10', '2026-06-10'));
+    const nextDue = app.state().payments[0].date;
+    app.advance('2027-04-10', 'reload');
+    app.toggle(id);
+    invariant('FA3A.annual.history-survives-next-due', 'Completed late (June 2026, due March, next due ' + nextDue + '): a tap in April 2027, after the next due date, leaves it active',
+      [nextDue, app.events(), app.activeEvents().map(e => e.id)], ['2027-03-10', [event], [event.id]]);
+  });
+}
+
+/** The same occurrence guard for monthly and one-off rows. */
+function fa3aOccurrence() {
+  scenario('FA-3A OCCURRENCE — monthly row paid for June, tapped in July', () => {
+    const app = freshApp();
+    const sched = monthlyHoliday(app);
+    app.smartImport([{ name: 'Holiday monthly', amount: 100, date: '2026-06-03', link: 'goal:gH', mergeId: sched }]);
+    const june = app.events();
+    app.advance('2026-07-02', 'reload');
+    const julyRow = app.state().payments.filter(p => p.id === sched)[0];
+    app.at('2026-07-10'); app.toggle(sched);
+    invariant('FA3A.monthly.history-survives-next-month-tap', 'Paid for June by Smart Import (no completion month, so rollover never resets it), tapped in July: the June completion stays active',
+      [[julyRow.status, julyRow.lastPaidYM], app.events(), app.activeEvents().map(e => e.occurrenceYm)], [['paid', ''], june, ['2026-06']]);
+  });
+
+  scenario('FA-3A OCCURRENCE — one-off undo', () => {
+    let app = freshApp(holidayOneOff);
+    const c = app.events()[0];
+    app.toggle('id1');
+    invariant('FA3A.oneoff.undo', 'Undo reverses the one-off completion exactly once; nothing active',
+      [evRows(app), app.activeEvents().length], [[evRow(c), ['reversal', 'id1', 'goal:gH', '2026-06', c.id, 'mark_completed']], 0]);
+    app.toggle('id1'); app.toggle('id1');
+    const ev = app.events();
+    invariant('FA3A.oneoff.undo.again', 'Re-complete then undo again: each reversal targets the completion before it',
+      [ev.map(e => e.eventType), ev[3].reversesEventId === ev[2].id, app.activeEvents().length], [['completion', 'reversal', 'completion', 'reversal'], true, 0]);
+    app = freshApp(holidayOneOff);
+    app.advance('2026-08-02', 'reload');
+    app.toggle('id1');
+    invariant('FA3A.oneoff.undo.later', 'Undo in August still reverses it: a one-off row keeps representing its only occurrence',
+      [evRows(app).map(r => r[0] + ' ' + r[3]), app.activeEvents().length], [['completion 2026-06', 'reversal 2026-06'], 0]);
+    app = freshApp(holidayOneOff);
+    app.editPayment('id1', { date: '2026-07-02' });
+    const redated = app.events();
+    app.toggle('id1');
+    invariant('FA3A.oneoff.undo.redated', 'Moving the paid one-off to 2 July records nothing; undo then reverses the June completion through its pointer',
+      [redated.length, evRows(app).map(r => r[0] + ' ' + r[3]), app.activeEvents().length], [1, ['completion 2026-06', 'reversal 2026-06'], 0]);
+    app = freshApp(holidayOneOff);
+    app.advance('2026-08-02', 'reload');
+    app.del('id1');
+    invariant('FA3A.delete.oneoff-later', 'Deleting the completed one-off in August reverses its completion', evRows(app).map(r => r[0] + ' ' + r[r.length - 1]),
+      ['completion mark_completed', 'reversal delete_payment']);
+  });
+}
+
 function migrationFixtures() {
   const data = JSON.parse(readSource(FIXTURES_JSON));
   data.fixtures.forEach(f => scenario('MIGRATION FIXTURE — ' + f.id, () => {
@@ -1623,6 +2112,7 @@ function main() {
   goalA(); goalB(); goalC(); goalD(); goalE(); goalF(); goalG(); goalH();
   missedRecurring(); investments(); quickSetup(); monthlyLeft(); identity(); identityMatrix(); planActions(); releases(); deposits();
   fa2Goals(); fa2Investments(); fa2Deposits();
+  fa3aLedger(); fa3aGoals(); fa3aInvestments(); fa3aSmartImport(); fa3aDeletion(); fa3aIdentity(); fa3aRollover(); fa3aProtection(); fa3aAnnual(); fa3aOccurrence();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');
