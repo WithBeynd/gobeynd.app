@@ -6940,6 +6940,8 @@ function geodeAppendContributionReversal(completion, source) {
  * (geodeContributionRowRepresents); otherwise the history is left as recorded.
  * The row pointer (contributionEventId) references the active completion of the row's current paid occurrence and
  * is removed whenever the row is left without one.
+ * FA-3C-B: a row still holding a legacy carry (geodeContributionCarryForRow) records no completion for that paid
+ * state; the carry follows the change instead (geodeContributionCarryFollowRow).
  */
 function geodeRecordContributionTransition(before, after, source) {
   try {
@@ -6947,8 +6949,13 @@ function geodeRecordContributionTransition(before, after, source) {
     if (!Array.isArray(S.contributionEvents)) S.contributionEvents = [];
     var wasPaid = !!before && before.status === 'paid';
     var prior = wasPaid ? geodeContributionPriorCompletion(S, before) : null;
+    var carry = prior ? null : geodeContributionCarryForRow(S, before);
     var next = String(after.status || '') === 'paid' ? geodeContributionCompletionFields(S, after) : null;
     delete after.contributionEventId;
+    if (carry) {
+      geodeContributionCarryFollowRow(carry, after, source);
+      return;
+    }
     if (prior && next && prior.entityType === next.entityType && prior.entityId === next.entityId &&
         prior.amount === next.amount && prior.recurrence === next.recurrence) {
       after.contributionEventId = prior.id;
@@ -6970,29 +6977,34 @@ function geodeRecordContributionTransition(before, after, source) {
 
 /**
  * FA-3A: deleting a row reverses the paid occurrence it still represents; completions of earlier occurrences stay
- * (orphaned once the row is gone).
+ * (orphaned once the row is gone). FA-3C-B: a legacy carry the row still holds is reversed; a carry it no longer
+ * holds stays, like an earlier completion.
  */
 function geodeRecordContributionDeletion(row, source) {
   try {
     if (!S || !row || String(row.status || '') !== 'paid') return;
     if (!Array.isArray(S.contributionEvents)) S.contributionEvents = [];
-    var prior = geodeContributionPriorCompletion(S, geodeContributionEventSnapshot(row));
+    var before = geodeContributionEventSnapshot(row);
+    var prior = geodeContributionPriorCompletion(S, before);
+    var carry = prior ? null : geodeContributionCarryForRow(S, before);
     if (prior) geodeAppendContributionReversal(prior, source);
+    if (carry) geodeResolveContributionCarry(S, carry.paymentId, { reason: 'reversed' }, source);
   } catch (_eCevDel) {}
 }
 
 /**
  * FA-3A: syncRecurringPayments is about to reset this completed monthly row — make sure its paid occurrence is
  * recorded first (a completion from before the ledger existed has none). The due date may already be advanced,
- * so no due-date snapshot is kept. A row whose amount an active legacy carry owns is left to the carry.
+ * so no due-date snapshot is kept. A paid state that is still a legacy carry's occurrence (geodeContributionCarryForRow)
+ * is left to the carry: the reset ends the row's hold on it, and the carry stays as history.
  */
 function geodeEnsureContributionCompletion(row, source) {
   try {
     if (!S || !row || String(row.status || '') !== 'paid') return;
     if (!Array.isArray(S.contributionEvents)) S.contributionEvents = [];
-    if (geodeContributionPointerTarget(S, geodeContributionEventSnapshot(row))) return;
-    var rowId = String(row.id || '');
-    if (geodeContributionCarryActive(S).some(function (c) { return c.paymentId === rowId; })) return;
+    var before = geodeContributionEventSnapshot(row);
+    if (geodeContributionPointerTarget(S, before)) return;
+    if (geodeContributionCarryForRow(S, before)) return;
     var fields = geodeContributionCompletionFields(S, row);
     if (!fields) return;
     fields.dueDateSnapshot = '';
@@ -7026,7 +7038,8 @@ function geodeLegacyContributionSeedFields(state, p) {
  * Only payments with no ledger history are seeded: once the ledger holds any event for a payment, its transitions
  * are the recorder's (a form re-save rewrites a paid monthly row's lastPaidYM without a new payment, which the
  * recorder deliberately leaves unrecorded). A payment with a legacy carry is seen too: the carry already owns its
- * amount, and a re-saved lastPaidYM would only date it again. Seeded events have source 'migration' and recordedAt is when they were
+ * amount, and a re-saved lastPaidYM would only date it again; its later occurrences are the recorder's, which
+ * seeding never blocks. Seeded events have source 'migration' and recordedAt is when they were
  * seeded, not when the payment happened. The row points to the seeded completion only while it still represents that
  * occurrence (geodeContributionRowRepresents). Observational: no balance changes.
  */
@@ -7170,6 +7183,110 @@ function geodeContributionCarryLedger(list) {
 /** FA-3C-A: carries still in effect (after their resolutions). Read-only; never feeds an engine. */
 function geodeContributionCarryActive(state) {
   return geodeContributionCarryLedger(state && state.contributionCarry).active;
+}
+
+/** FA-3C-B: paymentId's carry as its resolutions leave it (amount, goal/investment), or null when it has none or it ended. */
+function geodeContributionCarryFor(state, paymentId) {
+  var list = geodeContributionCarryActive(state);
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].paymentId === String(paymentId || '')) return list[i];
+  }
+  return null;
+}
+
+/**
+ * FA-3C-B: the active carry whose paid occurrence the row, as `before` (geodeContributionEventSnapshot) saw it, still
+ * holds, or null. A carry stands for the one legacy paid occurrence its row held at the schema transition: the row
+ * holds it while it stays paid and no dated completion owns its paid state (the recorder's pointer names none and
+ * geodeContributionPriorCompletion finds none). Every completion after that is a new occurrence with its own dated
+ * event; once the row stops being paid — undone, or reset by rollover — the carry is history the row no longer holds.
+ */
+function geodeContributionCarryForRow(state, before) {
+  if (!before || !before.id || before.status !== 'paid') return null;
+  if (geodeContributionPointerTarget(state, before) || geodeContributionPriorCompletion(state, before)) return null;
+  return geodeContributionCarryFor(state, before.id);
+}
+
+/**
+ * FA-3C-B: the only writer of carry resolutions. Appends one resolution to paymentId's active carry — change:
+ * { reason, amount (amended), entityType + entityId (moved), eventId (dated) } — and returns it; returns null and
+ * appends nothing when there is no active carry, the change is invalid (geodeContributionCarryResolutionValid) or the
+ * carry already says so, so repeating an action appends nothing. recordedAt is kept after the carry's earlier
+ * resolutions so they apply in the order written. Never edits a record or creates a carry; baseSaved, releases and
+ * contributionEvents are untouched.
+ */
+function geodeResolveContributionCarry(state, paymentId, change, source) {
+  state = state || S;
+  if (!change || !Array.isArray(state.contributionCarry)) return null;
+  var active = geodeContributionCarryFor(state, paymentId);
+  if (!active) return null;
+  var reason = String(change.reason || '');
+  if (reason === 'amended' && change.amount === active.amount) return null;
+  if (reason === 'moved' && change.entityType === active.entityType && String(change.entityId || '') === active.entityId) return null;
+  var carry = null;
+  var at = Date.now();
+  var ids = Object.create(null);
+  state.contributionCarry.forEach(function (r) {
+    if (!r || typeof r !== 'object') return;
+    ids[r.id] = true;
+    if (r.kind !== 'resolution' && r.id === active.carryId) carry = r;
+    if (r.kind === 'resolution' && r.carryId === active.carryId && typeof r.recordedAt === 'number' && r.recordedAt >= at) at = r.recordedAt + 1;
+  });
+  var id = '';
+  do { id = 'cres_' + uid(); } while (ids[id]);
+  var res = { id: id, kind: 'resolution', carryId: active.carryId, reason: reason, recordedAt: at, source: String(source || '') };
+  if (reason === 'amended') res.amount = change.amount;
+  if (reason === 'moved') {
+    res.entityType = change.entityType;
+    res.entityId = String(change.entityId || '');
+  }
+  if (change.eventId !== undefined) res.eventId = change.eventId;
+  if (!geodeContributionCarryResolutionValid(res, carry)) return null;
+  state.contributionCarry.push(res);
+  return res;
+}
+
+/**
+ * FA-3C-B: the carry resolution a recorded change to a row makes, given the carry the row held before it
+ * (geodeContributionCarryForRow): the row stops being paid, is deleted or leaves goals → reversed; another goal →
+ * moved; another amount of the same sign → amended. A re-save that changes neither (name, date, recurrence) appends
+ * nothing, and none of these ever records a dated completion: the carry's occurrence stays undated.
+ */
+function geodeContributionCarryFollowRow(carry, after, source) {
+  var ref = after && String(after.status || '') === 'paid' ? geodeContributionEntityRef(S, after) : null;
+  var amount = after ? Math.round(toNum(after.amount) * 100) / 100 : 0;
+  var sameSign = carry.kind === 'undated_contribution' ? amount > 0 : amount < 0;
+  if (!ref || ref.entityType !== carry.entityType || !sameSign) {
+    geodeResolveContributionCarry(S, carry.paymentId, { reason: 'reversed' }, source);
+    return;
+  }
+  if (ref.entityId !== carry.entityId) geodeResolveContributionCarry(S, carry.paymentId, { reason: 'moved', entityType: ref.entityType, entityId: ref.entityId }, source);
+  if (amount !== carry.amount) geodeResolveContributionCarry(S, carry.paymentId, { reason: 'amended', amount: amount }, source);
+}
+
+/**
+ * FA-3C-B: why a save that leaves `row` (null for a new row) as `next` — { kind: 'goal' | 'invest' | 'debt' | 'bill',
+ * status, amount } — must be refused, or ''. Goal and investment contributions need an amount above £0; a row that
+ * already holds a paid negative amount may keep a negative one (a legacy effect being corrected or undone, never a
+ * new one). A row still holding a legacy carry (geodeContributionCarryForRow) may stay on a goal with an amount of the
+ * carry's sign, or stop being paid; it cannot leave goals or change sign while paid, which no carry resolution can
+ * express without inventing history. Bill and debt amounts are not judged here.
+ */
+function geodeContributionSaveRefusal(state, row, next) {
+  var amount = Math.round(toNum(next && next.amount) * 100) / 100;
+  var contribution = next && (next.kind === 'goal' || next.kind === 'invest');
+  var carry = row ? geodeContributionCarryForRow(state, geodeContributionEventSnapshot(row)) : null;
+  if (carry && next && next.status === 'paid') {
+    if ((next.kind === 'invest' ? 'investment' : next.kind) !== carry.entityType) {
+      return 'This contribution is from before Beynd kept dated history, so it can\u2019t be moved off its goal while it\u2019s marked complete. Mark it not completed first. Nothing has been changed.';
+    }
+    if (carry.kind === 'legacy_negative_effect' && amount > 0) {
+      return 'This older entry can\u2019t be turned into a contribution. Mark it not completed, then add the contribution separately. Nothing has been changed.';
+    }
+  }
+  if (!contribution || amount > 0) return '';
+  if (amount < 0 && row && String(row.status || '') === 'paid' && toNum(row.amount) < 0) return '';
+  return 'A contribution needs an amount above \u00a30. Nothing has been changed.';
 }
 
 /**
@@ -12509,6 +12626,7 @@ function geodeSmartImportConfirm() {
       };
       if (mergeMode === 'merge' && r && r.existingDupKind === 'payment' && r.existingDupId) {
         var pex = (S.payments || []).filter(function (p) { return String(p.id || '') === String(r.existingDupId); })[0];
+        if (pex && geodeContributionSaveRefusal(S, pex, { kind: pk, status: st, amount: am })) continue;
         if (pex) {
           var cevBefore = geodeContributionEventSnapshot(pex);
           pex.name = name;
@@ -39216,6 +39334,18 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
   try {
     bufPrefill = !!window._geodePayPrefillBufferContribution;
   } catch (_eBufPf0) {}
+  var saveKind = gid ? 'goal' : invid ? 'invest' : debtid ? 'debt' : 'bill';
+  // A refused save keeps the modal open with its intents and must not create the buffer goal: probe a copy of the goals.
+  if (saveKind === 'bill' && !(amtNum > 0) && (!id || bufPrefill) &&
+      geodeEnsureEmergencyBufferGoalForPayment(Object.assign({}, S, { goals: (S.goals || []).slice() }), { paymentName: nm, bufferContribution: bufPrefill }).applied) {
+    saveKind = 'goal';
+  }
+  var saveRefusal = geodeContributionSaveRefusal(S, id ? (S.payments || []).filter(function (x) { return x.id === id; })[0] || null : null,
+    { kind: saveKind, status: st, amount: amtNum });
+  if (saveRefusal) {
+    toast(saveRefusal, 'warn');
+    return;
+  }
   var payLinkedIntent = 'set';
   try {
     payLinkedIntent = geodeNormalizePayLinkedIntent(window._geodePayLinkedIntent);
@@ -39455,6 +39585,10 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
 function togglePay(id){
   var p=S.payments.filter(function(x){return x.id===id;})[0];
   if(!p)return;
+  if (p.status !== 'paid' && (p.goalId || p.investId) && !(toNum(p.amount) > 0)) {
+    toast('This contribution needs an amount above \u00a30 before it can be marked complete. Nothing has been changed.', 'warn');
+    return;
+  }
   var _dpeBefore = geodeDebtPaymentEventSnapshot(p);
   var _cevBefore = geodeContributionEventSnapshot(p);
   if(p.status==='paid'){
