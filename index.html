@@ -4516,6 +4516,47 @@ function geodeSavingsReleaseDeductionSumForSource(state, sourceId) {
   return Math.round(sum * 100) / 100;
 }
 
+/**
+ * The goal or investment whose displayed position a payment row adds to ({ goal | investment, amount }; null when
+ * none): completed rows only, and a goal link takes priority over an investment link. Sole contribution-eligibility
+ * rule for geodeRecomputeBalancesFromPayments and geodeGoalCountedContributions.
+ */
+function geodePaymentBalanceEffect(state, p) {
+  if (!p) return null;
+  if (geodePaymentEffectiveStatus(p) !== 'paid') return null;
+  var amt = toNum(p.amount);
+  if (!amt) return null;
+  if (p.goalId) {
+    var g = (state.goals || []).filter(function (x) {
+      return x.id === p.goalId;
+    })[0];
+    return g ? { goal: g, amount: amt } : null;
+  }
+  if (p.investId) {
+    var inv = (state.investments || []).filter(function (x) {
+      return x.id === p.investId;
+    })[0];
+    return inv ? { investment: inv, amount: amt } : null;
+  }
+  return null;
+}
+
+/**
+ * Completed contributions geodeRecomputeBalancesFromPayments currently adds to a goal: total, and the part from
+ * monthly-recurring rows, which stop counting when the month rolls over.
+ */
+function geodeGoalCountedContributions(state, goal) {
+  var out = { total: 0, recurring: 0 };
+  if (!goal) return out;
+  (state.payments || []).forEach(function (p) {
+    var eff = geodePaymentBalanceEffect(state, p);
+    if (!eff || eff.goal !== goal) return;
+    out.total += eff.amount;
+    if (p.rec === 'yes') out.recurring += eff.amount;
+  });
+  return out;
+}
+
 function geodeRecomputeBalancesFromPayments() {
   try {
     (S.goals || []).forEach(function (g) {
@@ -4527,25 +4568,10 @@ function geodeRecomputeBalancesFromPayments() {
     });
 
     (S.payments || []).forEach(function (p) {
-      if (!p) return;
-
-      var st = geodePaymentEffectiveStatus(p);
-      if (st !== 'paid') return;
-
-      var amt = toNum(p.amount);
-      if (!amt) return;
-
-      if (p.goalId) {
-        var g = (S.goals || []).filter(function (x) {
-          return x.id === p.goalId;
-        })[0];
-        if (g) g.saved += amt;
-      } else if (p.investId) {
-        var inv = (S.investments || []).filter(function (x) {
-          return x.id === p.investId;
-        })[0];
-        if (inv) inv.balance += amt;
-      }
+      var eff = geodePaymentBalanceEffect(S, p);
+      if (!eff) return;
+      if (eff.goal) eff.goal.saved += eff.amount;
+      else eff.investment.balance += eff.amount;
     });
 
     (S.goals || []).forEach(function (g) {
@@ -36372,6 +36398,7 @@ function openGoalModal(id) {
   } catch (_eGs) {}
   var h = mh(g?'Edit Goal':'New Savings Goal');
   h += '<input type="hidden" id="geode_goal_edit_id" value="' + (g ? String(g.id).replace(/"/g, '&quot;') : '') + '" />';
+  if (g) h += '<input type="hidden" id="geode_goal_saved_orig" value="' + String(g.saved).replace(/"/g, '&quot;') + '" />';
   h +=
     '<div class="field"><label>Goal Name</label><input id="gn" class="fi" placeholder="Holiday, House Deposit..." value="' +
     (g ? g.name : '') +
@@ -36481,6 +36508,17 @@ function liveGoalSug() {
     }
   }
 }
+/**
+ * Edit forms: whether the user changed a pre-filled amount. Compared in pennies; blank or unreadable input counts as
+ * unchanged. origRaw is the value the form opened with; when it is missing the entity's current amount is used.
+ */
+function geodeEditAmountChanged(raw, origRaw, current) {
+  var s = String(raw == null ? '' : raw).trim();
+  if (!s || !isFinite(Number(s))) return false;
+  var o = String(origRaw == null ? '' : origRaw).trim();
+  var orig = o && isFinite(Number(o)) ? Number(o) : toNum(current);
+  return Math.round(Number(s) * 100) !== Math.round(orig * 100);
+}
 function saveGoal(id) {
   var nm=(document.getElementById('gn')||{}).value||''; nm=nm.trim();
   var am=(document.getElementById('ga')||{}).value;
@@ -36492,24 +36530,46 @@ function saveGoal(id) {
     toast('Enter an amount before saving.', 'warn');
     return;
   }
+  var prev = id ? S.goals.filter(function(x){ return x.id===id; })[0] : null;
+  var savedRaw = (document.getElementById('gs')||{}).value;
+  // Existing goal: Saved So Far is the displayed position. Only a changed value moves it, by re-anchoring baseSaved so
+  // the display equals the new amount; a monthly-recurring completion stops counting at rollover, so it blocks this.
+  var correctedBase = null;
+  if (prev && geodeEditAmountChanged(savedRaw, (document.getElementById('geode_goal_saved_orig')||{}).value, prev.saved)) {
+    var wantSaved = Math.round(Number(String(savedRaw).trim()) * 100) / 100;
+    var counted = geodeGoalCountedContributions(S, prev);
+    if (counted.recurring > 0) {
+      toast('We can\u2019t safely update this amount yet. A recurring contribution from this month is still included in your total. Your current amount has been left unchanged.', 'warn');
+      return;
+    }
+    correctedBase = Math.round((wantSaved - counted.total + geodeSavingsReleaseDeductionSumForSource(S, prev.id)) * 100) / 100;
+    if (wantSaved < 0 || correctedBase < 0) {
+      toast('We can\u2019t lower Saved So Far that far here, because it\u2019s below what\u2019s already marked complete for this goal. Your current amount has been left unchanged.', 'warn');
+      return;
+    }
+  }
   var sumSavedBefore = S.goals.reduce(function(s, g) { return s + toNum(g.saved); }, 0);
   setLastSnapshotBeforeChange();
   var dv=(document.getElementById('gd')||{}).value;
   var targetDateNorm = geodeNormalizeGoalTargetDateInput(dv);
-  var prev = id ? S.goals.filter(function(x){ return x.id===id; })[0] : null;
   var dateUserSet = false;
   try {
     dateUserSet = !!window._geodeGoalDateManualEdit;
   } catch (_eDu) {}
-  var obj={name:nm,amount:Number(am),saved:Number((document.getElementById('gs')||{}).value)||0,monthly:Number((document.getElementById('gm')||{}).value)||0,targetDate:targetDateNorm,cat:(document.getElementById('gc')||{}).value||'other',isPrimary: prev ? !!prev.isPrimary : false,targetDateUserSet:!!targetDateNorm && dateUserSet};
+  var obj={name:nm,amount:Number(am),saved:Number(savedRaw)||0,monthly:Number((document.getElementById('gm')||{}).value)||0,targetDate:targetDateNorm,cat:(document.getElementById('gc')||{}).value||'other',isPrimary: prev ? !!prev.isPrimary : false,targetDateUserSet:!!targetDateNorm && dateUserSet};
   obj.baseSaved = obj.saved;
+  if (prev) {
+    delete obj.saved;
+    if (correctedBase === null) delete obj.baseSaved;
+    else obj.baseSaved = correctedBase;
+  }
   var msg = '';
   if (id) { for(var i=0;i<S.goals.length;i++){if(S.goals[i].id===id){Object.assign(S.goals[i],obj);break;}} msg = 'Goal updated.'; }
   else { obj.id=uid(); obj.col=rc(); S.goals.push(obj); msg = 'Goal added.'; }
   geodeRecomputeBalancesFromPayments();
   var sumSavedAfter = S.goals.reduce(function(s, g) { return s + toNum(g.saved); }, 0);
   var savedDelta = sumSavedAfter - sumSavedBefore;
-  if (savedDelta > 0) {
+  if (!prev && savedDelta > 0) {
     var logGid = id || obj.id;
     appendActivityLog('goal', savedDelta, { goalId: logGid, goalName: nm });
   }
@@ -39547,6 +39607,7 @@ function openInvModal(id){
   var e=id?S.investments.filter(function(x){return x.id===id;})[0]:null;
   var h=mh(e?'Edit Investment':'Add Investment');
   h += '<input type="hidden" id="geode_inv_edit_id" value="' + (e ? String(e.id).replace(/"/g, '&quot;') : '') + '" />';
+  if (e) h += '<input type="hidden" id="geode_inv_balance_orig" value="' + String(e.balance).replace(/"/g, '&quot;') + '" />';
   h+=
     '<div class="field"><label>Name</label><input id="xn" class="fi" placeholder="Vanguard ISA, Moneybox..." value="' +
     (e ? e.name : '') +
@@ -39617,10 +39678,14 @@ function saveInv(id){
     toast('Add a name before saving.', 'warn');
     return;
   }
-  if (bal === '' || bal == null || isNaN(Number(bal))) {
+  var prevInv = id ? S.investments.filter(function(x){ return x.id===id; })[0] : null;
+  var balBlank = bal == null || String(bal).trim() === '';
+  if (prevInv ? !balBlank && isNaN(Number(bal)) : bal === '' || bal == null || isNaN(Number(bal))) {
     toast('Enter an amount before saving.', 'warn');
     return;
   }
+  // Existing investment: an unchanged Balance is the displayed position, not a new baseBalance.
+  var balChanged = !prevInv || geodeEditAmountChanged(bal, (document.getElementById('geode_inv_balance_orig')||{}).value, prevInv.balance);
   // Read all DOM values upfront — required before any modal swap that would destroy the form.
   var _invType    = (document.getElementById('xtype')||{}).value||'other';
   var _invR       = Number((document.getElementById('xr')||{}).value)||0;
@@ -39631,11 +39696,14 @@ function saveInv(id){
   var _invCs      = String(((document.getElementById('xcs')||{}).value)||'').trim();
   var _invGoalId  = String(((document.getElementById('xgoalid')||{}).value)||'').trim();
   function _doSaveInv() {
-    var prevInv = id ? S.investments.filter(function(x){ return x.id===id; })[0] : null;
     var invBeforeLocal = prevInv ? toNum(prevInv.balance) : 0;
     setLastSnapshotBeforeChange();
     var obj={name:nm,type:_invType,balance:Number(bal),returns:_invR,platform:_invP,notes:_invO,purpose:_invPurpose,horizon:_invHorizon,contributionStyle:_invCs,goalId:_invGoalId};
     obj.baseBalance = obj.balance;
+    if (!balChanged) {
+      delete obj.balance;
+      delete obj.baseBalance;
+    }
     if (!obj.purpose) delete obj.purpose;
     if (!obj.horizon) delete obj.horizon;
     if (!obj.contributionStyle) delete obj.contributionStyle;
@@ -39648,7 +39716,7 @@ function saveInv(id){
     var invRowAfter = S.investments.filter(function(x){ return x.id===invRowId; })[0];
     var invAfterLocal = invRowAfter ? toNum(invRowAfter.balance) : 0;
     var invDeltaLocal = invAfterLocal - invBeforeLocal;
-    if (invDeltaLocal !== 0) appendActivityLog('invest', invDeltaLocal, { investId: invRowId, source: 'balance_update' });
+    if (balChanged && invDeltaLocal !== 0) appendActivityLog('invest', invDeltaLocal, { investId: invRowId, source: 'balance_update' });
     save();
     geodeSuccessToast(geodeStageLToastAfterSave(msg, 'invest', { _seed: Date.now() }));
     closeModal();

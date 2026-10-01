@@ -47,7 +47,8 @@ const PRODUCTION_FUNCTIONS = [
   'geodeArchiveExpiredOneOffExpenses', 'geodeNormalizeBeyndStatement', 'geodeUpsertBeyndStatementItem',
   'geodeBuildBeyndStatementOneOff', 'geodeBeyndStatementArchiveKey',
   // balances
-  'geodeRecomputeBalancesFromPayments', 'geodeNormalizeGoalInvestBaseFields', 'geodeSavingsReleaseDeductionSumForSource',
+  'geodeRecomputeBalancesFromPayments', 'geodePaymentBalanceEffect', 'geodeGoalCountedContributions',
+  'geodeNormalizeGoalInvestBaseFields', 'geodeSavingsReleaseDeductionSumForSource',
   'geodeGoalEffectiveSavedFromState', 'geodeGoalHasPositiveLinkedInvestmentForState', 'geodeGoalLinkedInvBalanceForState',
   // Monthly Left
   'calcMonthlyLeftover', 'calcMonthlyLeftoverConfirmedOnly', 'sumPaymentsMonthlyOutflow',
@@ -55,7 +56,7 @@ const PRODUCTION_FUNCTIONS = [
   'sumExpensesMonthly', 'geodeExpenseIsOneOff', 'geodeExpenseIsExpiredOneOff', 'geodeExpenseMonthValue',
   'geodeExpenseDateValue', 'geodePaymentCountsAsPaidInCurrentMonth', 'geodeOverdueItems',
   // entity edits and Quick Setup
-  'saveGoal', 'doDep', 'saveInv', 'geodeQsDone', 'geodeQuickSetupNum',
+  'saveGoal', 'geodeEditAmountChanged', 'doDep', 'saveInv', 'geodeQsDone', 'geodeQuickSetupNum',
   // savings release
   'geodeApplySavingsRelease', 'geodeSavingsReleaseEligibility', 'geodeSavingsReleaseResolveSource',
   'geodeSavingsReleaseSourceType', 'geodeSavingsReleaseAvailableBalance', 'geodeReserveClassifySource',
@@ -74,7 +75,7 @@ const PRODUCTION_FUNCTIONS = [
  * App.contribute / App.planSchedule intents must mirror what the payment modal's callers pass.
  */
 const STRUCTURAL_FUNCTIONS = ['load', 'render', 'openPayModal', 'geodePayFromGoal', 'geodePayFromInvest', 'geodePayFromDebt',
-  'openPayQuick', 'geodePlanDetailActionForStep', 'geodeMainActionFromPriorityStep', 'openSuggestedAction'];
+  'openPayQuick', 'geodePlanDetailActionForStep', 'geodeMainActionFromPriorityStep', 'openSuggestedAction', 'openGoalModal', 'openInvModal'];
 
 /**
  * Test-only environment. Everything here is a side effect the scenarios do not observe (UI, toasts, caches,
@@ -112,7 +113,8 @@ function rc() { return '#9b7fe8'; }
 function fm(v) { return '£' + Math.round(Number(v) || 0); }
 
 function render() {} function rGoals() {} function closeModal() {} function checkAlerts() {} function syncPills() {} function goTab() {}
-function toast() {} function geodeSuccessToast() {} function geodeStageLToastAfterSave(m) { return m; }
+var __toasts = [];
+function toast(m) { __toasts.push(String(m)); } function geodeSuccessToast() {} function geodeStageLToastAfterSave(m) { return m; }
 function geodeEmitPaymentCompletionFeedback() {} function geodeMarkRecentUserSave() {} function geodeSubOnSave() {}
 function setLastSnapshotBeforeChange() {} function geodeInvalidateDecisionCaches() {}
 function evaluatePaymentFollowthrough() {} function geodeHomeMainActionInsightKind() { return ''; }
@@ -154,6 +156,27 @@ function __snapshot() {
     }),
     activity: (S.activityLog || []).map(function (e) { return { type: e.type, delta: e.delta }; })
   });
+}
+
+/** Contributions the recompute adds to a goal, measured on a copy with zero base and no releases, beside geodeGoalCountedContributions. */
+function __countedCheck(goalId) {
+  var keep = S;
+  try {
+    S = JSON.parse(JSON.stringify(keep));
+    S.goals.forEach(function (g) { g.baseSaved = 0; });
+    S.savingsReleases = [];
+    geodeRecomputeBalancesFromPayments();
+    var g = S.goals.filter(function (x) { return x.id === goalId; })[0];
+    var c = geodeGoalCountedContributions(S, g);
+    var paidRecurring = 0;
+    S.payments.forEach(function (p) {
+      if (p && p.goalId === goalId && p.rec === 'yes' && geodePaymentEffectiveStatus(p) === 'paid') paidRecurring += toNum(p.amount);
+    });
+    var r = function (v) { return Math.round(v * 100) / 100; };
+    return JSON.stringify({ recompute: r(toNum(g.saved)), helper: r(c.total), paidRecurring: r(paidRecurring), helperRecurring: r(c.recurring) });
+  } finally {
+    S = keep;
+  }
 }
 `;
 
@@ -405,19 +428,39 @@ class App {
   toggle(id) { this.call('togglePay', [id]); }
   completeAllUnpaid() { this.state().payments.filter(p => p.status !== 'paid').forEach(p => this.toggle(p.id)); }
   del(id) { this.call('delPay', [id]); }
-  /** Goal edit form saved without touching "Saved So Far" (the form pre-fills it with g.saved). */
-  renameGoal(id, name) {
+  /** Runs an entity form save with these fields; returns the toasts it showed. */
+  submit(fn, id, fields) {
+    this.run('__fields = ' + JSON.stringify(fields) + '; __toasts = [];');
+    this.call(fn, [id]);
+    return JSON.parse(this.run('JSON.stringify(__toasts)'));
+  }
+  /**
+   * Goal edit form as openGoalModal pre-fills it: Saved So Far and its hidden original both hold g.saved.
+   * over replaces fields; a field set to undefined is left out of the form.
+   */
+  editGoal(id, over) {
     const g = this.state().goals.filter(x => x.id === id)[0];
-    this.run('__fields = ' + JSON.stringify({ gn: name, ga: String(g.amount), gs: String(g.saved), gm: String(g.monthly || 0), gd: '', gc: g.cat || 'other' }) + ';');
-    this.call('saveGoal', [id]);
+    return this.submit('saveGoal', id, Object.assign({ gn: g.name, ga: String(g.amount), gs: String(g.saved), geode_goal_saved_orig: String(g.saved),
+      gm: String(g.monthly || 0), gd: '', gc: g.cat || 'other' }, over || {}));
   }
-  /** Investment edit form (pre-filled with inv.balance); balance overrides the Balance field. */
-  saveInvestment(id, name, balance) {
+  /** Goal edit form saved without touching "Saved So Far". */
+  renameGoal(id, name) { return this.editGoal(id, { gn: name }); }
+  /** New-goal form (no hidden original). */
+  createGoal(name, target, saved) { return this.submit('saveGoal', '', { gn: name, ga: String(target), gs: String(saved), gm: '0', gd: '', gc: 'other' }); }
+  /** Investment edit form as openInvModal pre-fills it: Balance and its hidden original both hold inv.balance. */
+  editInvestment(id, over) {
     const v = this.state().investments.filter(x => x.id === id)[0];
-    this.run('__fields = ' + JSON.stringify({ xn: name, xb: String(balance === undefined ? v.balance : balance), xtype: v.type || 'other',
-      xr: String(v.returns || 0), xp: v.platform || '', xo: v.notes || '', xpurpose: '', xhorizon: '', xcs: '', xgoalid: v.goalId || '' }) + ';');
-    this.call('saveInv', [id]);
+    return this.submit('saveInv', id, Object.assign({ xn: v.name, xb: String(v.balance), geode_inv_balance_orig: String(v.balance), xtype: v.type || 'other',
+      xr: String(v.returns || 0), xp: v.platform || '', xo: v.notes || '', xpurpose: v.purpose || '', xhorizon: v.horizon || '',
+      xcs: v.contributionStyle || '', xgoalid: v.goalId || '' }, over || {}));
   }
+  /** Investment edit form; balance overrides the Balance field. */
+  saveInvestment(id, name, balance) { return this.editInvestment(id, Object.assign({ xn: name }, balance === undefined ? {} : { xb: String(balance) })); }
+  /** New-investment form (no hidden original). */
+  createInvestment(name, balance) {
+    return this.submit('saveInv', '', { xn: name, xb: String(balance), xtype: 'isa', xr: '0', xp: '', xo: '', xpurpose: '', xhorizon: '', xcs: '', xgoalid: '' });
+  }
+  countedCheck(goalId) { return JSON.parse(this.run('__countedCheck(' + JSON.stringify(goalId) + ')')); }
   deposit(goalId, amount) { this.run('__fields = ' + JSON.stringify({ ['di-' + goalId]: String(amount) }) + ';'); this.call('doDep', [goalId]); }
   release(goalId, amount) {
     return JSON.parse(this.run('JSON.stringify(geodeApplySavingsRelease(' + JSON.stringify({ sourceType: 'goal', sourceId: goalId, amount, reason: 'emergency' }) + '))'));
@@ -430,7 +473,7 @@ class App {
 const DEFECTS = {
   D1: 'Recurring goal/investment contributions lose prior months at rollover (syncRecurringPayments resets the row; geodeRecomputeBalancesFromPayments rebuilds from currently-paid rows only).',
   D2: 'Quick Setup "Monthly essentials" housing/food/transport are stored as one-off expenses and drop out of later months (geodeQsDone).',
-  D3: 'Goal/investment edit forms write the displayed total into baseSaved/baseBalance, re-adding paid rows and re-deducting releases (saveGoal, saveInv).',
+  D3: 'Goal/investment edit forms write the displayed total into baseSaved/baseBalance, re-adding paid rows and re-deducting releases (saveGoal, saveInv). Repaired in FA-2; guarded by the E, R2 and FA2 checks.',
   D4: 'Same-month linked save overwrites or merges a different unpaid row for the same goal/investment (geodeSavePayApply upsert, geodeMergeDuplicateLinkedContributionsSameMonth). Repaired in FA-1; guarded by the IDENTITY and FA-1 checks.',
   D5: 'An unpaid voluntary one-off contribution keeps reducing every later month\'s Monthly Left (paymentCountsForMonthlyOutflow overdue rule).',
   D6: 'Same-session rollover and reload disagree: the persisted g.saved / inv.balance cache stays stale until the next recompute.',
@@ -541,6 +584,13 @@ function harnessFidelity() {
         .map(l => l.indexOf('geodePlanAdjustScheduledRun(state, step)') >= 0), [false, true, true, true]);
     invariant('fidelity.plan.declarations', 'Plan-program production functions declared exactly once',
       PROGRAM.plan.extracted.filter(f => f.declarations > 1).map(f => f.name + ' ×' + f.declarations), []);
+    const goalModal = PROGRAM.structural.openGoalModal, invModal = PROGRAM.structural.openInvModal;
+    invariant('fidelity.form.goal', 'openGoalModal pre-fills Saved So Far and its hidden original with g.saved (App.editGoal)',
+      [goalModal.indexOf('id="gs" class="fi" placeholder="0" value="\' +\n    (g ? g.saved : \'0\')') >= 0,
+        goalModal.indexOf('if (g) h += \'<input type="hidden" id="geode_goal_saved_orig" value="\' + String(g.saved)') >= 0], [true, true]);
+    invariant('fidelity.form.inv', 'openInvModal pre-fills Balance and its hidden original with inv.balance (App.editInvestment)',
+      [invModal.indexOf('id="xb" class="fi" placeholder="5000" value="\' +\n    (e ? e.balance : \'\')') >= 0,
+        invModal.indexOf('if (e) h += \'<input type="hidden" id="geode_inv_balance_orig" value="\' + String(e.balance)') >= 0], [true, true]);
   });
 }
 
@@ -657,8 +707,8 @@ function goalE() {
     invariant('E.before', 'Holiday after £250 completed', app.snap().goal.gH, 1250);
     app.renameGoal('gH', 'Holiday trip');
     const s = app.snap();
-    target('E.goal', 'Rename leaves Holiday unchanged', s.goal.gH, 1250, 1500, 'D3');
-    target('E.activity', 'Rename logs no goal movement', s.activity.filter(a => a.type === 'goal'), [], [{ type: 'goal', delta: 250 }], 'D3');
+    invariant('E.goal', 'Rename leaves Holiday unchanged', s.goal.gH, 1250);
+    invariant('E.activity', 'Rename logs no goal movement', s.activity.filter(a => a.type === 'goal'), []);
   });
   scenario('GOAL E — rename investment after a completed £500 contribution', () => {
     const app = new App(baseState(), '2026-06-05');
@@ -666,8 +716,8 @@ function goalE() {
     invariant('E.inv.before', 'ISA after £500 completed', app.snap().inv.iA, 5500);
     app.saveInvestment('iA', 'ISA renamed');
     const s = app.snap();
-    target('E.inv', 'Rename leaves ISA unchanged', s.inv.iA, 5500, 6000, 'D3');
-    target('E.inv.activity', 'Rename logs no investment movement', s.activity.filter(a => a.type === 'invest'), [], [{ type: 'invest', delta: 500 }], 'D3');
+    invariant('E.inv', 'Rename leaves ISA unchanged', s.inv.iA, 5500);
+    invariant('E.inv.activity', 'Rename logs no investment movement', s.activity.filter(a => a.type === 'invest'), []);
   });
 }
 
@@ -1280,7 +1330,7 @@ function releases() {
     invariant('R2.applied', 'Release applied for £200', [r.ok, r.event && r.event.amount], [true, 200]);
     invariant('R2.before', 'Holiday after release', app.snap().goal.gH, 800);
     app.renameGoal('gH', 'Holiday trip');
-    target('R2.after', 'Rename does not deduct the release again', app.snap().goal.gH, 800, 600, 'D3');
+    invariant('R2.after', 'Rename does not deduct the release again', app.snap().goal.gH, 800);
   });
 }
 
@@ -1294,6 +1344,256 @@ function deposits() {
     app.advance('2026-07-02', 'reload');
     invariant('DEP.rollover', 'July rollover', app.snap().goal.gH, 1050);
     spec('DEP.event', 'A + deposit is a durable, reversible deposit event (not a direct baseSaved mutation)', 'baseSaved += amount; no undo');
+  });
+}
+
+// FA-2: entity edits never move money unless the amount field was changed.
+
+/** Displayed position now, after render, after reload, at the July rollover (same session, then reload) and after the August reload. */
+function crossMonth(app, kind, id) {
+  const shown = () => { const s = app.snap(); return kind === 'goal' ? s.goal[id] : s.inv[id]; };
+  const t = { now: shown() };
+  app.render(); t.render = shown();
+  app.reload(); t.reload = shown();
+  app.advance('2026-07-02', 'session'); t.julSession = shown();
+  app.reload(); t.julReload = shown();
+  app.advance('2026-08-02', 'reload'); t.augReload = shown();
+  return t;
+}
+const steady = v => ({ now: v, render: v, reload: v, julSession: v, julReload: v, augReload: v });
+const completeOn10June = (app, o) => {
+  const id = app.contribute(Object.assign({ status: 'upcoming', date: '2026-06-10' }, o));
+  app.at('2026-06-10'); app.toggle(id);
+  return id;
+};
+const freshApp = (setup, extra) => { const app = new App(baseState(extra), '2026-06-05'); if (setup) setup(app); return app; };
+const goalOf = app => app.state().goals.filter(g => g.id === 'gH')[0];
+const invOf = app => app.state().investments.filter(v => v.id === 'iA')[0];
+const goalActivity = app => app.snap().activity.filter(a => a.type === 'goal');
+const investActivity = app => app.snap().activity.filter(a => a.type === 'invest');
+const REFUSED_RECURRING = 'We can\u2019t safely update this amount yet. A recurring contribution from this month is still included in your total. Your current amount has been left unchanged.';
+const REFUSED_BELOW = 'We can\u2019t lower Saved So Far that far here, because it\u2019s below what\u2019s already marked complete for this goal. Your current amount has been left unchanged.';
+const holidayOneOff = app => completeOn10June(app, { name: 'Holiday top-up', amount: 250, rec: 'no', goalId: 'gH' });
+const holidayMonthly = app => completeOn10June(app, { name: 'Holiday monthly', amount: 250, rec: 'yes', goalId: 'gH' });
+
+function fa2Goals() {
+  scenario('FA-2 GOAL — base £1,000 + completed one-off £250 (shown £1,250): edits that do not change Saved So Far', () => {
+    const never = crossMonth(freshApp(holidayOneOff), 'goal', 'gH');
+    invariant('FA2.G.never', 'Never edited: £1,250 throughout', never, steady(1250));
+    let app = freshApp(holidayOneOff);
+    app.renameGoal('gH', 'Summer holiday');
+    invariant('FA2.G.rename', 'Rename: baseSaved stays £1,000; no goal activity', [goalOf(app).baseSaved, goalActivity(app)], [1000, []]);
+    invariant('FA2.G.rename.timeline', 'Rename: same timeline as never editing', crossMonth(app, 'goal', 'gH'), never);
+    app = freshApp(holidayOneOff);
+    app.editGoal('gH', { ga: '3000' });
+    invariant('FA2.G.target', 'Target £3,000: saved; baseSaved £1,000; same timeline as never editing',
+      [goalOf(app).amount, goalOf(app).baseSaved, crossMonth(app, 'goal', 'gH')], [3000, 1000, never]);
+    app = freshApp(holidayOneOff);
+    app.editGoal('gH', { gm: '150', gc: 'travel', gd: '2027-03-31' });
+    invariant('FA2.G.metadata', 'Monthly amount, category and target-date fields: saved; baseSaved £1,000; same timeline as never editing',
+      [goalOf(app).monthly, goalOf(app).cat, goalOf(app).baseSaved, crossMonth(app, 'goal', 'gH')], [150, 'travel', 1000, never]);
+    invariant('FA2.G.unchanged', 'Saved So Far submitted as "1250", "1250.00", "1250.004": unchanged at 2dp (baseSaved £1,000, shown £1,250)',
+      ['1250', '1250.00', '1250.004'].map(v => { const a = freshApp(holidayOneOff); a.editGoal('gH', { gs: v }); return [goalOf(a).baseSaved, a.snap().goal.gH]; }),
+      [[1000, 1250], [1000, 1250], [1000, 1250]]);
+    app = freshApp(holidayOneOff);
+    app.editGoal('gH', { gs: '' });
+    invariant('FA2.G.blank', 'Blank Saved So Far is unchanged: baseSaved £1,000; same timeline as never editing', [goalOf(app).baseSaved, crossMonth(app, 'goal', 'gH')], [1000, never]);
+    app = freshApp(holidayOneOff);
+    app.editGoal('gH', { gs: '1250', geode_goal_saved_orig: undefined });
+    invariant('FA2.G.orig-missing', 'Hidden original missing: the current £1,250 is the reference, so an unchanged field stays inert', [goalOf(app).baseSaved, app.snap().goal.gH], [1000, 1250]);
+  });
+
+  scenario('FA-2 GOAL — explicit Saved So Far corrections (one-off £250 counted)', () => {
+    let app = freshApp(holidayOneOff);
+    const rows = app.state().payments;
+    const toasts = app.editGoal('gH', { gs: '1180' });
+    invariant('FA2.G.down', '£1,250 → £1,180: baseSaved = 1,180 − 250 + 0 = £930; shown £1,180; no message', [goalOf(app).baseSaved, app.snap().goal.gH, toasts], [930, 1180, []]);
+    invariant('FA2.G.down.rows', 'Contribution rows untouched; the correction is not logged as goal activity', [app.state().payments, goalActivity(app)], [rows, []]);
+    const down = crossMonth(app, 'goal', 'gH');
+    app = freshApp(holidayOneOff);
+    app.editGoal('gH', { gs: '1400' });
+    invariant('FA2.G.up', '£1,250 → £1,400: baseSaved £1,150; shown £1,400; not logged as goal activity', [goalOf(app).baseSaved, app.snap().goal.gH, goalActivity(app)], [1150, 1400, []]);
+    const up = crossMonth(app, 'goal', 'gH');
+    invariant('FA2.G.reload', 'Both corrections survive render and reload', [down.render, down.reload, up.render, up.reload], [1180, 1180, 1400, 1400]);
+    invariant('FA2.G.rollover', 'Both corrections hold at the July rollover (session, reload) and after the August reload',
+      [down.julSession, down.julReload, down.augReload, up.julSession, up.julReload, up.augReload], [1180, 1180, 1180, 1400, 1400, 1400]);
+    app = freshApp(holidayOneOff);
+    const zero = app.editGoal('gH', { gs: '0' });
+    invariant('FA2.G.zero.negative', '£0 with £250 completed would need a negative base: refused with a message; nothing changes',
+      [zero, goalOf(app).baseSaved, app.snap().goal.gH], [[REFUSED_BELOW], 1000, 1250]);
+    app = freshApp(holidayOneOff);
+    app.editGoal('gH', { gs: '1180', geode_goal_saved_orig: undefined });
+    invariant('FA2.G.orig-missing.correct', 'Hidden original missing: a changed amount still corrects exactly (baseSaved £930, shown £1,180)', [goalOf(app).baseSaved, app.snap().goal.gH], [930, 1180]);
+    invariant('FA2.G.counted', 'Correction helper counts exactly what the recompute adds (£250, none recurring)',
+      freshApp(holidayOneOff).countedCheck('gH'), { recompute: 250, helper: 250, paidRecurring: 0, helperRecurring: 0 });
+  });
+
+  scenario('FA-2 GOAL — two completed one-offs £100 + £150 (shown £1,250)', () => {
+    const two = app => {
+      completeOn10June(app, { name: 'Top-up A', amount: 100, rec: 'no', goalId: 'gH' });
+      completeOn10June(app, { name: 'Top-up B', amount: 150, rec: 'no', goalId: 'gH' });
+    };
+    const never = crossMonth(freshApp(two), 'goal', 'gH');
+    let app = freshApp(two);
+    app.renameGoal('gH', 'Summer holiday');
+    invariant('FA2.G.multi.rename', 'Rename: same timeline as never editing (£1,250)', [crossMonth(app, 'goal', 'gH'), never], [steady(1250), steady(1250)]);
+    app = freshApp(two);
+    invariant('FA2.G.multi.counted', 'Helper and recompute both count £250', app.countedCheck('gH'), { recompute: 250, helper: 250, paidRecurring: 0, helperRecurring: 0 });
+    app.editGoal('gH', { gs: '1180' });
+    invariant('FA2.G.multi', '£1,250 → £1,180: baseSaved £930; £1,180 through July and August', [goalOf(app).baseSaved, crossMonth(app, 'goal', 'gH')], [930, steady(1180)]);
+  });
+
+  scenario('FA-2 GOAL — savings release £200 (shown £800)', () => {
+    const release = app => app.release('gH', 200);
+    let app = freshApp(release);
+    let releases = app.state().savingsReleases;
+    app.renameGoal('gH', 'Summer holiday');
+    invariant('FA2.G.release.rename', 'Rename: baseSaved £1,000; release record unchanged; £800 throughout',
+      [goalOf(app).baseSaved, app.state().savingsReleases, crossMonth(app, 'goal', 'gH')], [1000, releases, steady(800)]);
+    app = freshApp(release);
+    releases = app.state().savingsReleases;
+    app.editGoal('gH', { gs: '700' });
+    invariant('FA2.G.release.correct', '£800 → £700: baseSaved = 700 − 0 + 200 = £900; release record unchanged; £700 throughout',
+      [goalOf(app).baseSaved, app.state().savingsReleases, crossMonth(app, 'goal', 'gH')], [900, releases, steady(700)]);
+    app = freshApp(release);
+    app.editGoal('gH', { gs: '0' });
+    invariant('FA2.G.zero', '£800 → £0 is representable (baseSaved £200): £0 throughout', [goalOf(app).baseSaved, crossMonth(app, 'goal', 'gH')], [200, steady(0)]);
+  });
+
+  scenario('FA-2 GOAL — one-off £250 + release £200 (shown £1,050)', () => {
+    const both = app => { holidayOneOff(app); app.release('gH', 200); };
+    let app = freshApp(both);
+    invariant('FA2.G.contrib-release.before', 'Shown £1,050', app.snap().goal.gH, 1050);
+    app.renameGoal('gH', 'Summer holiday');
+    invariant('FA2.G.contrib-release.rename', 'Rename: baseSaved £1,000; £1,050 throughout', [goalOf(app).baseSaved, crossMonth(app, 'goal', 'gH')], [1000, steady(1050)]);
+    app = freshApp(both);
+    const releases = app.state().savingsReleases;
+    app.editGoal('gH', { gs: '900' });
+    invariant('FA2.G.contrib-release.correct', '£1,050 → £900: baseSaved = 900 − 250 + 200 = £850; release counted once; £900 throughout',
+      [goalOf(app).baseSaved, app.state().savingsReleases, crossMonth(app, 'goal', 'gH')], [850, releases, steady(900)]);
+  });
+
+  scenario('FA-2 GOAL — monthly recurring £250 completed in June (shown £1,250)', () => {
+    let app = freshApp(holidayMonthly);
+    invariant('FA2.G.recurring.counted', 'Helper and recompute both count £250, all recurring', app.countedCheck('gH'), { recompute: 250, helper: 250, paidRecurring: 250, helperRecurring: 250 });
+    const before = app.state();
+    const toasts = app.editGoal('gH', { gs: '1180' });
+    const after = app.state();
+    invariant('FA2.G.recurring-refused', 'Correction while a recurring completion counts: refused with the explanatory message; goals, rows, releases and activity unchanged',
+      [toasts, after.goals, after.payments, after.savingsReleases, after.activityLog], [[REFUSED_RECURRING], before.goals, before.payments, before.savingsReleases, before.activityLog]);
+    const never = crossMonth(freshApp(holidayMonthly), 'goal', 'gH');
+    app = freshApp(holidayMonthly);
+    app.renameGoal('gH', 'Summer holiday');
+    const edited = crossMonth(app, 'goal', 'gH');
+    invariant('FA2.G.recurring-rollover', 'Rename: same timeline as never editing (no FA-2 base change)', edited, never);
+    target('FA2.G.recurring-rollover.d1', 'Rename with a recurring completion: £1,250 should hold through July and August', edited, steady(1250), never, 'D1');
+  });
+
+  scenario('FA-2 GOAL — Saved So Far disabled by a linked investment', () => {
+    const app = freshApp(holidayOneOff, { investments: [Object.assign(ISA(), { goalId: 'gH' })] });
+    invariant('FA2.G.linked.before', 'The linked ISA (£5,000) provides the goal position; the goal\'s own cache is £1,250', [app.snap().goal.gH, goalOf(app).saved], [5000, 1250]);
+    app.renameGoal('gH', 'Summer holiday');
+    invariant('FA2.G.linked-investment', 'Rename submits the disabled field unchanged: goal baseSaved stays £1,000, own amount £1,250, shown £5,000',
+      [goalOf(app).baseSaved, goalOf(app).saved, app.snap().goal.gH], [1000, 1250, 5000]);
+    app.reload();
+    invariant('FA2.G.linked.reload', 'After reload: goal baseSaved £1,000, own amount £1,250, shown £5,000; ISA £5,000',
+      [goalOf(app).baseSaved, goalOf(app).saved, app.snap().goal.gH, app.snap().inv.iA], [1000, 1250, 5000, 5000]);
+  });
+
+  scenario('FA-2 GOAL — floating-point Saved So Far', () => {
+    const app = freshApp(a => completeOn10June(a, { name: 'Pennies', amount: 0.2, rec: 'no', goalId: 'gH' }),
+      { goals: [Object.assign(HOLIDAY(), { saved: 1000.1, baseSaved: 1000.1 })] });
+    const cached = goalOf(app).saved;
+    app.editGoal('gH', { gs: '1000.30' });
+    invariant('FA2.G.float', 'The form opens with the unrounded ' + cached + '; "1000.30" is unchanged at 2dp: baseSaved stays £1,000.10',
+      [cached !== 1000.3, goalOf(app).baseSaved, app.snap().goal.gH], [true, 1000.1, 1000.3]);
+  });
+
+  scenario('FA-2 GOAL — shared counting definition', () => {
+    const paid = (id, amount, rec, link) => Object.assign({ id, name: id, amount, date: '2026-06-01', status: 'paid', rec, lastPaidYM: rec === 'yes' ? '2026-06' : '' }, link);
+    const app = new App(baseState({ payments: [
+      paid('one-off', 100, 'no', { goalId: 'gH' }),
+      paid('monthly', 150, 'yes', { goalId: 'gH' }),
+      paid('goal-and-isa', 70, 'no', { goalId: 'gH', investId: 'iA' }),
+      { id: 'upcoming', name: 'upcoming', amount: 40, date: '2026-06-20', status: 'upcoming', rec: 'no', goalId: 'gH' },
+      { id: 'overdue', name: 'overdue', amount: 35, date: '2026-06-01', status: 'upcoming', rec: 'no', goalId: 'gH' },
+      paid('isa-only', 30, 'no', { investId: 'iA' }),
+      paid('deleted-goal', 20, 'no', { goalId: 'gGone' })
+    ] }), '2026-06-05');
+    app.reload();
+    invariant('FA2.G.counted.rules', 'Completed rows only, goal link before investment link, missing goals ignored: helper = recompute = £320 (£150 recurring)',
+      app.countedCheck('gH'), { recompute: 320, helper: 320, paidRecurring: 150, helperRecurring: 150 });
+  });
+
+  scenario('FA-2 GOAL — creating a goal', () => {
+    const app = freshApp();
+    app.createGoal('House', 20000, 1000);
+    const g = app.state().goals.filter(x => x.name === 'House')[0];
+    invariant('FA2.G.creation', 'New goal with Saved So Far £1,000: saved and baseSaved £1,000; shown £1,000', [g.saved, g.baseSaved, app.snap().goal[g.id]], [1000, 1000, 1000]);
+    current('FA2.G.creation.activity', 'Creating a goal logs its opening amount as goal activity (existing behaviour, unchanged)', goalActivity(app), [{ type: 'goal', delta: 1000 }]);
+  });
+}
+
+function fa2Investments() {
+  const isaOneOff = app => completeOn10June(app, { name: 'ISA top-up', amount: 200, rec: 'no', investId: 'iA' });
+  const isaMonthly = app => completeOn10June(app, { name: 'ISA monthly', amount: 200, rec: 'yes', investId: 'iA' });
+  scenario('FA-2 INVESTMENT — base £5,000 + completed one-off £200 (shown £5,200)', () => {
+    const never = crossMonth(freshApp(isaOneOff), 'invest', 'iA');
+    invariant('FA2.I.never', 'Never edited: £5,200 throughout', never, steady(5200));
+    let app = freshApp(isaOneOff);
+    app.saveInvestment('iA', 'ISA renamed');
+    invariant('FA2.I.rename', 'Rename: baseBalance stays £5,000; no investment activity', [invOf(app).baseBalance, investActivity(app)], [5000, []]);
+    invariant('FA2.I.rename.timeline', 'Rename: same timeline as never editing', crossMonth(app, 'invest', 'iA'), never);
+    app = freshApp(isaOneOff);
+    app.editInvestment('iA', { xb: '5200.00' });
+    invariant('FA2.I.unchanged', 'Balance submitted as "5200.00" is unchanged: baseBalance £5,000; same timeline as never editing',
+      [invOf(app).baseBalance, investActivity(app), crossMonth(app, 'invest', 'iA')], [5000, [], never]);
+    app = freshApp(isaOneOff);
+    app.editInvestment('iA', { xtype: 'other', xr: '120', xp: 'Vanguard', xo: 'Long term', xhorizon: 'long', xcs: 'recurring' });
+    invariant('FA2.I.metadata', 'Type, returns, platform, notes, horizon, contribution style: saved; no financial movement or activity',
+      [invOf(app).type, invOf(app).returns, invOf(app).platform, invOf(app).baseBalance, investActivity(app), crossMonth(app, 'invest', 'iA')],
+      ['other', 120, 'Vanguard', 5000, [], never]);
+    app = freshApp(isaOneOff);
+    const blank = app.editInvestment('iA', { xb: '' });
+    invariant('FA2.I.blank', 'Blank Balance on an existing investment is unchanged: saved without a prompt; baseBalance £5,000', [blank, invOf(app).baseBalance, app.snap().inv.iA], [[], 5000, 5200]);
+    app = freshApp(isaOneOff);
+    app.editInvestment('iA', { xb: '5600' });
+    target('FA2.I.explicit-up', 'Balance entered as £5,600 shows £5,600 (explicit Balance semantics deferred to FA-7)', app.snap().inv.iA, 5600, 5800, 'D10');
+    app = freshApp(isaOneOff);
+    app.editInvestment('iA', { xb: '4800' });
+    target('FA2.I.explicit-down', 'Balance entered as £4,800 shows £4,800 (explicit Balance semantics deferred to FA-7)', app.snap().inv.iA, 4800, 5000, 'D10');
+    current('FA2.I.explicit.activity', 'An explicit Balance change still logs its balance_update investment entry (existing behaviour)', investActivity(app), [{ type: 'invest', delta: -200 }]);
+  });
+  scenario('FA-2 INVESTMENT — monthly recurring £200 completed in June', () => {
+    const never = crossMonth(freshApp(isaMonthly), 'invest', 'iA');
+    const app = freshApp(isaMonthly);
+    app.saveInvestment('iA', 'ISA renamed');
+    const edited = crossMonth(app, 'invest', 'iA');
+    invariant('FA2.I.recurring-rollover', 'Rename: same timeline as never editing (no FA-2 base change)', edited, never);
+    target('FA2.I.recurring-rollover.d1', 'Rename with a recurring completion: £5,200 should hold through July and August', edited, steady(5200), never, 'D1');
+  });
+  scenario('FA-2 INVESTMENT — creating an investment', () => {
+    const app = freshApp();
+    app.createInvestment('New ISA', 5000);
+    const v = app.state().investments.filter(x => x.name === 'New ISA')[0];
+    invariant('FA2.I.creation', 'New investment with Balance £5,000: balance and baseBalance £5,000', [v.balance, v.baseBalance], [5000, 5000]);
+    const blank = app.createInvestment('Blank ISA', '');
+    invariant('FA2.I.creation.blank', 'A new investment still needs a Balance', [blank, app.state().investments.filter(x => x.name === 'Blank ISA').length],
+      [['Enter an amount before saving.'], 0]);
+  });
+}
+
+function fa2Deposits() {
+  scenario('FA-2 DEPOSIT — "+" £50 and a completed one-off £250 (shown £1,300)', () => {
+    const depositThenTopUp = app => { app.deposit('gH', 50); holidayOneOff(app); };
+    let app = freshApp(depositThenTopUp);
+    invariant('FA2.DEP.before', 'Shown £1,300; the deposit sits in baseSaved (£1,050)', [app.snap().goal.gH, goalOf(app).baseSaved], [1300, 1050]);
+    app.renameGoal('gH', 'Summer holiday');
+    invariant('FA2.DEP.rename', 'Rename: baseSaved stays £1,050; £1,300 throughout', [goalOf(app).baseSaved, crossMonth(app, 'goal', 'gH')], [1050, steady(1300)]);
+    app = freshApp(depositThenTopUp);
+    app.editGoal('gH', { gs: '1200' });
+    invariant('FA2.DEP.correct', '£1,300 → £1,200 re-anchors the combined base: baseSaved = 1,200 − 250 = £950; £1,200 throughout',
+      [goalOf(app).baseSaved, crossMonth(app, 'goal', 'gH')], [950, steady(1200)]);
   });
 }
 
@@ -1322,6 +1622,7 @@ function main() {
   harnessFidelity();
   goalA(); goalB(); goalC(); goalD(); goalE(); goalF(); goalG(); goalH();
   missedRecurring(); investments(); quickSetup(); monthlyLeft(); identity(); identityMatrix(); planActions(); releases(); deposits();
+  fa2Goals(); fa2Investments(); fa2Deposits();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');
