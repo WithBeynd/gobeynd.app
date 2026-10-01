@@ -7270,17 +7270,24 @@ function geodeContributionCarryFollowRow(carry, after, source) {
  * already holds a paid negative amount may keep a negative one (a legacy effect being corrected or undone, never a
  * new one). A row still holding a legacy carry (geodeContributionCarryForRow) may stay on a goal with an amount of the
  * carry's sign, or stop being paid; it cannot leave goals or change sign while paid, which no carry resolution can
- * express without inventing history. Bill and debt amounts are not judged here.
+ * express without inventing history. FA-3C-B.2: a paid row that counts toward a goal cannot move to an investment
+ * while paid, nor the reverse, unless its paid state is a dated completion it still represents
+ * (geodeContributionPriorCompletion), which the recorder then moves as the same occurrence; an undated or earlier
+ * occurrence has nothing that could move it truthfully. Bill and debt amounts are not judged here.
  */
 function geodeContributionSaveRefusal(state, row, next) {
   var amount = Math.round(toNum(next && next.amount) * 100) / 100;
   var contribution = next && (next.kind === 'goal' || next.kind === 'invest');
-  var carry = row ? geodeContributionCarryForRow(state, geodeContributionEventSnapshot(row)) : null;
-  if (carry && next && next.status === 'paid') {
-    if ((next.kind === 'invest' ? 'investment' : next.kind) !== carry.entityType) {
-      return 'This contribution is from before Beynd kept dated history, so it can\u2019t be moved off its goal while it\u2019s marked complete. Mark it not completed first. Nothing has been changed.';
+  var before = row ? geodeContributionEventSnapshot(row) : null;
+  var carry = row ? geodeContributionCarryForRow(state, before) : null;
+  if (row && next && next.status === 'paid' && String(row.status || '') === 'paid') {
+    var nextType = next.kind === 'invest' ? 'investment' : next.kind;
+    var eff = geodePaymentBalanceEffect(state, row);
+    var fromType = eff ? (eff.goal ? 'goal' : 'investment') : '';
+    if (carry ? nextType !== carry.entityType : contribution && fromType && nextType !== fromType && !geodeContributionPriorCompletion(state, before)) {
+      return 'This completed contribution can\u2019t be moved somewhere else while its history is unresolved. Leave it where it is and add a new contribution for the other destination. If it never actually happened, mark it not completed instead. Nothing has been changed.';
     }
-    if (carry.kind === 'legacy_negative_effect' && amount > 0) {
+    if (carry && carry.kind === 'legacy_negative_effect' && amount > 0) {
       return 'This older entry can\u2019t be turned into a contribution. Mark it not completed, then add the contribution separately. Nothing has been changed.';
     }
   }

@@ -2838,7 +2838,7 @@ const attempt = (app, act) => { app.run('__toasts = [];'); const before = app.st
 const heldCarry = (app, id) => JSON.parse(app.run('JSON.stringify(geodeContributionCarryForRow(S, geodeContributionEventSnapshot(S.payments.filter(function (p) { return p.id === ' + JSON.stringify(id) + '; })[0])))'));
 const REFUSED_AMOUNT = 'A contribution needs an amount above \u00a30. Nothing has been changed.';
 const REFUSED_COMPLETE = 'This contribution needs an amount above \u00a30 before it can be marked complete. Nothing has been changed.';
-const REFUSED_CARRY_MOVE = 'This contribution is from before Beynd kept dated history, so it can\u2019t be moved off its goal while it\u2019s marked complete. Mark it not completed first. Nothing has been changed.';
+const REFUSED_MOVE = 'This completed contribution can\u2019t be moved somewhere else while its history is unresolved. Leave it where it is and add a new contribution for the other destination. If it never actually happened, mark it not completed instead. Nothing has been changed.';
 const REFUSED_CARRY_SIGN = 'This older entry can\u2019t be turned into a contribution. Mark it not completed, then add the contribution separately. Nothing has been changed.';
 const GA_HELD = [1100, 1100, [['carry_pm', 'goal:gH', 100]], [], [], 1000];
 
@@ -2878,13 +2878,13 @@ function fa3cbActions() {
     gi.toggle('pm'); gi.editPayment('pm', { goalId: '', investId: 'iA', status: 'paid' });
     invariant('FA3CB.carry.cross-entity', 'While paid, a carried goal row cannot be moved to an investment, a bill or a debt (investment carries belong to FA-7; no resolution can express the move without inventing history): refused, nothing changed; marked not completed first (reversed), it can then be completed on the ISA as a new dated occurrence',
       [toInv, toBill, toDebt, carryView(gi), gi.snap().inv.iA],
-      [[[REFUSED_CARRY_MOVE], true], [[REFUSED_CARRY_MOVE], true], [[REFUSED_CARRY_MOVE], true],
+      [[[REFUSED_MOVE], true], [[REFUSED_MOVE], true], [[REFUSED_MOVE], true],
         [1000, 1000, [], [['carry_pm', 'reversed']], [['pm', 'investment:iA', '2026-08', 100]], 1000], 5100]);
 
     const ir = withCarries(legacyState({}, { investments: [Object.assign(ISA(), { balance: 5200 })], payments: [legacyInvPay('im', { rec: 'yes', date: '2026-06-05' })] }), '2026-08-10');
-    ir.editPayment('im', { investId: '', goalId: 'gH' });
-    current('FA3CB.relink.inv-to-goal', 'An ambiguous paid ISA row (no carry: investments are deferred to FA-7) relinked to Holiday while paid creates no carry and no event: legacy Holiday £1,200, simulated £1,000, ISA £5,000 — a gap the schema-2 switch must close or refuse (FA-3C-C)',
-      [ir.snap().goal.gH, schema2(ir, null).goals.gH.shown, ir.snap().inv.iA, ir.state().contributionCarry.length, ir.events().length], [1200, 1000, 5000, 0, 0]);
+    const irTry = attempt(ir, a => a.editPayment('im', { investId: '', goalId: 'gH' }));
+    invariant('FA3CB.relink.inv-to-goal', 'An ambiguous paid ISA row (no carry: investments are deferred to FA-7) cannot be relinked to Holiday while paid (FA-3C-B.2): refused, nothing changed — legacy Holiday £1,000, simulated £1,000, ISA £5,200, no carry, no event (before FA-3C-B.2 the move gave legacy £1,200 against simulated £1,000)',
+      [irTry, ir.snap().goal.gH, schema2(ir, null).goals.gH.shown, ir.snap().inv.iA, ir.state().contributionCarry.length, ir.events().length], [[[REFUSED_MOVE], true], 1000, 1000, 5200, 0, 0]);
   });
 
   scenario('FA-3C-B RE-SAVE — metadata and date edits never date a carry', () => {
@@ -3169,6 +3169,154 @@ function fa3cbIntegration() {
   });
 }
 
+const B2_AT = '2026-08-10';
+const PENSION = () => ({ id: 'iB', name: 'Pension', type: 'pension', balance: 3000, baseBalance: 3000 });
+/** Holiday £1,000 and an ISA (base £5,000) holding one ambiguous paid row (default: monthly £200, no lastPaidYM), transition carries stored. */
+const b2Ambiguous = (row, extra) => withCarries(legacyState({}, Object.assign({ investments: [Object.assign(ISA(), { balance: 5200 })],
+  payments: [row || legacyInvPay('im', { rec: 'yes', date: '2026-06-05' })] }, extra || {})), B2_AT);
+/** A row completed natively this month: its paid state is a dated completion it represents. */
+const b2Dated = (row, extra) => { const app = withCarries(legacyState({}, Object.assign({ payments: [row] }, extra || {})), B2_AT); app.toggle(row.id); return app; };
+/** An annual row completed in August 2025 and seen in September 2026: still paid (nothing resets annual rows), its completion an earlier occurrence. */
+const b2Stale = (row, extra) => {
+  const app = new App(legacyState({}, Object.assign({ payments: [row] }, extra || {})), '2025-08-04'); app.reload(); app.toggle(row.id);
+  app.advance('2026-09-15', 'reload');
+  app.run('S.contributionCarry = geodeSchema2TransitionCarryRecords(S, ' + FA3CA_AT + '); save(); __reload();');
+  return app;
+};
+/** completion: [type, entity, occurrence, amount]; reversal: [type, entity, occurrence] */
+const b2Events = app => app.events().map(e => [e.eventType, e.entityType + ':' + e.entityId, e.occurrenceYm].concat(e.eventType === 'completion' ? [e.amount] : []));
+const b2Active = app => app.activeEvents().map(e => [e.entityType + ':' + e.entityId, e.occurrenceYm, e.amount]);
+/** [legacy Holiday, simulated Holiday, ISA] */
+const b2View = app => [app.snap().goal.gH, schema2(app, null).goals.gH.shown, app.snap().inv.iA];
+/** What FA-7 could carry for the row: geodeLegacyCarryCandidate with the active completions as dated. */
+const b2Candidate = (app, id) => JSON.parse(app.run('(function () { var dated = Object.create(null); geodeContributionActiveCompletions(S).forEach(function (e) { dated[e.paymentId] = true; });' +
+  ' return JSON.stringify(geodeLegacyCarryCandidate(S, S.payments.filter(function (p) { return p.id === ' + JSON.stringify(id) + '; })[0], dated)); })()'));
+const b2ToGoal = id => a => a.editPayment(id, { investId: '', goalId: 'gH' });
+const b2ToIsa = id => a => a.editPayment(id, { goalId: '', investId: 'iA' });
+const B2_CANDIDATE = { paymentId: 'im', entityType: 'investment', entityId: 'iA', kind: 'undated_contribution', amount: 200, recurrence: 'monthly', dueDateSnapshot: '2026-06-05' };
+const B2_MOVED = (from, to, ym) => [['completion', from, ym, 200], ['reversal', from, ym], ['completion', to, ym, 200]];
+
+function fa3cb2Boundary() {
+  scenario('FA-3C-B.2 AUTHORITY BOUNDARY — a paid contribution crosses between a goal and an investment only with the dated occurrence it represents', () => {
+    const amb = b2Ambiguous(), ambControl = b2Ambiguous();
+    const cand0 = b2Candidate(amb, 'im');
+    const ambTry = attempt(amb, b2ToGoal('im'));
+    const ambRow = amb.state().payments[0];
+    invariant('FA3CB2.inv-goal.ambiguous', 'An ambiguous paid ISA £200 (no dated completion, no carry) relinked to Holiday: refused, stored state unchanged — still ISA-linked, lastPaidYM empty, no event, carry, release or activity entry; ISA £5,200, Holiday £1,000 (simulated £1,000), Monthly Left £3,000',
+      [ambTry, ambRow.investId, ambRow.goalId, ambRow.lastPaidYM, amb.events().length, amb.state().contributionCarry.length, amb.state().savingsReleases.length, amb.state().activityLog.length, b2View(amb), amb.snap().left],
+      [[[REFUSED_MOVE], true], 'iA', '', '', 0, 0, 0, 0, [1000, 1000, 5200], 3000]);
+    amb.reload(); amb.reload(); ambControl.reload(); ambControl.reload();
+    invariant('FA3CB2.inv-goal.reload', 'After the refusal and two reloads the state is identical to the same fixture never touched: nothing was stamped, so nothing is seeded',
+      [same(amb.state(), ambControl.state()), amb.events().length, b2View(amb)], [true, 0, [1000, 1000, 5200]]);
+
+    const fut = b2Ambiguous(); attempt(fut, b2ToGoal('im'));
+    fut.contribute({ name: 'Holiday monthly', amount: 200, date: '2026-08-20', status: 'paid', rec: 'yes', goalId: 'gH' });
+    invariant('FA3CB2.inv-goal.future', 'The safe path after the refusal — leave the ISA row and add a new Holiday contribution: a dated Holiday completion (2026-08) beside the untouched ISA row; ISA £5,200, Holiday £1,200 (simulated £1,200); the ISA evidence unchanged',
+      [b2Active(fut), b2View(fut), fut.state().payments.filter(p => p.id === 'im')[0].investId, b2Candidate(fut, 'im')],
+      [[['goal:gH', '2026-08', 200]], [1200, 1200, 5200], 'iA', B2_CANDIDATE]);
+
+    const dat = b2Dated(legacyInvPay('id', { rec: 'yes', status: 'upcoming', date: '2026-08-05' }));
+    const datBefore = b2Active(dat);
+    const datTry = attempt(dat, b2ToGoal('id'));
+    const datAfter = [b2Events(dat), b2View(dat)];
+    dat.reload();
+    invariant('FA3CB2.inv-goal.dated', 'A paid ISA £200 completed this month (a dated completion it represents) relinked to Holiday: allowed — the ISA completion is reversed and the same occurrence (2026-08) recorded for Holiday; ISA £5,000, Holiday £1,200, simulated £1,200; no carry, baseSaved unchanged; identical after reload',
+      [datBefore, datTry[0], datAfter, [b2Events(dat), b2View(dat)], dat.state().contributionCarry.length, dat.state().goals[0].baseSaved],
+      [[['investment:iA', '2026-08', 200]], [], [B2_MOVED('investment:iA', 'goal:gH', '2026-08'), [1200, 1200, 5000]],
+        [B2_MOVED('investment:iA', 'goal:gH', '2026-08'), [1200, 1200, 5000]], 0, 1000]);
+
+    const unp = withCarries(legacyState({}, { payments: [legacyInvPay('iu', { rec: 'yes', status: 'upcoming', date: '2026-08-20' })] }), B2_AT);
+    const unpTry = attempt(unp, b2ToGoal('iu'));
+    const unpLinked = [unp.state().payments[0].goalId, b2View(unp), unp.events().length];
+    unp.toggle('iu');
+    invariant('FA3CB2.inv-goal.unpaid', 'An unpaid ISA contribution relinked to Holiday: allowed, there is no effect to move (Holiday £1,000, ISA £5,000, no event); completing it records a dated Holiday completion (2026-08): Holiday £1,200, simulated £1,200',
+      [unpTry[0], unpLinked, b2Active(unp), b2View(unp)], [[], ['gH', [1000, 1000, 5000], 0], [['goal:gH', '2026-08', 200]], [1200, 1200, 5000]]);
+
+    const sti = b2Stale(legacyInvPay('ia', { rec: 'annual', status: 'upcoming', date: '2025-08-05' }));
+    const stiTry = attempt(sti, b2ToGoal('ia'));
+    invariant('FA3CB2.inv-goal.stale', 'An annual ISA £200 completed in August 2025, still paid in September 2026 (its completion an earlier occurrence the row no longer represents), relinked to Holiday: refused, nothing changed — the 2025-08 ISA completion stays ISA history, Holiday receives nothing (£1,000, simulated £1,000), ISA £5,200',
+      [stiTry, b2Active(sti), b2View(sti)], [[[REFUSED_MOVE], true], [['investment:iA', '2025-08', 200]], [1000, 1000, 5200]]);
+
+    const stg = b2Stale(legacyPay('ga', { rec: 'annual', status: 'upcoming', date: '2025-08-05', amount: 200 }));
+    const stgTotal = schema2(stg, null).goals.gH.shown + stg.snap().inv.iA;
+    const stgTry = attempt(stg, b2ToIsa('ga'));
+    invariant('FA3CB2.goal-inv.stale', 'The mirror: a stale paid annual Holiday £200 relinked to the ISA: refused, nothing changed — the 2025-08 Holiday completion stays, the row stays on Holiday, the ISA does not gain the £200 (£5,000); Holiday £1,200, simulated £1,200',
+      [stgTry, b2Active(stg), stg.state().payments[0].goalId, b2View(stg)], [[[REFUSED_MOVE], true], [['goal:gH', '2025-08', 200]], 'gH', [1200, 1200, 5000]]);
+
+    const sgg = b2Stale(legacyPay('ga', { rec: 'annual', status: 'upcoming', date: '2025-08-05', amount: 200 }), { goals: [HOLIDAY(), CAR()] });
+    const sggTry = attempt(sgg, a => a.editPayment('ga', { goalId: 'gB' }));
+    const sggSim = schema2(sgg, null).goals;
+    invariant('FA3CB2.goal-goal', 'Within goals nothing new is refused: the stale Holiday row moves to Car while its 2025-08 completion stays Holiday history (the template move does not rewrite it) — legacy Holiday £1,000 / Car £700, simulated Holiday £1,200 / Car £500, £1,700 either way; carried goal → goal moves stay FA3CB.carry.relink',
+      [sggTry[0], b2Active(sgg), [sgg.snap().goal.gH, sgg.snap().goal.gB], [sggSim.gH.shown, sggSim.gB.shown]], [[], [['goal:gH', '2025-08', 200]], [1000, 700], [1200, 500]]);
+
+    const ii = b2Ambiguous(null, { investments: [Object.assign(ISA(), { balance: 5200 }), PENSION()] });
+    const iiTry = attempt(ii, a => a.editPayment('im', { investId: 'iB' }));
+    invariant('FA3CB2.inv-inv.ambiguous', 'Within investments nothing new is refused: the ambiguous paid ISA row moves to the Pension (legacy ISA £5,000, Pension £3,200, no event; the undated investment evidence now names the Pension) — investment history stays legacy until FA-7',
+      [iiTry[0], [ii.snap().inv.iA, ii.snap().inv.iB], ii.events().length, (b2Candidate(ii, 'im') || {}).entityId], [[], [5000, 3200], 0, 'iB']);
+    const id2 = b2Dated(legacyInvPay('id', { rec: 'yes', status: 'upcoming', date: '2026-08-05' }), { investments: [ISA(), PENSION()] });
+    const id2Try = attempt(id2, a => a.editPayment('id', { investId: 'iB' }));
+    invariant('FA3CB2.inv-inv.dated', 'A dated ISA completion it represents moves to the Pension as the same occurrence: ISA completion reversed, Pension completion 2026-08; ISA £5,000, Pension £3,200',
+      [id2Try[0], b2Events(id2), [id2.snap().inv.iA, id2.snap().inv.iB]], [[], B2_MOVED('investment:iA', 'investment:iB', '2026-08'), [5000, 3200]]);
+
+    const oo = b2Ambiguous(legacyInvPay('io', { rec: 'no', date: '2026-06-10' }));
+    const ooTry = attempt(oo, b2ToGoal('io'));
+    const od = b2Ambiguous(legacyInvPay('ix', { rec: 'no', date: '' }));
+    const odTry = attempt(od, b2ToGoal('ix'));
+    invariant('FA3CB2.oneoff', 'One-off: a paid ISA one-off with a due date (FA-3B dated it 2026-06 at load) moves to Holiday as that occurrence — ISA completion reversed, Holiday completion 2026-06; Holiday £1,200 = simulated, ISA £5,000. One with no usable due date has no occurrence: refused, nothing changed, no date invented',
+      [ooTry[0], b2Events(oo), b2View(oo), odTry, od.events().length, b2View(od)],
+      [[], B2_MOVED('investment:iA', 'goal:gH', '2026-06'), [1200, 1200, 5000], [[REFUSED_MOVE], true], 0, [1000, 1000, 5200]]);
+
+    const an = b2Ambiguous(legacyInvPay('ian', { rec: 'annual', date: '2027-06-05' }));
+    const anTry = attempt(an, b2ToGoal('ian'));
+    const ad = b2Dated(legacyInvPay('iad', { rec: 'annual', status: 'upcoming', date: '2026-08-05' }));
+    const adTry = attempt(ad, b2ToGoal('iad'));
+    invariant('FA3CB2.recurring', 'Occurrence, not recurrence, decides: an ambiguous paid annual ISA row (like the monthly one above) is refused unchanged; an annual ISA row completed this month moves to Holiday as its 2026-08 occurrence (ISA completion reversed, Holiday completion 2026-08; Holiday £1,200 = simulated, ISA £5,000)',
+      [anTry, b2View(an), adTry[0], b2Events(ad), b2View(ad)],
+      [[[REFUSED_MOVE], true], [1000, 1000, 5200], [], B2_MOVED('investment:iA', 'goal:gH', '2026-08'), [1200, 1200, 5000]]);
+
+    const si = b2Ambiguous();
+    const siCand = b2Candidate(si, 'im');
+    const siTry = attempt(si, a => a.smartImport([{ name: 'im', amount: 200, date: '2026-06-05', link: 'goal:gH', mergeId: 'im' }]));
+    si.reload();
+    invariant('FA3CB2.smart-import', 'A Smart Import merge that would relink the ambiguous paid ISA row to Holiday is skipped by the same refusal: stored state unchanged (link, lastPaidYM, events, carry, activity log); after the next load ISA £5,200, Holiday £1,000 (simulated £1,000), the ISA evidence unchanged',
+      [siTry[1], si.state().payments[0].investId, si.state().payments[0].lastPaidYM, si.events().length, b2View(si), b2Candidate(si, 'im')],
+      [true, 'iA', '', 0, [1000, 1000, 5200], B2_CANDIDATE]);
+
+    invariant('FA3CB2.fa7-evidence', 'The undated ISA evidence FA-7 will carry survives every refused move: geodeLegacyCarryCandidate gives the same ISA £200 candidate before and after the refused form relink (and two reloads) and before and after the refused Smart Import merge',
+      [cand0, b2Candidate(amb, 'im'), siCand, b2Candidate(si, 'im')], [B2_CANDIDATE, B2_CANDIDATE, B2_CANDIDATE, B2_CANDIDATE]);
+
+    invariant('FA3CB2.no-invention', 'No relink manufactures occurrence evidence: refused moves leave lastPaidYM, events and carries as they were (ambiguous monthly after reloads, ambiguous annual, dateless one-off, Smart Import after reload); allowed moves record only the occurrence already proven (monthly and annual 2026-08, one-off 2026-06)',
+      [[amb, an, od, si].map(a => [a.state().payments[0].lastPaidYM, a.events().length, a.state().contributionCarry.length]), [dat, ad, oo].map(a => a.activeEvents().map(e => e.occurrenceYm))],
+      [[['', 0, 0], ['', 0, 0], ['', 0, 0], ['', 0, 0]], [['2026-08'], ['2026-08'], ['2026-06']]]);
+
+    const gdi = b2Dated(legacyPay('gd', { rec: 'yes', status: 'upcoming', date: '2026-08-05', amount: 200 }));
+    const total = a => schema2(a, null).goals.gH.shown + a.snap().inv.iA;
+    const gdiTotal = total(gdi);
+    const gdiTry = attempt(gdi, b2ToIsa('gd'));
+    invariant('FA3CB2.no-double-count', 'No goal ↔ investment relink counts one £200 under both simulated goal and legacy investment: the stale Holiday → ISA move is refused (£6,200 before and after); a represented Holiday completion moved to the ISA (Holiday completion reversed, ISA completion 2026-08) keeps £6,200 (simulated Holiday £1,000 + ISA £5,200)',
+      [stgTotal, total(stg), gdiTotal, gdiTry[0], b2Active(gdi), total(gdi)], [6200, 6200, 6200, [], [['investment:iA', '2026-08', 200]], 6200]);
+
+    invariant('FA3CB2.schema2-hole', 'After every goal ↔ investment relink above, allowed or refused, legacy Holiday equals simulated Holiday: ambiguous monthly, dated, unpaid then completed, stale ISA, stale Holiday, Holiday → ISA, one-off dated and dateless, annual ambiguous and dated, Smart Import',
+      [amb, dat, unp, sti, stg, gdi, oo, od, an, ad, si].map(a => b2View(a).slice(0, 2)),
+      [[1000, 1000], [1200, 1200], [1200, 1200], [1000, 1000], [1200, 1200], [1000, 1000], [1200, 1200], [1000, 1000], [1000, 1000], [1200, 1200], [1000, 1000]]);
+
+    const atm = b2Ambiguous(); attempt(atm, b2ToGoal('im'));
+    invariant('FA3CB2.atomic', 'Every refusal is atomic: the form refusals (ambiguous monthly and annual, dateless one-off, stale in both directions) and the Smart Import refusal left the whole stored state unchanged, and a refused form save keeps the edit\'s intent ("replace") for the retry',
+      [[ambTry, anTry, odTry, stiTry, stgTry].map(t => t[1]), siTry[1], atm.run('window._geodePayLinkedIntent')], [[true, true, true, true, true], true, 'replace']);
+
+    const card = { debts: [{ id: 'dC', name: 'Card', balance: 1000, minPayment: 50, apr: 25 }] };
+    const bl = b2Ambiguous(null, card), bd = b2Ambiguous(null, card);
+    const blTry = attempt(bl, a => a.editPayment('im', { investId: '' })), bdTry = attempt(bd, a => a.editPayment('im', { investId: '', debtId: 'dC' }));
+    invariant('FA3CB2.scope', 'Bill and debt destinations keep their FA-3C-B behaviour (for investment rows an FA-7 decision): the ambiguous paid ISA row can still become a bill or a debt payment (ISA £5,000 each)',
+      [blTry[0], bl.snap().inv.iA, bdTry[0], bd.snap().inv.iA], [[], 5000, [], 5000]);
+
+    const dl = b2Ambiguous(legacyInvPay('iz', { rec: 'yes', date: '2026-06-05', investId: 'iZ' }));
+    const dlTry = attempt(dl, b2ToGoal('iz'));
+    invariant('FA3CB2.dead-link', 'The rule protects an effect that counts, not a link field: a paid row still naming a removed investment adds nothing anywhere, so moving it to Holiday is not refused — it records the 2026-08 Holiday occurrence the save completes; Holiday £1,200 = simulated, ISA at its £5,000 base (the row never counted there)',
+      [dlTry[0], b2Active(dl), b2View(dl)], [[], [['goal:gH', '2026-08', 200]], [1200, 1200, 5000]]);
+  });
+}
+
 /** Completions FA-3B seeds for each legacy fixture: only rows whose stored fields prove a paid occurrence. */
 const MIG_SEEDED = {
   'goal-completed-one-off': [['p_one_off', 'goal:gH', '2026-06', 250, 'one_off', '2026-06-10', 'migration']],
@@ -3212,7 +3360,7 @@ function main() {
   fa3aLedger(); fa3aGoals(); fa3aInvestments(); fa3aSmartImport(); fa3aDeletion(); fa3aIdentity(); fa3aRollover(); fa3aProtection(); fa3aAnnual(); fa3aOccurrence();
   fa3bOrder(); fa3bMatrix(); fa3bPointers(); fa3bParity(); fa3bLifecycle();
   fa3caNormalise(); fa3caMatrix(); fa3caTransition(); fa3caResolutions(); fa3caLinkedAndCorrection(); fa3caLifecycle();
-  fa3cbActions(); fa3cbValidation(); fa3cbTimelines(); fa3cbIntegration();
+  fa3cbActions(); fa3cbValidation(); fa3cbTimelines(); fa3cbIntegration(); fa3cb2Boundary();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');
