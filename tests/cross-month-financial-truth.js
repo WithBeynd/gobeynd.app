@@ -76,6 +76,10 @@ const PRODUCTION_FUNCTIONS = [
   'geodeRecordContributionDeletion', 'geodeEnsureContributionCompletion',
   // legacy contribution seeding (FA-3B): load seeds completions that legacy paid rows prove
   'geodeLegacyContributionSeedFields', 'geodeSeedLegacyContributionEvents',
+  // legacy carry (FA-3C-A): payment-level carries and the schema-2 goal authority, simulated only
+  'geodeNormalizeContributionCarry', 'geodeContributionCarryValid', 'geodeContributionCarryResolutionValid',
+  'geodeContributionCarryLedger', 'geodeContributionCarryActive', 'geodeLegacyCarryCandidate', 'geodeSchema2TransitionCarryRecords',
+  'geodeSchema2GoalParts', 'geodeSchema2GoalPosition', 'geodeSchema2GoalEffectiveSaved', 'geodeSchema2GoalCorrectionBase',
   // Smart Import and backup export / restore extraction
   'geodeSmartImportConfirm', 'exportJSONBackup', 'isPlainObject', 'validateBeyndBackupEnvelope',
   'geodeBeyndBackupRestorableKeyWhitelist', 'geodeBeyndBackupForbiddenDataKeys', 'extractRestorableData',
@@ -157,6 +161,7 @@ function geodePlanReadinessState() { return 'active'; }
 function __reload() {
   S = JSON.parse(__store);
   geodeNormalizeContributionEvents(S);
+  geodeNormalizeContributionCarry(S);
   geodeSeedLegacyContributionEvents();
   syncRecurringPayments();
   migratePaymentFlowFields();
@@ -230,6 +235,28 @@ function __eventAuthority() {
     (S.goals || []).forEach(function (g) { goal[g.id] = geodeGoalEffectiveSavedFromState(S, g); });
     (S.investments || []).forEach(function (i) { inv[i.id] = toNum(i.balance); });
     return JSON.stringify({ goal: goal, inv: inv });
+  } finally {
+    S = keep;
+  }
+}
+
+/**
+ * FA-3C-A simulation, measured on a copy: the carries the schema 1→2 transition would create (none when createdAt is
+ * null), and per goal what the app displays now beside the schema-2 parts, position and display.
+ */
+function __schema2(createdAt) {
+  var keep = S;
+  try {
+    S = JSON.parse(JSON.stringify(keep));
+    var created = createdAt === null ? [] : geodeSchema2TransitionCarryRecords(S, createdAt);
+    S.contributionCarry = (S.contributionCarry || []).concat(created);
+    geodeNormalizeContributionCarry(S);
+    var goals = {};
+    (S.goals || []).forEach(function (g) {
+      goals[g.id] = { legacy: geodeGoalEffectiveSavedFromState(S, g), parts: geodeSchema2GoalParts(S, g),
+        position: geodeSchema2GoalPosition(S, g), shown: geodeSchema2GoalEffectiveSaved(S, g) };
+    });
+    return JSON.stringify({ created: created, carry: S.contributionCarry, active: geodeContributionCarryActive(S), goals: goals });
   } finally {
     S = keep;
   }
@@ -635,7 +662,7 @@ const signature = rows => rows.map(r => ({ rec: r.rec, amount: r.amount })).sort
 function harnessFidelity() {
   scenario('Harness fidelity — shims mirror production boot and render', () => {
     const load = PROGRAM.structural.load;
-    const order = ['geodeNormalizeContributionEvents(S);', 'geodeSeedLegacyContributionEvents();', 'syncRecurringPayments();', 'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();',
+    const order = ['geodeNormalizeContributionEvents(S);', 'geodeNormalizeContributionCarry(S);', 'geodeSeedLegacyContributionEvents();', 'syncRecurringPayments();', 'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();',
       'geodeNormalizeSavingsReleases(S);', 'geodeNormalizeDebtPaymentEvents(S);', 'geodeRecomputeBalancesFromPayments();'];
     const at = order.map(c => load.indexOf(c));
     invariant('fidelity.load', 'load() runs the reload-shim sequence in this order', at.every((p, i) => p >= 0 && (i === 0 || p > at[i - 1])), true);
@@ -2439,6 +2466,349 @@ function fa3bLifecycle() {
   });
 }
 
+// FA-3C-A: payment-level legacy carries and the schema-2 goal authority, simulated on copies; nothing financial reads either yet.
+
+const FA3CA_AT = 1790000000000;
+/** Schema-2 simulation on a copy of the loaded state: transition carries created at createdAt (null: none created). */
+const schema2 = (app, createdAt) => JSON.parse(app.run('__schema2(' + JSON.stringify(createdAt === undefined ? FA3CA_AT : createdAt) + ')'));
+/** [payment, entity, kind, amount, recurrence, dueDateSnapshot, source] */
+const carryRows = list => list.filter(c => c.kind !== 'resolution').map(c => [c.paymentId, c.entityType + ':' + c.entityId, c.kind, c.amount, c.recurrence, c.dueDateSnapshot, c.source]);
+/** [carry, entity, amount] */
+const activeCarryRows = list => list.map(c => [c.carryId, c.entityType + ':' + c.entityId, c.amount]);
+const CARRY = (id, paymentId, o) => Object.assign({ id, paymentId, entityType: 'goal', entityId: 'gH', kind: 'undated_contribution', amount: 250,
+  recurrence: 'monthly', dueDateSnapshot: '2026-06-03', createdAt: FA3CA_AT, source: 'schema2_transition' }, o);
+const NEG_CARRY = (id, paymentId, o) => CARRY(id, paymentId, Object.assign({ kind: 'legacy_negative_effect', amount: -50, recurrence: 'one_off', dueDateSnapshot: '2026-06-10' }, o));
+const RESOLUTION = (id, carryId, reason, o) => Object.assign({ id, kind: 'resolution', carryId, reason, recordedAt: FA3CA_AT + 1000, source: 'test' }, o);
+const CAR = () => ({ id: 'gB', name: 'Car', amount: 3000, saved: 500, baseSaved: 500, monthly: 0, cat: 'other' });
+/** The production carry ledger applied to a list. */
+const carryLedger = (app, list) => { app.ctx.__argsJson = JSON.stringify([list]); return JSON.parse(app.run('JSON.stringify(geodeContributionCarryLedger.apply(null, JSON.parse(__argsJson)))')); };
+/**
+ * Holiday: dated one-off £250, ambiguous monthly £100 (GA), ambiguous annual £250 (GB), negative −£50 (GX), event-derived release £200;
+ * Car: ambiguous monthly £40; ISA: ambiguous monthly £200; a paid one-off linked to a deleted goal.
+ */
+const CARRY_MIX = legacyState({}, {
+  goals: [Object.assign(HOLIDAY(), { saved: 1350 }), Object.assign(CAR(), { saved: 540 })], investments: [Object.assign(ISA(), { balance: 5200 })],
+  payments: [legacyPay('p1'), legacyPay('px', { amount: 100, rec: 'yes', date: '2026-06-03' }), legacyPay('pa', { rec: 'annual', date: '2027-06-10' }),
+    legacyPay('pn', { amount: -50 }), legacyPay('pb', { amount: 40, rec: 'yes', date: '2026-06-04', goalId: 'gB' }),
+    legacyInvPay('im', { rec: 'yes', date: '2026-06-05' }), legacyPay('pg', { goalId: 'gGone' })],
+  savingsReleases: [EVENT_RELEASE] });
+const CARRY_MIX_CARRIES = [['px', 'goal:gH', 'undated_contribution', 100, 'monthly', '2026-06-03', 'schema2_transition'],
+  ['pa', 'goal:gH', 'undated_contribution', 250, 'annual', '2027-06-10', 'schema2_transition'],
+  ['pn', 'goal:gH', 'legacy_negative_effect', -50, 'one_off', '2026-06-10', 'schema2_transition'],
+  ['pb', 'goal:gB', 'undated_contribution', 40, 'monthly', '2026-06-04', 'schema2_transition']];
+
+function fa3caNormalise() {
+  scenario('FA-3C-A CARRY NORMALISATION — invalid, duplicate and malformed records cannot count', () => {
+    const app = new App(baseState(), '2026-08-10');
+    const C1 = CARRY('c1', 'pA'), N1 = NEG_CARRY('n1', 'pN'), R1 = RESOLUTION('r1', 'c1', 'amended', { amount: 200 });
+    const loadWith = value => { const a = new App(Object.assign(baseState(), { contributionCarry: value }), '2026-08-10'); a.reload(); return a.state().contributionCarry; };
+    invariant('FA3CA.normalise.collection', 'Missing, null, object, text and number collections load as []; a valid collection (positive carry, negative effect, resolution) loads unchanged, signs kept',
+      [loadWith(undefined), loadWith(null), loadWith({ c1: C1 }), loadWith('[]'), loadWith(5), loadWith([C1, N1, R1]), activeCarryRows(carryLedger(app, [C1, N1]).active)],
+      [[], [], [], [], [], [C1, N1, R1], [['c1', 'goal:gH', 250], ['n1', 'goal:gH', -50]]]);
+
+    const INVALID = [['no id', CARRY('', 'pB')], ['no payment', CARRY('x1', '')], ['payment not text', CARRY('x2', 7)],
+      ['debt entity', CARRY('x3', 'pC', { entityType: 'debt' })], ['no entity id', CARRY('x4', 'pD', { entityId: '' })],
+      ['unknown kind', CARRY('x5', 'pE', { kind: 'contribution' })], ['zero', CARRY('x6', 'pF', { amount: 0 })],
+      ['negative undated_contribution', CARRY('x7', 'pG', { amount: -10 })], ['positive legacy_negative_effect', NEG_CARRY('x8', 'pH', { amount: 10 })],
+      ['amount as text', CARRY('x9', 'pI', { amount: '250' })], ['amount missing', CARRY('x10', 'pJ', { amount: null })],
+      ['unknown recurrence', CARRY('x11', 'pK', { recurrence: 'weekly' })], ['no createdAt', CARRY('x12', 'pL', { createdAt: undefined })],
+      ['due date not text', CARRY('x13', 'pM', { dueDateSnapshot: null })], ['other source', CARRY('x14', 'pO', { source: 'mark_completed' })],
+      ['names an occurrenceYm', CARRY('x15', 'pP', { occurrenceYm: '2026-06' })], ['array', [CARRY('x16', 'pQ')]], ['null', null], ['text', 'carry']];
+    invariant('FA3CA.normalise.invalid', 'Dropped: ' + INVALID.map(x => x[0]).join(', ') + '; the valid carry survives',
+      carryLedger(app, [C1].concat(INVALID.map(x => x[1]))).kept.map(c => c.id), ['c1']);
+
+    const later = CARRY('c1b', 'pA', { createdAt: FA3CA_AT + 5, amount: 999 });
+    const dup = carryLedger(app, [later, CARRY('c1z', 'pA', { amount: 999 }), C1, CARRY('c1', 'pZ', { amount: 999 })]);
+    invariant('FA3CA.normalise.duplicates', 'Duplicate id: the first record wins; more carries for one payment: the earliest (createdAt, then id) wins whatever the array order — £250 active once',
+      [dup.kept.map(c => c.id + ' £' + c.amount), activeCarryRows(dup.active)], [['c1 £250'], [['c1', 'goal:gH', 250]]]);
+
+    const BAD = [['unknown carry', RESOLUTION('q1', 'nope', 'reversed')], ['unknown reason', RESOLUTION('q2', 'c1', 'deleted')],
+      ['amended to 0', RESOLUTION('q3', 'c1', 'amended', { amount: 0 })], ['amended across sign', RESOLUTION('q4', 'c1', 'amended', { amount: -20 })],
+      ['moved to a debt', RESOLUTION('q5', 'c1', 'moved', { entityType: 'debt', entityId: 'dC' })], ['dated without an event', RESOLUTION('q6', 'c1', 'dated')],
+      ['no recordedAt', RESOLUTION('q7', 'c1', 'reversed', { recordedAt: undefined })], ['resolves a dropped duplicate carry', RESOLUTION('q8', 'c1b', 'reversed')],
+      ['shares the carry id', RESOLUTION('c1', 'c1', 'reversed')]];
+    const res = carryLedger(app, [C1, later].concat(BAD.map(x => x[1])));
+    const dupRes = carryLedger(app, [C1, R1, RESOLUTION('r1', 'c1', 'reversed')]);
+    invariant('FA3CA.normalise.resolution', 'Resolutions dropped: ' + BAD.map(x => x[0]).join(', ') + ' — £250 stays active; a duplicate resolution id applies once (the first: amended to £200)',
+      [res.kept.map(r => r.id), activeCarryRows(res.active), dupRes.kept.map(r => r.id + ':' + (r.reason || r.kind)), activeCarryRows(dupRes.active)],
+      [['c1'], [['c1', 'goal:gH', 250]], ['c1:undated_contribution', 'r1:amended'], [['c1', 'goal:gH', 200]]]);
+
+    const full = [C1, N1, CARRY('c2', 'pB', { entityId: 'gB' }), RESOLUTION('r1', 'c1', 'amended', { amount: 200, recordedAt: FA3CA_AT + 1 }),
+      RESOLUTION('r2', 'c1', 'amended', { amount: 180, recordedAt: FA3CA_AT + 2 }), RESOLUTION('r3', 'c2', 'moved', { entityType: 'goal', entityId: 'gH', recordedAt: FA3CA_AT + 1 }), later];
+    const orders = [full, full.slice().reverse(), [full[3], full[6], full[0], full[5], full[1], full[4], full[2]]];
+    const actives = orders.map(o => activeCarryRows(carryLedger(app, o).active).sort((a, b) => a[0].localeCompare(b[0])));
+    invariant('FA3CA.normalise.deterministic', 'Three array orders of the same records give the same active carries',
+      actives, orders.map(() => [['c1', 'goal:gH', 180], ['c2', 'goal:gH', 250], ['n1', 'goal:gH', -50]]));
+  });
+
+  scenario('FA-3C-A ACTIVE CARRY — resolution semantics (pure model; no action is wired)', () => {
+    const app = new App(baseState(), '2026-08-10');
+    const C1 = CARRY('c1', 'pA'), N1 = NEG_CARRY('n1', 'pN');
+    const act = list => activeCarryRows(carryLedger(app, list).active);
+    invariant('FA3CA.active.unresolved', 'Unresolved undated_contribution £250 → +£250; unresolved legacy_negative_effect −£50 → −£50',
+      act([C1, N1]), [['c1', 'goal:gH', 250], ['n1', 'goal:gH', -50]]);
+    invariant('FA3CA.active.resolutions', 'reversed → inactive; amended £250 → £200 → one active £200; moved Holiday → Car → one active on Car; dated → inactive (the dated completion owns the amount); nothing applies after reversed; amendments apply in recordedAt order whatever the array order; a negative effect amends to −£30',
+      [act([C1, RESOLUTION('a', 'c1', 'reversed')]), act([C1, RESOLUTION('a', 'c1', 'amended', { amount: 200 })]),
+        act([C1, RESOLUTION('a', 'c1', 'moved', { entityType: 'goal', entityId: 'gB' })]), act([C1, RESOLUTION('a', 'c1', 'dated', { eventId: 'cev_x' })]),
+        act([C1, RESOLUTION('a', 'c1', 'reversed', { recordedAt: FA3CA_AT + 1 }), RESOLUTION('b', 'c1', 'amended', { amount: 200, recordedAt: FA3CA_AT + 2 })]),
+        act([C1, RESOLUTION('a', 'c1', 'amended', { amount: 180, recordedAt: FA3CA_AT + 3 }), RESOLUTION('b', 'c1', 'amended', { amount: 200, recordedAt: FA3CA_AT + 2 })]),
+        act([N1, RESOLUTION('a', 'n1', 'amended', { amount: -30 })])],
+      [[], [['c1', 'goal:gH', 200]], [['c1', 'goal:gB', 250]], [], [], [['c1', 'goal:gH', 180]], [['n1', 'goal:gH', -30]]]);
+  });
+}
+
+/** Transition carries per FA-3B goal fixture (none for the others). */
+const FA3CA_CARRIES = {
+  'monthly-ambiguous': [['pm', 'goal:gH', 'undated_contribution', 100, 'monthly', '2026-06-03', 'schema2_transition']],
+  'annual-ambiguous': [['pa', 'goal:gH', 'undated_contribution', 250, 'annual', '2027-06-10', 'schema2_transition']],
+  'annual-ambiguous-past': [['pa', 'goal:gH', 'undated_contribution', 250, 'annual', '2026-06-10', 'schema2_transition']],
+  'negative': [['pn', 'goal:gH', 'legacy_negative_effect', -50, 'one_off', '2026-06-10', 'schema2_transition']]
+};
+/** [base, dated, carry, released] per goal fixture. */
+const FA3CA_PARTS = { 'base-only': [1000, 0, 0, 0], 'one-off': [1000, 250, 0, 0], 'annual-safe': [1000, 250, 0, 0], 'monthly-current': [1000, 100, 0, 0],
+  'monthly-prior-unsynced': [1000, 250, 0, 0], 'monthly-lost': [1000, 0, 0, 0], 'release-event': [1000, 0, 0, 200], 'release-base-delta': [800, 0, 0, 0],
+  'oneoff-release': [1000, 250, 0, 200], 'recurring-release': [1000, 250, 0, 200], 'deposit-base': [1050, 0, 0, 0], 'd3-residue': [1250, 250, 0, 0],
+  'no-base': [1250, 250, 0, 0], 'monthly-ambiguous': [1000, 0, 100, 0], 'annual-ambiguous': [1000, 0, 250, 0], 'annual-ambiguous-past': [1000, 0, 250, 0],
+  'negative': [1000, 0, -50, 0], 'scope': [1000, 0, 0, 0] };
+const FA3CA_CLASS = {
+  'monthly-prior-unsynced': 'CORRECTNESS RESTORATION (D1): the dated June completion alone restores £250; no carry, no residual',
+  'monthly-lost': 'NO HISTORICAL EVIDENCE: no event, no carry (the activity log is not evidence)',
+  'monthly-ambiguous': 'KNOWN AMOUNT, UNKNOWN OCCURRENCE: undated_contribution carry, no occurrence month',
+  'annual-ambiguous': 'KNOWN AMOUNT, UNKNOWN OCCURRENCE: undated_contribution carry, no occurrence month',
+  'annual-ambiguous-past': 'KNOWN AMOUNT, UNKNOWN OCCURRENCE: undated_contribution carry, no occurrence month',
+  'negative': 'SIGNED LEGACY EFFECT: legacy_negative_effect carry; no event, no release',
+  'release-base-delta': 'IDENTICAL: the legacy base-delta release stays inside baseSaved',
+  'd3-residue': 'IDENTICAL: possible old D3 residue kept as stored (base and dated completion, no carry)',
+  'no-base': 'IDENTICAL after the pre-existing load normalisation (stored £1,250 without baseSaved → base £1,250 + dated £250)',
+  'scope': 'IDENTICAL: the row of a deleted goal, debt and bill rows, upcoming and overdue rows carry nothing'
+};
+
+function fa3caMatrix() {
+  const mismatches = [];
+  FA3B_GOALS.forEach(c => {
+    const [key, name, state, clock, , , shown] = c;
+    scenario('FA-3C-A AUTHORITY SIMULATION — ' + name, () => {
+      const app = fa3bLoad(state, clock, true);
+      const sim = schema2(app), again = schema2(app);
+      const g = sim.goals.gH, p = g.parts;
+      const dated = app.activeEvents().map(e => e.paymentId);
+      const simulated = key === 'monthly-prior-unsynced' ? 1250 : shown;
+      const parts = FA3CA_PARTS[key];
+      if (round(g.shown) !== round(g.legacy)) mismatches.push([key, round(g.legacy), round(g.shown)]);
+      invariant('FA3CA.goal.' + key, 'legacy ' + show(shown) + '; base ' + show(parts[0]) + ' + dated ' + show(parts[1]) + ' + carry ' + show(parts[2]) +
+        ' − released ' + show(parts[3]) + ' = simulated ' + show(simulated) + ' — ' + (FA3CA_CLASS[key] || 'IDENTICAL') +
+        '; ordinary load stores no carry; no payment both dated and carried; repeat identical; releases untouched',
+        { legacy: g.legacy, parts: [p.base, p.dated, p.carry, p.released], simulated: g.shown, carries: carryRows(sim.created), stored: app.state().contributionCarry,
+          both: sim.created.filter(x => dated.indexOf(x.paymentId) >= 0).length, repeat: same(again, sim), releases: app.state().savingsReleases.length },
+        { legacy: shown, parts, simulated, carries: FA3CA_CARRIES[key] || [], stored: [], both: 0, repeat: true, releases: state.savingsReleases.length });
+    });
+  });
+  scenario('FA-3C-A AUTHORITY SIMULATION — the full goal matrix', () => {
+    invariant('FA3CA.goal.mismatch-explained', 'Simulated authority equals the legacy display for every goal fixture except G4, the intended D1 restoration (£1,000 → £1,250)',
+      mismatches, [['monthly-prior-unsynced', 1000, 1250]]);
+  });
+
+  scenario('FA-3C-A RELEASE CLAMP — a release larger than the position clamps at £0 exactly as the recompute does', () => {
+    const app = fa3bLoad(legacyState({ saved: 0, baseSaved: 100 }, { payments: [legacyPay('px', { amount: 50, rec: 'yes', date: '2026-06-03' })], savingsReleases: [EVENT_RELEASE] }), '2026-08-10', true);
+    const sim = schema2(app);
+    invariant('FA3CA.release.clamp', 'Base £100 + ambiguous monthly £50 (carry) − event-derived release £200: legacy £0, simulated £0 (clamped, not −£50)',
+      [app.snap().goal.gH, sim.goals.gH.parts, sim.goals.gH.shown], [0, { base: 100, dated: 0, carry: 50, released: 200 }, 0]);
+  });
+
+  scenario('FA-3C-A G4 — June close, first July load, schema-2 simulation', () => {
+    const G4 = FA3B_GOALS.filter(c => c[0] === 'monthly-prior-unsynced')[0];
+    const app = new App(G4[2], '2026-06-30');
+    app.reload();
+    const june = app.snap().goal.gH;
+    app.advance('2026-07-02', 'reload');
+    const sim = schema2(app);
+    invariant('FA3CA.g4.restoration', 'June close £1,250; first July load (FA-3B seed, then legacy sync) £1,000; simulated £1,250 from the dated June completion alone — CORRECTNESS RESTORATION, no carry, no residual',
+      [june, app.snap().goal.gH, seededRows(app), sim.created, sim.goals.gH.parts, sim.goals.gH.shown],
+      [1250, 1000, [['pm', 'goal:gH', '2026-06', 250, 'monthly', '', 'migration']], [], { base: 1000, dated: 250, carry: 0, released: 0 }, 1250]);
+  });
+}
+
+function fa3caTransition() {
+  scenario('FA-3C-A TRANSITION — eligibility, payment identity, idempotency and the investment deferral', () => {
+    const app = fa3bLoad(CARRY_MIX, '2026-08-20', true);
+    const sim = schema2(app);
+    const owners = app.state().payments.filter(p => p.status === 'paid' && Number(p.amount) && ['gH', 'gB'].indexOf(p.goalId) >= 0)
+      .map(p => [p.id, [app.activeEvents().some(e => e.paymentId === p.id) && 'dated', sim.created.some(c => c.paymentId === p.id) && 'carry'].filter(Boolean)]);
+    invariant('FA3CA.transition.eligibility', 'Carries for the paid goal rows no dated completion owns — ambiguous monthly £100, ambiguous annual £250, negative −£50, Car monthly £40; none for the dated one-off, the ISA row or the deleted goal\'s row; every counted goal payment has exactly one owner; Holiday £1,350 and Car £540 simulated as displayed',
+      [carryRows(sim.created), owners, [sim.goals.gH.legacy, sim.goals.gH.shown, sim.goals.gB.legacy, sim.goals.gB.shown]],
+      [CARRY_MIX_CARRIES, [['p1', ['dated']], ['px', ['carry']], ['pa', ['carry']], ['pn', ['carry']], ['pb', ['carry']]], [1350, 1350, 540, 540]]);
+
+    const other = schema2(app, FA3CA_AT + 99);
+    app.run('S.contributionCarry = ' + JSON.stringify(sim.created) + '; save(); __reload();');
+    const stored = app.state().contributionCarry;
+    app.reload(); app.render(); app.reload();
+    const after = schema2(app);
+    app.run('S.contributionCarry = [' + JSON.stringify(RESOLUTION('rx', 'carry_px', 'reversed')) + '].concat(S.contributionCarry);');
+    invariant('FA3CA.transition.idempotent', 'The same state gives the same records (ids derive from the payment); another creation time gives the same carry set; once stored they survive reloads, a repeat creates nothing, and a payment with a resolved carry gets no second one; simulated Holiday stays £1,350',
+      [same(schema2(fa3bLoad(CARRY_MIX, '2026-08-20', true)).created, sim.created), sim.created.map(c => c.id), same(carryRows(other.created), carryRows(sim.created)),
+        same(stored, sim.created), same(app.state().contributionCarry.slice(1), sim.created), after.created, schema2(app).created, after.goals.gH.shown],
+      [true, ['carry_px', 'carry_pa', 'carry_pn', 'carry_pb'], true, true, true, [], [], 1350]);
+
+    const inv = fa3bLoad(CARRY_MIX, '2026-08-20', true);
+    const candidate = a => JSON.parse(a.run('JSON.stringify(geodeLegacyCarryCandidate(S, S.payments.filter(function (p) { return p.id === "im"; })[0], {}))'));
+    const before = [candidate(inv), inv.snap().inv.iA];
+    const months = ['2026-09-02', '2026-10-02', '2026-11-02', '2026-12-02', '2027-01-02', '2027-02-02', '2027-03-02', '2027-04-02', '2027-05-02', '2027-06-02', '2027-07-02', '2027-08-02'];
+    months.forEach(m => inv.advance(m, 'reload'));
+    const im = inv.state().payments.filter(p => p.id === 'im')[0];
+    invariant('FA3CA.inv.deferred', 'Investments keep legacy authority: the transition creates no ISA carry; the ambiguous ISA row stays as evidence through twelve monthly reloads (paid £200, no lastPaidYM, no event, ISA £5,200), so FA-7 can derive the same +£200 carry later',
+      [sim.created.filter(c => c.entityType !== 'goal').length, before, [im.status, im.amount, im.lastPaidYM || '', inv.events().filter(e => e.paymentId === 'im').length],
+        candidate(inv), inv.snap().inv.iA],
+      [0, [{ paymentId: 'im', entityType: 'investment', entityId: 'iA', kind: 'undated_contribution', amount: 200, recurrence: 'monthly', dueDateSnapshot: '2026-06-05' }, 5200],
+        ['paid', 200, '', 0], { paymentId: 'im', entityType: 'investment', entityId: 'iA', kind: 'undated_contribution', amount: 200, recurrence: 'monthly', dueDateSnapshot: '2026-06-05' }, 5200]);
+
+    const GA = FA3B_GOALS.filter(c => c[0] === 'monthly-ambiguous')[0];
+    const resaved = new App(GA[2], '2026-08-10');
+    resaved.reload();
+    resaved.run('S.contributionCarry = ' + JSON.stringify(schema2(resaved).created) + '; save(); __reload();');
+    resaved.at('2026-08-12'); resaved.editPayment('pm', { name: 'Holiday monthly (renamed)' });
+    const stamped = resaved.state().payments[0].lastPaidYM;
+    resaved.reload();
+    const aug = [resaved.events().length, resaved.snap().goal.gH, schema2(resaved, null).goals.gH.shown];
+    resaved.advance('2026-09-02', 'reload');
+    invariant('FA3CA.seed.carry-witnessed', 'A carried amount is never dated again: the GA row with its £100 carry, re-saved through the form in August (lastPaidYM stamped 2026-08), gets no migration event on the next load and no rollover safety-net event at the September reset; simulated Holiday stays £1,100 (legacy £1,100, then £1,000 after the reset, D1)',
+      [stamped, aug, [resaved.events().length, resaved.snap().goal.gH, schema2(resaved, null).goals.gH.shown]], ['2026-08', [0, 1100, 1100], [0, 1000, 1100]]);
+
+    const orphan = fa3bLoad(Object.assign(JSON.parse(JSON.stringify(CARRY_MIX)), { contributionCarry: [CARRY('carry_old', 'pOld', { entityId: 'gGone', amount: 300 })] }), '2026-08-20', true);
+    const orphanSim = schema2(orphan);
+    invariant('FA3CA.orphan', 'No carry for the paid row of a deleted goal; an existing carry whose goal is gone is kept as history but counts toward no goal',
+      [orphanSim.created.some(c => c.paymentId === 'pg'), orphan.state().contributionCarry.map(c => c.id), orphanSim.goals.gH.parts.carry, orphanSim.goals.gB.parts.carry],
+      [false, ['carry_old'], 300, 40]);
+  });
+}
+
+function fa3caResolutions() {
+  scenario('FA-3C-A RESOLUTIONS — each resolution matches what the legacy display does for the same user action', () => {
+    const ACT = legacyState({}, { goals: [Object.assign(HOLIDAY(), { saved: 1100 }), CAR()], payments: [legacyPay('px', { amount: 100, rec: 'yes', date: '2026-06-03' })] });
+    const DATED = { id: 'cev_dated', eventType: 'completion', paymentId: 'px', entityType: 'goal', entityId: 'gH', occurrenceYm: '2026-06', amount: 100,
+      recurrence: 'monthly', dueDateSnapshot: '2026-06-03', recordedAt: FA3CA_AT + 1000, source: 'user_dated' };
+    const run = ([label, act, resolution, events]) => {
+      const app = new App(ACT, '2026-08-10');
+      app.reload();
+      const created = schema2(app).created;
+      act(app);
+      const res = resolution ? [RESOLUTION('res1', created[0].id, resolution.reason, resolution)] : [];
+      app.run('S.contributionCarry = ' + JSON.stringify(created.concat(res)) + '; S.contributionEvents = S.contributionEvents.concat(' + JSON.stringify(events || []) + ');');
+      const sim = schema2(app, null), s = app.snap();
+      return [label, s.goal.gH, s.goal.gB, sim.goals.gH.shown, sim.goals.gB.shown, sim.goals.gH.parts.dated, sim.goals.gH.parts.carry];
+    };
+    invariant('FA3CA.resolution.actions', '[action, legacy Holiday, legacy Car, simulated Holiday, simulated Car, dated, carry]: none; undo and delete → reversed; edit £100 → £80 → amended; relink to Car → moved; user dates it June → dated + dated completion, position unchanged',
+      [['none', () => {}], ['undo', a => a.toggle('px'), { reason: 'reversed' }], ['delete', a => a.del('px'), { reason: 'reversed' }],
+        ['amend', a => a.editPayment('px', { amount: 80 }), { reason: 'amended', amount: 80 }],
+        ['move', a => a.editPayment('px', { goalId: 'gB' }), { reason: 'moved', entityType: 'goal', entityId: 'gB' }],
+        ['date', () => {}, { reason: 'dated', eventId: 'cev_dated' }, [DATED]]].map(run),
+      [['none', 1100, 500, 1100, 500, 0, 100], ['undo', 1000, 500, 1000, 500, 0, 0], ['delete', 1000, 500, 1000, 500, 0, 0],
+        ['amend', 1080, 500, 1080, 500, 0, 80], ['move', 1000, 600, 1000, 600, 0, 0], ['date', 1100, 500, 1100, 500, 100, 0]]);
+  });
+}
+
+function fa3caLinkedAndCorrection() {
+  scenario('FA-3C-A LINKED GOAL — linked goals stay investment-derived; nothing counts twice', () => {
+    const linked = (inv, payments) => legacyState({}, { goals: [Object.assign(HOLIDAY(), { saved: 1350 })], investments: [Object.assign(ISA(), { goalId: 'gH' }, inv)], payments });
+    const goalRows = [legacyPay('pg'), legacyPay('px', { amount: 100, rec: 'yes', date: '2026-06-03' })];
+    const look = state => {
+      const app = fa3bLoad(state, '2026-08-10', true);
+      const sim = schema2(app);
+      return [app.snap().goal.gH, sim.goals.gH.position, sim.goals.gH.shown, sim.goals.gH.parts.dated, sim.goals.gH.parts.carry, carryRows(sim.created).map(c => c[0]), app.snap().inv.iA];
+    };
+    invariant('FA3CA.linked', '[legacy shown, simulated position, simulated shown, dated, carry, carried payments, ISA]: ISA £5,200 linked → Holiday shows the ISA in both (its own position £1,350 = £1,000 + dated £250 + carry £100; the ISA completion £200 never enters it); ISA at £0 → Holiday shows its position £1,350 in both',
+      [look(linked({ balance: 5200 }, goalRows.concat([legacyInvPay('pi', { date: '2026-06-05' })]))), look(linked({ balance: 0, baseBalance: 0 }, goalRows))],
+      [[5200, 1350, 5200, 250, 100, ['px'], 5200], [1350, 1350, 1350, 250, 100, ['px'], 0]]);
+  });
+
+  scenario('FA-3C-A SAVED SO FAR — schema-2 correction arithmetic (simulation; saveGoal unchanged)', () => {
+    const correct = (state, clock, entered) => {
+      const app = fa3bLoad(state, clock, true);
+      const out = JSON.parse(app.run('(function () { var keep = S; try { S = JSON.parse(JSON.stringify(keep)); S.contributionCarry = S.contributionCarry.concat(geodeSchema2TransitionCarryRecords(S, ' + FA3CA_AT + ')); ' +
+        'var g = S.goals[0], shown = geodeSchema2GoalEffectiveSaved(S, g), base = geodeSchema2GoalCorrectionBase(S, g, ' + JSON.stringify(entered) + '); if (base !== null) g.baseSaved = base; ' +
+        'return JSON.stringify([shown, base, geodeSchema2GoalPosition(S, g), geodeSchema2GoalEffectiveSaved(S, g)]); } finally { S = keep; } })()'));
+      return out;
+    };
+    const mixed = legacyState({ saved: 1300 }, { payments: [legacyPay('p1'), legacyPay('px', { amount: 100, rec: 'yes', date: '2026-06-03' })],
+      savingsReleases: [Object.assign({}, EVENT_RELEASE, { amount: 50, remainingBalance: 1300 })] });
+    const gx = FA3B_GOALS.filter(c => c[0] === 'negative')[0][2];
+    const linked = legacyState({ saved: 1350 }, { investments: [Object.assign(ISA(), { goalId: 'gH', balance: 5000 })], payments: [legacyPay('p1'), legacyPay('px', { amount: 100, rec: 'yes', date: '2026-06-03' })] });
+    invariant('FA3CA.correction', '[shown, new base, position, shown after]: base £1,000 + dated £250 + carry £100 − release £50 = £1,300, enter £1,200 → base £900 → £1,200; GX £950, enter £900 → base £950 (signed carry −£50) → £900; enter £200 or −£5 → refused, unchanged; linked goal: enter £1,500 → base £1,150, position £1,500, still shows the ISA £5,000',
+      [correct(mixed, '2026-08-10', 1200), correct(gx, '2026-08-10', 900), correct(mixed, '2026-08-10', 200), correct(mixed, '2026-08-10', -5), correct(linked, '2026-08-10', 1500)],
+      [[1300, 900, 1200, 1200], [950, 950, 900, 900], [1300, null, 1300, 1300], [1300, null, 1300, 1300], [5000, 1150, 1500, 5000]]);
+
+    const g3 = FA3B_GOALS.filter(c => c[0] === 'monthly-current')[0];
+    const app = fa3bLoad(g3[2], g3[3], true);
+    const toasts = app.editGoal('gH', { gs: '1500' });
+    invariant('FA3CA.fa2-guard', 'Production keeps the FA-2 refusal (monthly completion this month): Saved So Far £1,500 refused, base £1,000, Holiday £1,100; the schema-2 simulation would store base £1,400 and show £1,500',
+      [toasts.length === 1 && toasts[0].indexOf('can\u2019t safely update') >= 0, app.state().goals[0].baseSaved, app.snap().goal.gH, correct(g3[2], g3[3], 1500)],
+      [true, 1000, 1100, [1100, 1400, 1500, 1500]]);
+
+    const neg = new App(baseState({ incomeExplicitlySet: true }), '2026-06-05');
+    const left = neg.snap().left;
+    neg.contribute({ name: 'Holiday minus', amount: -50, date: '2026-06-02', status: 'paid', goalId: 'gH' });
+    current('FA3CA.negative-input', 'The payment form still accepts a paid −£50 Holiday row (FA-3C-B owns validation): stored −£50, Holiday £950, no event, Monthly Left £3,000 → £3,050',
+      [neg.state().payments.map(p => p.amount), neg.snap().goal.gH, neg.events().length, left, neg.snap().left], [[-50], 950, 0, 3000, 3050]);
+  });
+}
+
+function fa3caLifecycle() {
+  scenario('FA-3C-A OBSERVATIONAL — £5,000 carries change no production surface; the simulation sees them', () => {
+    const real = fa3bLoad(CARRY_MIX, '2026-08-20', true).state();
+    const faked = JSON.parse(JSON.stringify(real));
+    faked.contributionCarry = [CARRY('fake-goal', 'ghost-g', { amount: 5000 }), CARRY('fake-inv', 'ghost-i', { entityType: 'investment', entityId: 'iA', amount: 5000 }),
+      CARRY('fake-row', 'px', { amount: 5000 }), NEG_CARRY('fake-neg', 'pb', { entityId: 'gB', amount: -500 })];
+    const surfaces = state => { const a = fa3bLoad(state, '2026-08-20', true); const direct = [fa3bLook(a), a.state().savingsReleases]; a.reload(); return [direct, fa3bLook(a), a.state().savingsReleases, a]; };
+    const r = surfaces(real), f = surfaces(faked);
+    const sim = schema2(f[3], null);
+    invariant('FA3CA.observational.fake-carry', 'Holiday +£10,000, ISA +£5,000 and Car −£500 in carries: goals, ISA, Monthly Left, Plan, Home, Suggested Actions and releases identical before and after reload (Holiday £1,350, ISA £5,200, Car £540); the carries survive the loads and the simulation counts only them (Holiday £1,000 + dated £250 + £10,000 − release £200 = £11,050; Car £500 − £500 = £0)',
+      [same(r.slice(0, 3), f.slice(0, 3)), [r[0][0].snap.goal.gH, r[0][0].snap.inv.iA, r[0][0].snap.goal.gB], f[3].state().contributionCarry.length, [sim.goals.gH.shown, sim.goals.gB.shown]],
+      [true, [1350, 5200, 540], 4, [11050, 0]]);
+  });
+
+  scenario('FA-3C-A BACKUP — contributionCarry persists, exports and restores; schema stays 1', () => {
+    const records = [CARRY('c1', 'pA'), RESOLUTION('r1', 'c1', 'amended', { amount: 200 })];
+    const app = new App(Object.assign(baseState(), { _schemaVersion: 1, contributionCarry: records }), '2026-08-10');
+    app.reload(); app.render(); app.reload();
+    const persisted = app.state().contributionCarry;
+    const env = app.backup(), restored = app.restorable(env);
+    const back = new App(restored.state, '2026-08-10');
+    back.reload();
+    const oldEnv = new App(baseState({ _schemaVersion: 1 }), '2026-08-10').backup();
+    const oldBack = new App(new App({}, '2026-08-10').restorable(oldEnv).state, '2026-08-10');
+    oldBack.reload();
+    const badEnv = JSON.parse(JSON.stringify(env));
+    badEnv.data.contributionCarry = [CARRY('bad', 'pZ', { amount: -1 })].concat(records);
+    const badBack = new App(app.restorable(badEnv).state, '2026-08-10');
+    badBack.reload();
+    invariant('FA3CA.backup', 'A carry and its resolution survive load, render and reload; the export holds them; restore extraction keeps them (not stripped) and the restored load has them; an old backup without the key loads []; an invalid carry in a backup is dropped at load; schema 1 throughout',
+      [same(persisted, records), same(env.data.contributionCarry, records), [restored.ok, restored.strippedKeys.indexOf('contributionCarry')], same(back.state().contributionCarry, records),
+        ['contributionCarry' in oldEnv.data, oldBack.state().contributionCarry], badBack.state().contributionCarry.map(c => c.id), [env.schemaVersion, back.run('GEODE_SCHEMA_VERSION')]],
+      [true, true, [true, -1], true, [false, []], ['c1', 'r1'], [1, 1]]);
+  });
+
+  scenario('FA-3C-A BOUNDARY — carries come only from the transition helper, which nothing calls; no engine reads carries', () => {
+    const src = PROGRAM.src;
+    const bodies = [];
+    const decl = /\nfunction ([A-Za-z_$][\w$]*)\(/g;
+    let m;
+    while ((m = decl.exec(src))) {
+      const start = m.index + 1, firstLine = src.slice(start, src.indexOf('\n', start));
+      const opens = (firstLine.match(/\{/g) || []).length, closes = (firstLine.match(/\}/g) || []).length;
+      const end = opens > 0 && opens === closes && /\}\s*$/.test(firstLine) ? start + firstLine.length : src.indexOf('\n}', start);
+      bodies.push([m[1], src.slice(start, end)]);
+    }
+    const users = needle => [...new Set(bodies.filter(b => b[1].indexOf(needle) >= 0).map(b => b[0]))].sort();
+    invariant('FA3CA.boundary', 'Functions that mention: the transition helper — only itself; the schema2_transition source — the validator and the helper; carry state — the carry functions, FA-3B seeding (carried payments are seen) and the backup whitelist; carry functions — the carry family, the simulated goal parts, FA-3B seeding, the rollover safety net (left to an active carry) and load (normaliser only); schema-2 goal helpers — only each other',
+      [users('geodeSchema2TransitionCarryRecords('), users("'schema2_transition'"), users('contributionCarry'), users('ContributionCarry'), users('geodeLegacyCarryCandidate('), users('geodeSchema2Goal')],
+      [['geodeSchema2TransitionCarryRecords'], ['geodeContributionCarryValid', 'geodeSchema2TransitionCarryRecords'],
+        ['geodeBeyndBackupRestorableKeyWhitelist', 'geodeContributionCarryActive', 'geodeNormalizeContributionCarry', 'geodeSchema2TransitionCarryRecords', 'geodeSeedLegacyContributionEvents'],
+        ['geodeContributionCarryActive', 'geodeContributionCarryLedger', 'geodeContributionCarryResolutionValid', 'geodeContributionCarryValid', 'geodeEnsureContributionCompletion',
+          'geodeNormalizeContributionCarry', 'geodeSchema2GoalParts', 'geodeSchema2TransitionCarryRecords', 'geodeSeedLegacyContributionEvents', 'load'],
+        ['geodeLegacyCarryCandidate', 'geodeSchema2TransitionCarryRecords'],
+        ['geodeSchema2GoalCorrectionBase', 'geodeSchema2GoalEffectiveSaved', 'geodeSchema2GoalParts', 'geodeSchema2GoalPosition']]);
+  });
+}
+
 /** Completions FA-3B seeds for each legacy fixture: only rows whose stored fields prove a paid occurrence. */
 const MIG_SEEDED = {
   'goal-completed-one-off': [['p_one_off', 'goal:gH', '2026-06', 250, 'one_off', '2026-06-10', 'migration']],
@@ -2481,6 +2851,7 @@ function main() {
   fa2Goals(); fa2Investments(); fa2Deposits();
   fa3aLedger(); fa3aGoals(); fa3aInvestments(); fa3aSmartImport(); fa3aDeletion(); fa3aIdentity(); fa3aRollover(); fa3aProtection(); fa3aAnnual(); fa3aOccurrence();
   fa3bOrder(); fa3bMatrix(); fa3bPointers(); fa3bParity(); fa3bLifecycle();
+  fa3caNormalise(); fa3caMatrix(); fa3caTransition(); fa3caResolutions(); fa3caLinkedAndCorrection(); fa3caLifecycle();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');
