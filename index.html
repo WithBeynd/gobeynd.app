@@ -38834,6 +38834,11 @@ function rPayments(el) {
     list.appendChild(e);
   }
 }
+/** FA-3C-B.3a: the Frequency option an existing row opens with — every stored recurrence ('no' | 'yes' | 'annual') reopens as itself. */
+function geodePayModalRecValue(p) {
+  var rec = String((p && p.rec) || '');
+  return rec === 'yes' || rec === 'annual' ? rec : 'no';
+}
 function openPayModal(id, prefill) {
   var p = id ? S.payments.filter(function(x){ return x.id===id; })[0] : null;
   prefill = prefill && !p ? prefill : null;
@@ -38859,7 +38864,7 @@ function openPayModal(id, prefill) {
   else defDate = geodeTodayLocalISO();
   var defStatus = p ? p.status : prefill && prefill.status ? prefill.status : 'upcoming';
   var defRec;
-  if (p) defRec = p.rec === 'yes';
+  if (p) defRec = geodePayModalRecValue(p);
   else if (prefill && Object.prototype.hasOwnProperty.call(prefill, 'rec')) defRec = !!prefill.rec;
   else defRec = true;
   var defGid = p ? (p.goalId || '') : prefill ? String(prefill.goalId || '') : '';
@@ -39476,6 +39481,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     if(!ex)return;
     savedPayBefore = geodeDebtPaymentEventSnapshot(ex);
     savedPayContributionBefore = geodeContributionEventSnapshot(ex);
+    var exWasPaid = String(ex.status || '') === 'paid';
     ex.name=nm;
     ex.amount=Number(am);
     ex.date=dt;
@@ -39485,9 +39491,9 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     ex.investId = invid;
     ex.debtId = debtid;
     ex.payKind = payKind;
-    if(rec!=='yes')ex.lastPaidYM='';
-    else if(st==='paid')ex.lastPaidYM=currentYM();
-    else ex.lastPaidYM='';
+    // FA-3C-B.3a: lastPaidYM is occurrence evidence; a row that stays completed keeps it whatever else the form changed.
+    if(st!=='paid')ex.lastPaidYM='';
+    else if(!exWasPaid)ex.lastPaidYM=rec==='yes'?currentYM():'';
     if (!ex.createdAt) ex.createdAt = Date.now();
     savedPayRow = ex;
     savedPayRowId = ex.id;

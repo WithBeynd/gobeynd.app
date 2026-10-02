@@ -377,7 +377,33 @@ function buildProgram() {
   if (unresolved.length) {
     throw new HarnessError('unresolved dependencies (extract the production function or add a documented shim):\n    ' + unresolved.join('\n    '));
   }
-  return { script, extracted, structural, src, plan: buildPlanProgram(src, foundation, extracted) };
+  return { script, extracted, structural, src, plan: buildPlanProgram(src, foundation, extracted), payModal: buildPayModalProgram(src, foundation) };
+}
+
+/** Payment-modal environment: page chrome and hints are UI; the form openPayModal writes into the modal is what App.modalForm reads. */
+const PAY_MODAL_SHIMS = String.raw`
+var S = null, window = {}, __html = '';
+function mh() { return ''; } function openModal(h) { __html = h; } function setTimeout() {}
+function geodePayRecentNamesHtml() { return ''; } function geodePayLastHintHtml() { return ''; }
+function geodeBufferActionCopy() { return { modalHeading: '' }; } function geodeTodayLocalISO() { return ''; }
+`;
+
+/** openPayModal with the production functions it calls (PAY_MODAL_SHIMS aside), so an edit form opens exactly as production fills it. */
+function buildPayModalProgram(src, foundation) {
+  const base = PAY_MODAL_SHIMS + '\n' + foundation + '\n';
+  const probe = vm.createContext({ console: { log() {}, info() {}, warn() {}, error() {} } });
+  new vm.Script(base).runInContext(probe);
+  const have = new Map();
+  const queue = ['openPayModal'];
+  while (queue.length) {
+    const n = queue.shift();
+    if (have.has(n) || vm.runInContext('typeof ' + n, probe) !== 'undefined') continue;
+    const f = extractFunction(src, n);
+    have.set(n, f);
+    const locals = new Set((f.text.match(/\bvar\s+[A-Za-z_$][\w$]*\s*=\s*function\b/g) || []).map(m => m.split(/\s+/)[1]));
+    calledNames(f.text).forEach(c => { if (!locals.has(c)) queue.push(c); });
+  }
+  return new vm.Script(base + [...have.values()].map(f => f.text).join('\n') + '\n', { filename: 'cross-month-pay-modal.js' });
 }
 
 /** Base program + PLAN_SHIMS + the PLAN_ENTRY_FUNCTIONS dependency closure; a name nothing defines is an error. */
@@ -500,17 +526,45 @@ class App {
     if (opened) out.intent = this.saveModal(opened, amount);
     return out;
   }
-  /** Mirrors openPayModal (intent, buffer flag, edit form filled from the row) and savePay (pre-save merge, then save). */
+  /** Mirrors openPayModal (intent, buffer flag, edit form as production fills it) and savePay (pre-save merge, then save). */
   saveModal(opened, amount) {
     const row = opened.id ? this.state().payments.filter(p => p.id === opened.id)[0] : null;
-    const f = row ? { name: row.name, amount: row.amount, date: row.date, status: row.status, rec: row.rec === 'yes',
-      goalId: row.goalId, investId: row.investId, debtId: row.debtId } : opened.prefill;
-    const intent = row ? 'replace' : f._geodePayIntent ? this.call('geodeNormalizePayLinkedIntent', [f._geodePayIntent]) : 'new';
-    this.run('window._geodePayPrefillBufferContribution = ' + JSON.stringify(!row && f.bufferContribution === true) + ';');
+    if (row) {
+      this.modalEdit(row.id, amount != null ? { amount } : {});
+      return 'replace';
+    }
+    const f = opened.prefill;
+    const intent = f._geodePayIntent ? this.call('geodeNormalizePayLinkedIntent', [f._geodePayIntent]) : 'new';
+    this.run('window._geodePayPrefillBufferContribution = ' + JSON.stringify(f.bufferContribution === true) + ';');
     this.merge();
-    this.contribute({ id: row ? row.id : null, intent, name: f.name, amount: amount != null ? amount : f.amount, date: f.date,
+    this.contribute({ id: null, intent, name: f.name, amount: amount != null ? amount : f.amount, date: f.date,
       status: f.status, rec: f.rec ? 'yes' : 'no', goalId: f.goalId, investId: f.investId, debtId: f.debtId });
     return intent;
+  }
+  /** The edit form production openPayModal renders for a row: each input's value and each select's selected option (else its first). */
+  modalForm(id) {
+    const ctx = vm.createContext({ console: { log() {}, info() {}, warn() {}, error() {} } });
+    PROGRAM.payModal.runInContext(ctx);
+    ctx.__stateJson = JSON.stringify(this.state());
+    const html = vm.runInContext('S = JSON.parse(__stateJson); openPayModal(' + JSON.stringify(id) + '); __html', ctx);
+    const text = v => v.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    const input = f => { const m = html.match(new RegExp('id="' + f + '"[^>]*? value="([^"]*)"')); return m ? text(m[1]) : ''; };
+    const select = f => {
+      const opts = [...((html.split('<select id="' + f + '"')[1] || '').split('</select>')[0]).matchAll(/<option value="([^"]*)"( selected)?>/g)];
+      const pick = opts.filter(o => o[2])[0] || opts[0];
+      return pick ? text(pick[1]) : '';
+    };
+    return { name: input('pn'), amount: input('pa'), date: input('pd'), status: select('ps'), rec: select('prec'),
+      goalId: select('pglid'), investId: select('pinvlid'), debtId: select('pdebtlid') };
+  }
+  /** Edit form opened on a row, these fields changed, saved as savePay reads it (Frequency and one link normalised; pre-save merge). */
+  modalEdit(id, changes) {
+    const f = Object.assign(this.modalForm(id), changes || {});
+    const rec = f.rec === 'yes' || f.rec === 'annual' ? f.rec : 'no';
+    const gid = f.goalId || '', invid = gid ? '' : f.investId || '', debtid = gid || invid ? '' : f.debtId || '';
+    this.run('window._geodePayPrefillBufferContribution = false;');
+    this.merge();
+    this.contribute({ id, intent: 'replace', name: f.name, amount: f.amount, date: f.date, status: f.status, rec, goalId: gid, investId: invid, debtId: debtid });
   }
   /** rPayments and savePay run the legacy same-month merge before showing or saving payments. */
   merge() { return this.call('geodeMergeDuplicateLinkedContributionsSameMonth'); }
@@ -2163,6 +2217,8 @@ const legacyPay = (id, o) => Object.assign({ id, name: id, amount: 250, date: '2
 const legacyInvPay = (id, o) => legacyPay(id, Object.assign({ amount: 200, goalId: '', investId: 'iA', payKind: 'invest' }, o));
 const legacyState = (goal, extra) => baseState(Object.assign({ incomeExplicitlySet: true, goals: [Object.assign(HOLIDAY(), goal)] }, extra));
 const legacyInvState = (inv, extra) => baseState(Object.assign({ incomeExplicitlySet: true, investments: [Object.assign(ISA(), inv)] }, extra));
+/** lastPaidYM as a pre-FA-3C-B.3a form re-save left it (every save of a paid monthly row stamped the current month): stored data can already hold it. */
+const olderBuildStamp = (app, id) => app.run('S.payments.forEach(function (p) { if (p.id === ' + JSON.stringify(id) + ') p.lastPaidYM = currentYM(); }); save();');
 const EVENT_RELEASE = { id: 'r_event', sourceType: 'goal', sourceId: 'gH', amount: 200, reason: 'emergency', date: '2026-06-20', ym: '2026-06', relatedYm: '2026-06',
   remainingBalance: 800, createdAt: 1781949600000, confirmedByUser: true, note: '', balanceMutationMode: 'event_derived' };
 const LEGACY_RELEASE = { id: 'r_legacy', sourceType: 'goal', sourceId: 'gH', amount: 200, reason: 'manual', date: '2026-05-20', ym: '2026-05', createdAt: 1779271200000,
@@ -2669,12 +2725,13 @@ function fa3caTransition() {
     resaved.reload();
     resaved.run('S.contributionCarry = ' + JSON.stringify(schema2(resaved).created) + '; save(); __reload();');
     resaved.at('2026-08-12'); resaved.editPayment('pm', { name: 'Holiday monthly (renamed)' });
-    const stamped = resaved.state().payments[0].lastPaidYM;
+    const kept = resaved.state().payments[0].lastPaidYM;
+    olderBuildStamp(resaved, 'pm');
     resaved.reload();
     const aug = [resaved.events().length, resaved.snap().goal.gH, schema2(resaved, null).goals.gH.shown];
     resaved.advance('2026-09-02', 'reload');
-    invariant('FA3CA.seed.carry-witnessed', 'A carried amount is never dated again: the GA row with its £100 carry, re-saved through the form in August (lastPaidYM stamped 2026-08), gets no migration event on the next load and no rollover safety-net event at the September reset; simulated Holiday stays £1,100 (legacy £1,100, then £1,000 after the reset, D1)',
-      [stamped, aug, [resaved.events().length, resaved.snap().goal.gH, schema2(resaved, null).goals.gH.shown]], ['2026-08', [0, 1100, 1100], [0, 1000, 1100]]);
+    invariant('FA3CA.seed.carry-witnessed', 'A carried amount is never dated again: the GA row with its £100 carry, re-saved through the form in August (lastPaidYM stays empty) and then holding the 2026-08 stamp an older build\'s re-save wrote, gets no migration event on the next load and no rollover safety-net event at the September reset; simulated Holiday stays £1,100 (legacy £1,100, then £1,000 after the reset, D1)',
+      [kept, aug, [resaved.events().length, resaved.snap().goal.gH, schema2(resaved, null).goals.gH.shown]], ['', [0, 1100, 1100], [0, 1000, 1100]]);
 
     const orphan = fa3bLoad(Object.assign(JSON.parse(JSON.stringify(CARRY_MIX)), { contributionCarry: [CARRY('carry_old', 'pOld', { entityId: 'gGone', amount: 300 })] }), '2026-08-20', true);
     const orphanSim = schema2(orphan);
@@ -2982,17 +3039,17 @@ function fa3cbValidation() {
 function fa3cbTimelines() {
   scenario('FA-3C-B MONTHLY GA TIMELINE — the legacy carry and later genuine occurrences stay separable', () => {
     const t = carriedFixture('monthly-ambiguous');
-    t.at('2026-08-12'); t.editPayment('pm', { name: 'Holiday monthly (renamed)' });
+    t.at('2026-08-12'); t.editPayment('pm', { name: 'Holiday monthly (renamed)' }); olderBuildStamp(t, 'pm');
     const A = carryView(t);
-    invariant('FA3CB.monthly.resave', 'A. August: GA re-saved through the form (lastPaidYM stamped 2026-08) — carry only, no event', A, GA_HELD);
+    invariant('FA3CB.monthly.resave', 'A. August: GA re-saved through the form and holding the 2026-08 stamp an older build\'s re-save wrote — carry only, no event', A, GA_HELD);
 
     t.advance('2026-09-02', 'reload');
     const B = carryView(t);
-    const long = carriedFixture('monthly-ambiguous'); long.at('2026-08-12'); long.editPayment('pm', { name: 'Holiday monthly (renamed)' });
+    const long = carriedFixture('monthly-ambiguous'); long.at('2026-08-12'); long.editPayment('pm', { name: 'Holiday monthly (renamed)' }); olderBuildStamp(long, 'pm');
     const still = carriedFixture('monthly-ambiguous');
     ['2026-09-02', '2026-10-02', '2026-11-02', '2026-12-02', '2027-01-02', '2027-02-02', '2027-03-02', '2027-04-02', '2027-05-02', '2027-06-02', '2027-07-02', '2027-08-02']
       .forEach(m => { long.advance(m, 'reload'); still.advance(m, 'reload'); });
-    invariant('FA3CB.monthly.rollover', 'B. September rollover resets the re-saved row (legacy £1,000, D1) but the carry survives as history (simulated £1,100) and no safety-net event dates it; twelve monthly reloads change nothing; a GA row never re-saved (no lastPaidYM) stays paid and keeps holding its carry',
+    invariant('FA3CB.monthly.rollover', 'B. September rollover resets the stamped row (legacy £1,000, D1) but the carry survives as history (simulated £1,100) and no safety-net event dates it; twelve monthly reloads change nothing; a GA row never stamped (no lastPaidYM) stays paid and keeps holding its carry',
       [[B, t.state().payments[0].status, heldCarry(t, 'pm')], [carryView(long), long.state().payments[0].status], [carryView(still), still.state().payments[0].status, heldCarry(still, 'pm').carryId]],
       [[[1000, 1100, [['carry_pm', 'goal:gH', 100]], [], [], 1000], 'upcoming', null], [[1000, 1100, [['carry_pm', 'goal:gH', 100]], [], [], 1000], 'upcoming'],
         [GA_HELD, 'paid', 'carry_pm']]);
@@ -3024,7 +3081,7 @@ function fa3cbTimelines() {
       carryView(branch), [1100, 1100, [], [['carry_pm', 'reversed']], [['pm', 'goal:gH', '2026-09', 100]], 1000]);
 
     const del = (state, clock, act) => { const a = new App(state, clock); a.reload(); if (act) act(a); a.del('pm'); return carryView(a); };
-    const atB = (() => { const a = carriedFixture('monthly-ambiguous'); a.at('2026-08-12'); a.editPayment('pm', { name: 'x' }); a.advance('2026-09-02', 'reload'); return a.state(); })();
+    const atB = (() => { const a = carriedFixture('monthly-ambiguous'); a.at('2026-08-12'); a.editPayment('pm', { name: 'x' }); olderBuildStamp(a, 'pm'); a.advance('2026-09-02', 'reload'); return a.state(); })();
     const g3 = fa3cbFixture('monthly-current');
     invariant('FA3CB.delete.history', 'Deleting a payment: (A) carry only, row holds it → reversed; (B) dated current occurrence only → that completion reversed (FA-3A); (C) carry + a later dated occurrence the row holds → the dated occurrence reversed, the carry stays; (D) carry the reset row no longer holds → stays. Dated history of earlier occurrences and carries the row no longer holds are never erased',
       [del(carriedFixture('monthly-ambiguous').state(), '2026-08-10'), del(g3[2], g3[3]), del(atB, '2026-09-02', a => a.toggle('pm')), del(atB, '2026-09-02')],
@@ -3089,7 +3146,7 @@ function fa3cbIntegration() {
 
   scenario('FA-3C-B OWNERSHIP — one owner per paid effect across a mixed lifecycle', () => {
     const app = withCarries(CARRY_MIX, '2026-08-20');
-    app.editPayment('px', { name: 'Holiday monthly (renamed)' });
+    app.editPayment('px', { name: 'Holiday monthly (renamed)' }); olderBuildStamp(app, 'px');
     app.editPayment('pa', { amount: 200 });
     app.toggle('pn');
     app.editPayment('p1', { name: 'Holiday one-off (renamed)' });
@@ -3099,7 +3156,7 @@ function fa3cbIntegration() {
     const owners = app.state().payments.filter(p => p.status === 'paid' && goals.indexOf(p.goalId) >= 0)
       .map(p => [p.id, [app.pointer(p.id) && app.activeEvents().some(e => e.id === app.pointer(p.id)) && 'dated', heldCarry(app, p.id) && 'carry'].filter(Boolean)]);
     const sim = schema2(app, null);
-    invariant('FA3CB.owner.same-effect-xor', 'CARRY_MIX after rename, amend, undo, rename, reload and the September rollover: every paid goal row\'s current effect has exactly one owner (dated completion or carry); simulated − legacy is exactly the £100 carry of the reset GA row (D1 restoration), Car identical',
+    invariant('FA3CB.owner.same-effect-xor', 'CARRY_MIX after rename (GA then holding an older build\'s 2026-08 stamp), amend, undo, rename, reload and the September rollover: every paid goal row\'s current effect has exactly one owner (dated completion or carry); simulated − legacy is exactly the £100 carry of the reset GA row (D1 restoration), Car identical',
       [owners, [app.snap().goal.gH, sim.goals.gH.shown, app.snap().goal.gB, sim.goals.gB.shown]],
       [[['p1', ['dated']], ['pa', ['carry']], ['pb', ['carry']]], [1250, 1350, 540, 540]]);
 
@@ -3312,8 +3369,207 @@ function fa3cb2Boundary() {
 
     const dl = b2Ambiguous(legacyInvPay('iz', { rec: 'yes', date: '2026-06-05', investId: 'iZ' }));
     const dlTry = attempt(dl, b2ToGoal('iz'));
-    invariant('FA3CB2.dead-link', 'The rule protects an effect that counts, not a link field: a paid row still naming a removed investment adds nothing anywhere, so moving it to Holiday is not refused — it records the 2026-08 Holiday occurrence the save completes; Holiday £1,200 = simulated, ISA at its £5,000 base (the row never counted there)',
-      [dlTry[0], b2Active(dl), b2View(dl)], [[], [['goal:gH', '2026-08', 200]], [1200, 1200, 5000]]);
+    invariant('FA3CB2.dead-link', 'The rule protects an effect that counts, not a link field: a paid row still naming a removed investment adds nothing anywhere, so moving it to Holiday is not refused — Holiday gains the one completion the save records; Holiday £1,200 = simulated, ISA at its £5,000 base (the row never counted there)',
+      [dlTry[0], b2Active(dl).length, b2View(dl)], [[], 1, [1200, 1200, 5000]]);
+    current('FA3CB2.dead-link.occurrence', 'That completion\'s month is not proven by the row: the save keeps lastPaidYM empty (FA-3C-B.3a), so the recorder falls back to the due month — bounding that fallback is FA-3C-B.3b',
+      b2Active(dl), [['goal:gH', '2026-06', 200]]);
+  });
+}
+
+// FA-3C-B.3a: the payment form keeps a row's paid occurrence (lastPaidYM) and its recurrence; only a status change writes lastPaidYM.
+
+const B3A_AT = '2026-08-10';
+const CARD = () => ({ id: 'dC', name: 'Card', balance: 1000, minPayment: 50, apr: 25 });
+/** Paid rows with no lastPaidYM, no event and no carry: goal monthly £200, ISA monthly £200, goal annual £200 (next due June 2027). */
+const B3A_GOAL = () => legacyPay('pm', { amount: 200, rec: 'yes', date: '2026-06-05' });
+const B3A_INV = () => legacyInvPay('im', { rec: 'yes', date: '2026-06-05' });
+const B3A_ANNUAL = () => legacyPay('pa', { amount: 200, rec: 'annual', date: '2027-06-05' });
+/** Upcoming £200 Holiday rows due 5 August, to complete natively (toggle) or through the form. */
+const b3aUpcoming = (id, rec) => legacyPay(id, { amount: 200, rec, status: 'upcoming', date: '2026-08-05' });
+/** A legacy state before the schema transition (no carries) loaded at clock: Holiday £1,000 and Car £500 bases, ISA £5,000, Card debt. */
+const b3aLoad = (payments, clock) => {
+  const app = new App(legacyState({}, { payments, goals: [HOLIDAY(), CAR()], debts: [CARD()] }), clock || B3A_AT);
+  app.reload();
+  return app;
+};
+const b3aRow = (app, id) => app.state().payments.filter(p => p.id === id)[0];
+/** [lastPaidYM, ledger events, carry records] */
+const b3aProv = (app, id) => [b3aRow(app, id).lastPaidYM || '', app.events().length, (app.state().contributionCarry || []).length];
+/** Everything authority reads: rows (name aside), contribution and debt ledgers, carries, goal and investment caches (the activity log is not authority). */
+const b3aMoney = app => {
+  const s = app.state();
+  return [s.payments.map(p => Object.assign({}, p, { name: '' })), s.contributionEvents, s.contributionCarry || [], s.debtPaymentEvents,
+    s.goals.map(g => [g.id, g.saved, g.baseSaved]), s.investments.map(i => [i.id, i.balance, i.baseBalance])];
+};
+/** [legacy Holiday, simulated Holiday] */
+const b3aView = app => [app.snap().goal.gH, schema2(app, null).goals.gH.shown];
+const b3aActive = b2Active;
+
+function fa3cb3aForm() {
+  scenario('FA-3C-B.3a FORM ROUND-TRIP — opening a payment and saving it unchanged changes nothing authority reads', () => {
+    const semantic = r => [r.amount, r.status, r.date, r.rec, r.lastPaidYM || '', r.goalId || '', r.investId || '', r.debtId || '', r.contributionEventId || ''];
+    const roundTrip = (rows, native) => {
+      const app = b3aLoad(rows()), control = b3aLoad(rows());
+      native.forEach(id => { app.toggle(id); control.toggle(id); });
+      const before = app.state().payments.map(p => [p.id, semantic(p)]);
+      app.state().payments.forEach(p => app.modalEdit(p.id));
+      const changed = app.state().payments.filter((p, i) => !same(semantic(p), before[i][1])).map(p => p.id);
+      const afterSave = same(b3aMoney(app), b3aMoney(control));
+      app.reload(); control.reload();
+      return [changed, afterSave, same(b3aMoney(app), b3aMoney(control))];
+    };
+    const debtRow = (id, o) => legacyPay(id, Object.assign({ amount: 50, goalId: '', debtId: 'dC', payKind: 'debt', date: '2026-08-01' }, o));
+    invariant('FA3CB3A.roundtrip.oneoff', 'One-off rows — paid Holiday (dated by FA-3B at load), upcoming ISA, paid debt payment, paid bill, Holiday completed natively — each opened in the edit form and saved unchanged: no field changes (amount, status, date, recurrence, lastPaidYM, goal / investment / debt link, event pointer), ledgers, carries and balances identical to the untouched state, also after reload',
+      roundTrip(() => [legacyPay('o1'), legacyInvPay('o2', { status: 'upcoming', date: '2026-08-20' }), debtRow('o3', {}),
+        legacyPay('o4', { amount: 80, goalId: '', payKind: 'bill' }), b3aUpcoming('o5', 'no')], ['o5']), [[], true, true]);
+    invariant('FA3CB3A.roundtrip.monthly', 'Monthly rows — ambiguous paid Holiday (no lastPaidYM), ISA and debt payment completed natively (lastPaidYM 2026-08), upcoming Holiday — saved unchanged: nothing changes, also after reload',
+      roundTrip(() => [B3A_GOAL(), legacyInvPay('m2', { rec: 'yes', status: 'upcoming', date: '2026-08-05' }), debtRow('m3', { rec: 'yes', status: 'upcoming' }),
+        legacyPay('m4', { amount: 100, rec: 'yes', status: 'upcoming', date: '2026-08-25' })], ['m2', 'm3']), [[], true, true]);
+    invariant('FA3CB3A.roundtrip.annual', 'Annual rows — ambiguous paid Holiday, Holiday completed natively (lastPaidYM 2026-08, next due 2027), upcoming ISA, paid bill completed in March (lastPaidYM 2026-03) — saved unchanged: each stays annual and nothing changes, also after reload',
+      roundTrip(() => [B3A_ANNUAL(), b3aUpcoming('a2', 'annual'), legacyInvPay('a3', { rec: 'annual', status: 'upcoming', date: '2027-02-01' }),
+        legacyPay('a4', { amount: 120, rec: 'annual', goalId: '', payKind: 'bill', lastPaidYM: '2026-03', date: '2027-03-01' })], ['a2']), [[], true, true]);
+  });
+
+  scenario('FA-3C-B.3a PAID → PAID — an edit is not a completion: the form never stamps or clears lastPaidYM', () => {
+    const control = b3aLoad([B3A_GOAL(), B3A_INV()]); control.reload();
+    /** [row after the save, provenance after the save, provenance after reload, app] */
+    const edit = (id, changes) => {
+      const a = b3aLoad([B3A_GOAL(), B3A_INV()]); a.at('2026-08-12'); a.modalEdit(id, changes);
+      const row = b3aRow(a, id), saved = b3aProv(a, id);
+      a.reload();
+      return [row, saved, b3aProv(a, id), a];
+    };
+    const NONE = ['', 0, 0];
+    const nc = edit('pm', {});
+    invariant('FA3CB3A.monthly.nochange', 'An ambiguous paid monthly Holiday £200 (no lastPaidYM, event or carry) opened and saved with nothing changed: lastPaidYM stays empty, no event or carry; after reload nothing is seeded and every row, ledger and balance equals the untouched state',
+      [nc[1], nc[2], same(b3aMoney(nc[3]), b3aMoney(control))], [NONE, NONE, true]);
+    const rg = edit('pm', { name: 'Holiday monthly (renamed)' }), ri = edit('im', { name: 'ISA monthly (renamed)' });
+    invariant('FA3CB3A.monthly.rename', 'Renamed only — the Holiday row and the ISA row: the name changes; lastPaidYM stays empty, the save records no event or carry, and reload seeds nothing',
+      [[rg[0].name, rg[1], rg[2]], [ri[0].name, ri[1], ri[2]]], [['Holiday monthly (renamed)', NONE, NONE], ['ISA monthly (renamed)', NONE, NONE]]);
+
+    const am = edit('pm', { amount: '250' });
+    const nat = b3aLoad([b3aUpcoming('nm', 'yes')]); nat.toggle('nm'); nat.modalEdit('nm', { amount: '250' });
+    invariant('FA3CB3A.monthly.amount', 'Amount £200 → £250 while paid. Provenance: the ambiguous row keeps lastPaidYM empty and gains no event (also after reload). Amount: legacy Holiday counts the row\'s current £250 (£1,250), as before; a row completed natively this month keeps lastPaidYM 2026-08 and its completion is replaced for the same occurrence at £250 (FA-3A) — legacy and simulated £1,250',
+      [am[1], am[2], am[3].snap().goal.gH, b3aRow(nat, 'nm').lastPaidYM, b3aActive(nat), nat.events().map(e => e.eventType), b3aView(nat)],
+      [NONE, NONE, 1250, '2026-08', [['goal:gH', '2026-08', 250]], ['completion', 'reversal', 'completion'], [1250, 1250]]);
+
+    const lk = edit('pm', { goalId: 'gB' });
+    invariant('FA3CB3A.monthly.link', 'Relinked Holiday → Car (a move FA-3C-B.2 permits): lastPaidYM stays empty, no event — reload seeds nothing on Car either (legacy Holiday £1,000, Car £700)',
+      [lk[0].goalId, lk[1], lk[2], [lk[3].snap().goal.gH, lk[3].snap().goal.gB]], ['gB', NONE, NONE, [1000, 700]]);
+    const dt = edit('pm', { date: '2026-07-05' });
+    invariant('FA3CB3A.monthly.date', 'Due date 5 June → 5 July while paid: lastPaidYM stays empty, no event, reload seeds nothing (whether an edited due date is migration evidence is FA-3C-B.3b)',
+      [dt[0].date, dt[1], dt[2]], ['2026-07-05', NONE, NONE]);
+
+    const battery = id => [{}, { name: 'renamed' }, { amount: '250' }, id === 'pm' ? { goalId: 'gB' } : { investId: 'iB' }, { date: '2026-07-05' }, { rec: 'annual' }]
+      .map(changes => {
+        const a = b3aLoad([B3A_GOAL(), B3A_INV()]); a.run('S.investments.push(' + JSON.stringify(PENSION()) + '); save();');
+        a.at('2026-08-12'); a.modalEdit(id, changes);
+        const saved = b3aRow(a, id).lastPaidYM || '';
+        a.reload();
+        return [saved, a.events().length];
+      });
+    const SIX = [['', 0], ['', 0], ['', 0], ['', 0], ['', 0], ['', 0]];
+    invariant('FA3CB3A.goal.no-stamp', 'The ambiguous Holiday row gains no occurrence evidence from any edit — unchanged, renamed, amount, relinked to Car, due date, monthly → annual: lastPaidYM empty after the save, no event after reload',
+      battery('pm'), SIX);
+    invariant('FA3CB3A.invest.no-stamp', 'The same for the ambiguous ISA row — unchanged, renamed, amount, relinked to the Pension, due date, monthly → annual',
+      battery('im'), SIX);
+
+    const clock = at => {
+      const a = b3aLoad([B3A_GOAL(), legacyPay('pk', { amount: 120, rec: 'annual', lastPaidYM: '2026-03', date: '2027-03-01' })], at);
+      a.modalEdit('pm', { name: 'renamed' }); a.modalEdit('pk', { name: 'renamed' }); a.modalEdit('pm', {}); a.modalEdit('pk', {});
+      const kept = [b3aRow(a, 'pm').lastPaidYM || '', b3aRow(a, 'pk').lastPaidYM || ''];
+      a.reload();
+      return [kept, a.events().map(e => [e.paymentId, e.eventType, e.occurrenceYm])];
+    };
+    const KEPT = [['', '2026-03'], [['pk', 'completion', '2026-03']]];
+    invariant('FA3CB3A.clock-independent', 'Renamed then saved unchanged in June 2026, August 2026 and January 2027: the ambiguous monthly row keeps an empty lastPaidYM and the annual row its March 2026 completion month — the wall clock never becomes the paid month; the only event is the March completion FA-3B dates from the stored lastPaidYM',
+      ['2026-06-20', '2026-08-12', '2027-01-15'].map(clock), [KEPT, KEPT, KEPT]);
+  });
+
+  scenario('FA-3C-B.3a ANNUAL — the form keeps an annual row annual, and keeps its occurrence through later actions', () => {
+    const map = b3aLoad([legacyPay('rn', { rec: 'no' }), B3A_GOAL(), B3A_ANNUAL(), b3aUpcoming('ra', 'annual'), legacyPay('rx', { rec: undefined })]);
+    invariant('FA3CB3A.annual.preserve-rec', 'The edit form opens every stored recurrence as itself — one-off, monthly, annual (paid and upcoming) — and a row with no stored recurrence as One-off, as the save treats it',
+      ['rn', 'pm', 'pa', 'ra', 'rx'].map(id => map.modalForm(id).rec), ['no', 'yes', 'annual', 'annual', 'no']);
+
+    const native = () => { const a = b3aLoad([b3aUpcoming('na', 'annual')]); a.toggle('na'); return a; };
+    const look = a => { const r = b3aRow(a, 'na'); return [r.rec, r.lastPaidYM, r.date, r.contributionEventId, a.events().length]; };
+    const nc = native(), ncBefore = look(nc); nc.modalEdit('na', {});
+    invariant('FA3CB3A.annual.nochange', 'An annual Holiday £200 completed natively in August (lastPaidYM 2026-08, next due August 2027) opened and saved unchanged: still annual, same lastPaidYM, date and event pointer, no new event',
+      [ncBefore, look(nc)], [['annual', '2026-08', '2027-08-05', ncBefore[3], 1], ncBefore]);
+
+    const control = b3aLoad([B3A_ANNUAL()]); control.reload();
+    const amb = b3aLoad([B3A_ANNUAL()]); amb.modalEdit('pa', {});
+    const ambSaved = [b3aRow(amb, 'pa').rec, b3aRow(amb, 'pa').lastPaidYM];
+    amb.reload();
+    invariant('FA3CB3A.annual.no-future-save-seed', 'An ambiguous paid annual Holiday row (next due June 2027, no lastPaidYM — as stored it seeds nothing: untouched control has no event) opened and saved unchanged in August 2026: still annual, lastPaidYM empty; reload seeds nothing — no one-off completion dated June 2027',
+      [control.events().length, ambSaved, amb.events().length, same(b3aMoney(amb), b3aMoney(control))], [0, ['annual', ''], 0, true]);
+
+    const rn = native(), rnPointer = b3aRow(rn, 'na').contributionEventId; rn.modalEdit('na', { name: 'Holiday annual (renamed)' });
+    invariant('FA3CB3A.annual.rename', 'Renamed with Annual kept: still annual, lastPaidYM 2026-08, the 2026-08 completion stays active and pointed to; legacy and simulated £1,200',
+      [b3aRow(rn, 'na').rec, b3aRow(rn, 'na').lastPaidYM, b3aActive(rn), b3aRow(rn, 'na').contributionEventId === rnPointer, b3aView(rn)],
+      ['annual', '2026-08', [['goal:gH', '2026-08', 200]], true, [1200, 1200]]);
+
+    const un = native(); un.modalEdit('na', { name: 'renamed' }); un.toggle('na');
+    invariant('FA3CB3A.annual.rename-undo', 'Completed natively → renamed → marked not completed: the completion is reversed (no phantom), legacy and simulated agree at £1,000',
+      [b3aActive(un), un.events().map(e => e.eventType), b3aView(un)], [[], ['completion', 'reversal'], [1000, 1000]]);
+    const dl = native(); dl.modalEdit('na', { name: 'renamed' }); dl.del('na');
+    invariant('FA3CB3A.annual.rename-delete', 'Completed natively → renamed → deleted: the occurrence the row still represents is reversed (FA-3A delete policy), legacy and simulated agree at £1,000',
+      [b3aActive(dl), dl.events().map(e => e.eventType), b3aView(dl)], [[], ['completion', 'reversal'], [1000, 1000]]);
+    const ar = native(); ar.modalEdit('na', { name: 'renamed' }); ar.modalEdit('na', { amount: '300' });
+    invariant('FA3CB3A.annual.rename-amount', 'Completed natively → renamed → amount £300: the same 2026-08 occurrence is replaced at £300 (FA-3A amount edit), no new occurrence; legacy and simulated agree at £1,300',
+      [b3aActive(ar), ar.events().map(e => e.eventType), b3aView(ar)], [[['goal:gH', '2026-08', 300]], ['completion', 'reversal', 'completion'], [1300, 1300]]);
+
+    const ma = b3aLoad([b3aUpcoming('mt', 'yes')]); ma.toggle('mt'); ma.modalEdit('mt', { rec: 'annual' });
+    const maMid = [b3aRow(ma, 'mt').rec, b3aRow(ma, 'mt').lastPaidYM, b3aActive(ma)];
+    ma.toggle('mt');
+    invariant('FA3CB3A.monthly-to-annual-undo', 'A monthly Holiday £200 completed natively in August, changed to Annual while paid (lastPaidYM stays 2026-08; the completion is re-recorded as annual for the same occurrence, FA-3A), then marked not completed: the completion is reversed — legacy and simulated agree at £1,000',
+      [maMid, b3aActive(ma), b3aView(ma)], [['annual', '2026-08', [['goal:gH', '2026-08', 200]]], [], [1000, 1000]]);
+  });
+
+  scenario('FA-3C-B.3a STATUS — only a status change writes lastPaidYM, through the existing completion and reversal lifecycle', () => {
+    const complete = rec => { const a = b3aLoad([b3aUpcoming('u', rec)]); a.modalEdit('u', { status: 'paid' }); return [b3aRow(a, 'u').lastPaidYM || '', b3aActive(a), b3aView(a)]; };
+    invariant('FA3CB3A.status.unpaid-paid', 'Upcoming → Completed through the form records the completion as before: monthly stamps lastPaidYM 2026-08 and records 2026-08; annual and one-off keep lastPaidYM empty and record their due month (2026-08); legacy and simulated £1,200',
+      ['yes', 'annual', 'no'].map(complete), ['2026-08', '', ''].map(ym => [ym, [['goal:gH', '2026-08', 200]], [1200, 1200]]));
+    const undo = rec => { const a = b3aLoad([b3aUpcoming('u', rec)]); a.toggle('u'); a.modalEdit('u', { status: 'upcoming' }); return [b3aRow(a, 'u').lastPaidYM || '', b3aActive(a), a.events().map(e => e.eventType), b3aView(a)]; };
+    invariant('FA3CB3A.status.paid-unpaid', 'Completed natively → set back to Scheduled through the form: lastPaidYM cleared and the completion reversed — monthly, annual and one-off; legacy and simulated £1,000',
+      ['yes', 'annual', 'no'].map(undo), ['yes', 'annual', 'no'].map(() => ['', [], ['completion', 'reversal'], [1000, 1000]]));
+  });
+
+  scenario('FA-3C-B.3a AUTHORITY BOUNDARY — an edit cannot turn an ambiguous row into a movable dated one', () => {
+    const isa = b2Ambiguous(), cand0 = b2Candidate(isa, 'im');
+    isa.modalEdit('im', { name: 'ISA monthly (renamed)' });
+    const candSaved = b2Candidate(isa, 'im');
+    isa.reload();
+    const isaAfter = [b3aProv(isa, 'im'), isa.state().contributionCarry.filter(c => c.entityType !== 'goal').length];
+    const isaTry = attempt(isa, a => a.modalEdit('im', { investId: '', goalId: 'gH' }));
+    const goal = b3aLoad([B3A_GOAL()]);
+    goal.modalEdit('pm', { name: 'Holiday monthly (renamed)' }); goal.reload();
+    const goalTry = attempt(goal, a => a.modalEdit('pm', { goalId: '', investId: 'iA' }));
+    invariant('FA3CB3A.b2-still-refuses', 'The red-team bypass is closed: the ambiguous paid ISA row (transition carries stored) renamed and reloaded is still ambiguous — lastPaidYM empty, no event, no investment carry — so ISA → Holiday is still refused, nothing changed (ISA £5,200, Holiday £1,000 = simulated); the ambiguous Holiday row renamed and reloaded before the transition is still refused Holiday → ISA',
+      [isaAfter, isaTry, b2View(isa), b3aProv(goal, 'pm'), goalTry], [[['', 0, 0], 0], [[REFUSED_MOVE], true], [1000, 1000, 5200], ['', 0, 0], [[REFUSED_MOVE], true]]);
+    isa.advance('2026-09-02', 'reload'); isa.reload();
+    invariant('FA3CB3A.fa7-evidence', 'The undated ISA evidence FA-7 will carry survives the edit: geodeLegacyCarryCandidate gives the same ISA £200 candidate before the rename, after it, after reload and the refused relink, and after the September reload',
+      [cand0, candSaved, b2Candidate(isa, 'im')], [B2_CANDIDATE, B2_CANDIDATE, B2_CANDIDATE]);
+  });
+
+  scenario('FA-3C-B.3a — temporal and migration weaknesses that stay open for FA-3C-B.3b (documented, not repaired)', () => {
+    const completions = app => app.events().filter(e => e.eventType === 'completion').map(e => [e.occurrenceYm, e.recurrence, e.source]);
+    current('FA3CB3A.b3-open.future-oneoff', 'A legacy paid Holiday one-off due 10 December 2026 loaded in August is seeded for December (no time limit on migration)',
+      completions(b3aLoad([legacyPay('f1', { date: '2026-12-10' })])), [['2026-12', 'one_off', 'migration']]);
+    current('FA3CB3A.b3-open.future-lastpaid', 'A paid monthly row whose stored lastPaidYM is 2027-03 loaded in August 2026 is seeded for March 2027',
+      completions(b3aLoad([legacyPay('f2', { amount: 200, rec: 'yes', lastPaidYM: '2027-03', date: '2026-06-05' })])), [['2027-03', 'monthly', 'migration']]);
+    current('FA3CB3A.b3-open.malformed-safety-net', 'A paid monthly row with an invalid lastPaidYM (2026-13): migration refuses it, but the rollover safety net records it at the due month (2026-06)',
+      completions(b3aLoad([legacyPay('f3', { amount: 200, rec: 'yes', lastPaidYM: '2026-13', date: '2026-06-05' })])), [['2026-06', 'monthly', 'rollover_safety_net']]);
+    const far = b3aLoad([legacyPay('f4', { status: 'upcoming', date: '2099-01-10' })]); far.toggle('f4');
+    current('FA3CB3A.b3-open.native-future-oneoff', 'Completing an upcoming one-off due January 2099 records its due month (2099-01)', completions(far), [['2099-01', 'one_off', 'mark_completed']]);
+    const zero = b3aLoad([legacyPay('f5', { amount: 0 })]); zero.modalEdit('f5', { amount: '200' });
+    const zeroSession = [zero.events().length, b3aView(zero)];
+    zero.reload();
+    current('FA3CB3A.b3-open.late-seed', 'A paid £0 Holiday one-off corrected to £200 records nothing in the session (legacy £1,200, simulated £1,000); the next load seeds it at its due month — migration runs on every schema-1 load',
+      [zeroSession, completions(zero)], [[0, [1200, 1000]], [['2026-06', 'one_off', 'migration']]]);
+    const oneOff = b3aLoad([B3A_GOAL()]); oneOff.modalEdit('pm', { rec: 'no' }); oneOff.reload();
+    current('FA3CB3A.b3-open.recurrence-to-oneoff', 'The ambiguous paid monthly row deliberately changed to One-off: the save writes no lastPaidYM, but the next load seeds a one-off at its due month (2026-06) — migration trusts the edited row',
+      completions(oneOff), [['2026-06', 'one_off', 'migration']]);
   });
 }
 
@@ -3360,7 +3616,7 @@ function main() {
   fa3aLedger(); fa3aGoals(); fa3aInvestments(); fa3aSmartImport(); fa3aDeletion(); fa3aIdentity(); fa3aRollover(); fa3aProtection(); fa3aAnnual(); fa3aOccurrence();
   fa3bOrder(); fa3bMatrix(); fa3bPointers(); fa3bParity(); fa3bLifecycle();
   fa3caNormalise(); fa3caMatrix(); fa3caTransition(); fa3caResolutions(); fa3caLinkedAndCorrection(); fa3caLifecycle();
-  fa3cbActions(); fa3cbValidation(); fa3cbTimelines(); fa3cbIntegration(); fa3cb2Boundary();
+  fa3cbActions(); fa3cbValidation(); fa3cbTimelines(); fa3cbIntegration(); fa3cb2Boundary(); fa3cb3aForm();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');
