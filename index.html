@@ -5018,6 +5018,28 @@ function geodeInvestmentAuthorityTransition(state, opening) {
 }
 
 /**
+ * FA-7C: the valuation-anchored investment completed row p adds to, or null. Such a row's paid state carries no value
+ * (the position reads valuations and completions), so its lifecycle need not keep it paid to keep history.
+ */
+function geodeInvestmentLifecycleRowInvestment(state, p) {
+  var eff = geodePaymentBalanceEffect(state, p);
+  return eff && eff.investment && geodeInvestmentLatestValuation(eff.investment) ? eff.investment : null;
+}
+
+/**
+ * FA-7C: the occurrence month completed row p stands for on valuation-anchored investment inv: its trusted lastPaidYM,
+ * else the occurrence of the active completion it points to, else (paid with nothing dating it: legacy evidence the
+ * opening anchor absorbed) the month of inv's legacy_transition anchor. '' when none is known: the row stays paid.
+ */
+function geodeInvestmentRowOccurrenceYm(state, p, inv) {
+  if (geodeContributionYmTrusted(p.lastPaidYM)) return String(p.lastPaidYM);
+  var target = geodeContributionPointerTarget(state, geodeContributionEventSnapshot(p));
+  if (target && geodeContributionYmTrusted(target.occurrenceYm)) return target.occurrenceYm;
+  var opening = geodeInvestmentValuations(inv).filter(function (v) { return v.source === 'legacy_transition'; })[0];
+  return opening ? opening.date.slice(0, 7) : '';
+}
+
+/**
  * Completed contributions geodeRecomputeBalancesFromPayments adds to a goal in schema 1: total, and the part from
  * monthly-recurring rows, which stop counting when the month rolls over.
  */
@@ -7196,7 +7218,8 @@ function geodeDebtPaymentActiveCompletions(state) {
 /**
  * FA-3A: goal/investment contribution ledger — append-only memory of each paid occurrence of a goal- or
  * investment-linked payment row (completion) and of each undo (reversal). FA-3C-C: in schema 2 goal completions are
- * part of goal Saved (geodeSchema2GoalPosition); investment completions stay history only until FA-7, and Monthly
+ * part of goal Saved (geodeSchema2GoalPosition); FA-7B: investment completions are the cash flows of the investment
+ * position (geodeInvestmentPosition), and Monthly
  * Left never reads the ledger. Capture never edits or removes an event; events whose payment or
  * goal/investment no longer exists stay valid. Debt rows are recorded in debtPaymentEvents instead.
  */
@@ -7908,8 +7931,8 @@ function geodeLegacyCarryCandidate(state, p, dated) {
  * FA-3C-A: the goal carries the schema 1→2 transition would create — the only way a carry may ever come into being.
  * Pure: returns new records and never touches state. Reads rows as geodeSchema2Transition sees them, before
  * syncRecurringPayments resets completed monthly rows (what the legacy display counts). Goal-linked rows only:
- * investments keep legacy authority until FA-7, which can derive its carries from the same rows with
- * geodeLegacyCarryCandidate. Payments that already have a carry get none, so a repeated run creates nothing; the id
+ * investments never get a carry: FA-7B holds that legacy value in the investment's opening valuation anchor.
+ * Payments that already have a carry get none, so a repeated run creates nothing; the id
  * is derived from the payment, so the same state yields the same records. Called only by geodeSchema2Transition;
  * after it, missing occurrence evidence is a validation problem, never a reason to create compatibility state.
  */
@@ -8121,6 +8144,8 @@ function geodeSchema2Transition() {
  * completion owns its recorded occurrence (pointer, or lastPaidYM), so no effect is dropped without its history.
  * Rows with no effect (bills, debts, dead links) reset as in schema 1. `carried` (optional): paymentId → true for every
  * payment with an active carry, built once per sync so rows without one skip the carry lookup.
+ * FA-7C: a row on a valuation-anchored investment holds no value, so it resets once ym is later than the occurrence
+ * it stands for (geodeInvestmentRowOccurrenceYm); a reset never moves the position and records nothing.
  */
 function geodeSchema2RecurringResetDue(state, p, ym, carried) {
   var before = geodeContributionEventSnapshot(p);
@@ -8131,6 +8156,11 @@ function geodeSchema2RecurringResetDue(state, p, ym, carried) {
       if (r && r.kind !== 'resolution' && r.id === carry.carryId) createdYm = geodeDateToLocalISO(new Date(r.createdAt)).slice(0, 7);
     });
     return !!createdYm && ym > createdYm;
+  }
+  var inv = geodeInvestmentLifecycleRowInvestment(state, p);
+  if (inv) {
+    var occurrenceYm = geodeInvestmentRowOccurrenceYm(state, p, inv);
+    return !!occurrenceYm && ym > occurrenceYm;
   }
   if (!p.lastPaidYM || p.lastPaidYM === ym) return false;
   if (!geodePaymentBalanceEffect(state, p)) return true;
@@ -9722,11 +9752,12 @@ function geodeRealityStatus() {
 
 /**
  * FA-4B: a completed annual row becomes its next occurrence once the month of its advanced due date arrives — not
- * sooner, so the completion stays represented (and undoable) for its whole year. Investment rows keep their
- * lifecycle until FA-7.
+ * sooner, so the completion stays represented (and undoable) for its whole year. FA-7C: an investment row too, once its
+ * investment is valuation-anchored (its completions, not the row, hold the value); otherwise it keeps its paid state.
  */
-function geodeAnnualPaymentNextOccurrenceDue(p, ym) {
-  if (!p || p.rec !== 'annual' || p.status !== 'paid' || p.investId) return false;
+function geodeAnnualPaymentNextOccurrenceDue(p, ym, state) {
+  if (!p || p.rec !== 'annual' || p.status !== 'paid') return false;
+  if (p.investId && !geodeInvestmentLifecycleRowInvestment(state, p)) return false;
   var paidYm = String(p.lastPaidYM || '');
   var dueYm = String(p.date || '').slice(0, 7);
   if (!geodeContributionYmValid(paidYm) || !geodeContributionYmValid(dueYm)) return false;
@@ -9753,7 +9784,7 @@ function syncRecurringPayments() {
   if (S.payments && S.payments.length) {
     for (var i = 0; i < S.payments.length; i++) {
       var p = S.payments[i];
-      if (p.status !== 'paid' || (p.rec !== 'yes' && !geodeAnnualPaymentNextOccurrenceDue(p, ym))) continue;
+      if (p.status !== 'paid' || (p.rec !== 'yes' && !geodeAnnualPaymentNextOccurrenceDue(p, ym, S))) continue;
       if (schema2 ? geodeSchema2RecurringResetDue(S, p, ym, carried) : p.lastPaidYM && p.lastPaidYM !== ym &&
           (geodeContributionYmTrusted(p.lastPaidYM) || !geodePaymentBalanceEffect(S, p))) {
         if (!schema2) geodeEnsureContributionCompletion(p, 'rollover_safety_net');
@@ -13446,6 +13477,8 @@ function geodeSmartImportConfirm() {
   }
   window._geodeSmartImportN = 0;
   window._geodeSmartImportRows = null;
+  // FA-7C: goal and investment caches follow the evidence just recorded before anything reads or stores them.
+  if (addedContrib || mergedContrib) geodeRecomputeBalancesFromPayments();
   geodeInvalidateDecisionCaches();
   save();
   closeModal();

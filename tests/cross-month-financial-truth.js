@@ -62,6 +62,8 @@ const PRODUCTION_FUNCTIONS = [
   'geodeInvestmentPosition', 'geodeInvestmentLegacyBalance', 'geodeInvestmentDisplayBalance', 'geodeInvestmentCapitalSinceTracking',
   'geodeInvestmentValuationRecordedAt', 'geodeInvestmentAppendValuation', 'geodeInvestmentLegacyOpeningValues', 'geodeInvestmentEvidenceLatestAt',
   'geodeInvestmentAuthorityTransition',
+  // investment occurrence lifecycle (FA-7C): rows on valuation-anchored investments are lifecycle only
+  'geodeInvestmentLifecycleRowInvestment', 'geodeInvestmentRowOccurrenceYm',
   // Monthly Left
   'calcMonthlyLeftover', 'calcMonthlyLeftoverConfirmedOnly', 'sumPaymentsMonthlyOutflow',
   'sumPaymentsMonthlyOutflowConfirmedOnly', 'paymentCountsForMonthlyOutflow', 'paymentCountsForMonthlyOutflowConfirmedOnly',
@@ -1419,16 +1421,16 @@ function fa4bAnnual() {
       [[['paid', '2027-06-10', '2026-06', '2026-06-10'], 2750, 2000, 0], [['upcoming', '2027-06-10', '', ''], 2000, 0]]);
   });
 
-  MODES.forEach(mode => scenario('FA-4B ANNUAL — annual ISA £250 keeps today\'s lifecycle (FA-7) [' + mode + ']', () => {
+  MODES.forEach(mode => scenario('FA-4B ANNUAL — annual ISA £250 becomes its 2027 occurrence (FA-7C) [' + mode + ']', () => {
     const app = new App(baseState(), '2026-06-05');
     const id = app.contribute({ name: 'ISA annual', amount: 250, date: '2026-06-10', status: 'upcoming', rec: 'annual', investId: 'iA' });
     app.at('2026-06-10'); app.toggle(id);
     let s = app.snap();
     const june = [lifecycle(app, id), s.left, s.inv.iA];
     app.advance('2027-06-01', mode); s = app.snap();
-    invariant('FA4B.annual.invest', 'June 2026: counts in Monthly Left (£2,750), ISA £5,250. June 2027: NOT reset — still paid for 2026-06, ISA £5,250, and counted by its due date as before (£2,750)',
-      [june, [lifecycle(app, id), s.left, s.inv.iA]],
-      [[['paid', '2027-06-10', '2026-06', '2026-06-10'], 2750, 5250], [['paid', '2027-06-10', '2026-06', '2026-06-10'], 2750, 5250]]);
+    invariant('FA4B.annual.invest', 'June 2026: counts in Monthly Left (£2,750), ISA £5,250. June 2027: the upcoming 2027 occurrence like any annual row (until FA-7C investment rows stayed paid, because the row held the value); the 2026 £250 completion stays active, so ISA keeps £5,250; it counts by its due date (£2,750)',
+      [june, [lifecycle(app, id), s.left, s.inv.iA, app.activeEvents().map(e => [e.occurrenceYm, e.amount])]],
+      [[['paid', '2027-06-10', '2026-06', '2026-06-10'], 2750, 5250], [['upcoming', '2027-06-10', '', ''], 2750, 5250, [['2026-06', 250]]]]);
   }));
 
   scenario('FA-4B ANNUAL — the next occurrence begins in the next due month, no sooner', () => {
@@ -3326,14 +3328,15 @@ function fa3caTransition() {
     const inv = fa3bLoad(CARRY_MIX, '2026-08-20', true);
     const candidate = a => JSON.parse(a.run('JSON.stringify(geodeLegacyCarryCandidate(S, S.payments.filter(function (p) { return p.id === "im"; })[0], {}))'));
     const before = [candidate(inv), inv.snap().inv.iA];
+    const imRow = () => { const p = inv.state().payments.filter(x => x.id === 'im')[0]; return [p.status, p.amount, p.lastPaidYM || '', inv.events().filter(e => e.paymentId === 'im').length]; };
+    inv.reload();
+    const august = imRow();
     const months = ['2026-09-02', '2026-10-02', '2026-11-02', '2026-12-02', '2027-01-02', '2027-02-02', '2027-03-02', '2027-04-02', '2027-05-02', '2027-06-02', '2027-07-02', '2027-08-02'];
-    months.forEach(m => inv.advance(m, 'reload'));
-    const im = inv.state().payments.filter(p => p.id === 'im')[0];
-    invariant('FA3CA.inv.deferred', 'No investment carry: the transition creates no ISA carry; the ambiguous ISA row stays as evidence through twelve monthly reloads (paid £200, no lastPaidYM, no event, ISA £5,200 — held by its FA-7B opening anchor), so FA-7C can still find the same +£200 candidate',
-      [inv.state().contributionCarry.filter(c => c.entityType !== 'goal').length, before, [im.status, im.amount, im.lastPaidYM || '', inv.events().filter(e => e.paymentId === 'im').length],
-        candidate(inv), inv.snap().inv.iA],
+    const seen = months.map(m => { inv.advance(m, 'reload'); return [imRow()[0], inv.snap().inv.iA]; });
+    invariant('FA3CA.inv.deferred', 'No investment carry: the transition creates no ISA carry; its opening anchor holds the ambiguous row\'s £200 (ISA £5,200). Since FA-7C the row is lifecycle only: still completed through the transition month (August), upcoming from September (before FA-7C it stayed completed forever) — no lastPaidYM, no event invented, ISA £5,200 through twelve monthly reloads; nothing completed, so no carry candidate remains',
+      [inv.state().contributionCarry.filter(c => c.entityType !== 'goal').length, before, august, seen, imRow(), candidate(inv)],
       [0, [{ paymentId: 'im', entityType: 'investment', entityId: 'iA', kind: 'undated_contribution', amount: 200, recurrence: 'monthly', dueDateSnapshot: '2026-06-05' }, 5200],
-        ['paid', 200, '', 0], { paymentId: 'im', entityType: 'investment', entityId: 'iA', kind: 'undated_contribution', amount: 200, recurrence: 'monthly', dueDateSnapshot: '2026-06-05' }, 5200]);
+        ['paid', 200, '', 0], months.map(() => ['upcoming', 5200]), ['upcoming', 200, '', 0], null]);
 
     const GA = FA3B_GOALS.filter(c => c[0] === 'monthly-ambiguous')[0];
     const resaved = new App(GA[2], '2026-08-10');
@@ -3730,7 +3733,7 @@ function fa3cbIntegration() {
     const run = item => { const a = carriedFixture('monthly-ambiguous'); const r = attempt(a, x => x.smartImport([item])); a.reload(); return [carryView(a), a.state().payments.length, a.snap().inv.iA, r[1]]; };
     const merge = o => Object.assign({ name: 'Holiday monthly', amount: 100, date: '2026-08-01', link: 'goal:gH', mergeId: 'pm' }, o);
     const added = (() => { const a = carriedFixture('monthly-ambiguous'); a.smartImport([{ name: 'Holiday', amount: 100, date: '2026-08-01', link: 'goal:gH' }]); a.reload(); return carryView(a).map(v => JSON.stringify(v).replace(/"id\d+"/g, '"new"')).map(JSON.parse); })();
-    invariant('FA3CB.smart-import', 'Merging into the carried GA row (read after the next load: Smart Import does not recompute in-session): same amount, paid → nothing; £120 → amended; a future date (upcoming) → reversed; linked to the ISA → not merged (row, carry and ISA unchanged); an import added as its own row is a new dated occurrence beside the carry. Never dated, never a second carry',
+    invariant('FA3CB.smart-import', 'Merging into the carried GA row (read after the next load; same-session recompute is FA7C.smart-import): same amount, paid → nothing; £120 → amended; a future date (upcoming) → reversed; linked to the ISA → not merged (row, carry and ISA unchanged); an import added as its own row is a new dated occurrence beside the carry. Never dated, never a second carry',
       [run(merge({})), run(merge({ amount: 120 })), run(merge({ date: '2026-08-20' })), run(merge({ link: 'invest:iA' })), added],
       [[GA_HELD, 1, 5000, false], [[1120, 1120, [['carry_pm', 'goal:gH', 120]], [['carry_pm', 'amended', 120]], [], 1000], 1, 5000, false],
         [[1000, 1000, [], [['carry_pm', 'reversed']], [], 1000], 1, 5000, false], [GA_HELD, 1, 5000, true],
@@ -3838,8 +3841,8 @@ const b2Ambiguous = (row, extra) => new App(legacyState({}, Object.assign({ inve
 /** A row completed natively this month: its paid state is a dated completion it represents. */
 const b2Dated = (row, extra) => { const app = new App(legacyState({}, Object.assign({ payments: [row] }, extra || {})), B2_AT); app.toggle(row.id); return app; };
 /**
- * An annual row completed in August 2025 and seen in September 2026. An investment row is still paid (the annual reset
- * leaves investment rows to FA-7), its completion an earlier occurrence; a goal row became its 2026 occurrence in August 2026.
+ * An annual row completed in August 2025 and seen in September 2026: goal and (since FA-7C) investment rows became
+ * their 2026 occurrence in August 2026; the 2025-08 completion stays as history.
  */
 const b2Stale = (row, extra) => {
   const app = new App(legacyState({}, Object.assign({ payments: [row] }, extra || {})), '2025-08-04'); app.reload(); app.toggle(row.id);
@@ -3897,8 +3900,9 @@ function fa3cb2Boundary() {
 
     const sti = b2Stale(legacyInvPay('ia', { rec: 'annual', status: 'upcoming', date: '2025-08-05' }));
     const stiTry = attempt(sti, b2ToGoal('ia'));
-    invariant('FA3CB2.inv-goal.stale', 'An annual ISA £200 completed in August 2025, still paid in September 2026 (its completion an earlier occurrence the row no longer represents), relinked to Holiday: refused, nothing changed — the 2025-08 ISA completion stays ISA history, Holiday receives nothing (£1,000, simulated £1,000), ISA £5,200',
-      [stiTry, b2Active(sti), b2View(sti)], [[[REFUSED_MOVE], true], [['investment:iA', '2025-08', 200]], [1000, 1000, 5200]]);
+    const stiRow = sti.state().payments[0];
+    invariant('FA3CB2.inv-goal.stale', 'No longer stale (FA-7C, like the goal mirror below): the annual ISA £200 completed in August 2025 became its upcoming 2026 occurrence in August 2026 (before FA-7C investment rows stayed paid and this relink was refused), so relinking it to Holiday is an ordinary unpaid move, allowed and moving no money — the 2025-08 ISA completion stays ISA history (ISA £5,200), Holiday receives nothing (£1,000, simulated £1,000)',
+      [stiTry, b2Active(sti), [stiRow.status, stiRow.goalId, stiRow.investId], b2View(sti)], [[[], false], [['investment:iA', '2025-08', 200]], ['upcoming', 'gH', ''], [1000, 1000, 5200]]);
 
     const stg = b2Stale(legacyPay('ga', { rec: 'annual', status: 'upcoming', date: '2025-08-05', amount: 200 }));
     const stgTotal = authority(stg).goals.gH.shown + stg.snap().inv.iA;
@@ -3915,7 +3919,7 @@ function fa3cb2Boundary() {
 
     const ii = b2Ambiguous(null, { investments: [Object.assign(ISA(), { balance: 5200 }), PENSION()] });
     const iiTry = attempt(ii, a => a.editPayment('im', { investId: 'iB' }));
-    invariant('FA3CB2.inv-inv.ambiguous', 'Within investments nothing new is refused: the ambiguous paid ISA row moves to the Pension (no event; the undated investment evidence now names the Pension). Since FA-7B rows are not investment authority: the £200 stays held by the ISA opening anchor (ISA £5,200, Pension £3,000) — re-attributing absorbed ambiguous rows is FA-7C',
+    invariant('FA3CB2.inv-inv.ambiguous', 'Within investments nothing new is refused: the ambiguous paid ISA row moves to the Pension (no event; the undated investment evidence now names the Pension). Rows are not investment authority (FA-7B) and the move is prospective only (FA-7C): the absorbed £200 stays with the ISA opening anchor (ISA £5,200, Pension £3,000), no anchor is rewritten, no history invented; the Pension gains only occurrences completed later (FA7C.relink)',
       [iiTry[0], [ii.snap().inv.iA, ii.snap().inv.iB], ii.events().length, (b2Candidate(ii, 'im') || {}).entityId], [[], [5200, 3000], 0, 'iB']);
     const id2 = b2Dated(legacyInvPay('id', { rec: 'yes', status: 'upcoming', date: '2026-08-05' }), { investments: [ISA(), PENSION()] });
     const id2Try = attempt(id2, a => a.editPayment('id', { investId: 'iB' }));
@@ -3967,13 +3971,13 @@ function fa3cb2Boundary() {
       [[1000, 1000], [1200, 1200], [1200, 1200], [1000, 1000], [1200, 1200], [1000, 1000], [1200, 1200], [1000, 1000], [1000, 1000], [1200, 1200], [1000, 1000]]);
 
     const atm = b2Ambiguous(); attempt(atm, b2ToGoal('im'));
-    invariant('FA3CB2.atomic', 'Every refusal is atomic: the form refusals (ambiguous monthly and annual, dateless one-off, stale ISA) and the Smart Import refusal left the whole stored state unchanged, and a refused form save keeps the edit\'s intent ("replace") for the retry',
-      [[ambTry, anTry, odTry, stiTry].map(t => t[1]), siTry[1], atm.run('window._geodePayLinkedIntent')], [[true, true, true, true], true, 'replace']);
+    invariant('FA3CB2.atomic', 'Every refusal is atomic: the form refusals (ambiguous monthly and annual, dateless one-off) and the Smart Import refusal left the whole stored state unchanged, and a refused form save keeps the edit\'s intent ("replace") for the retry (the stale ISA move is no longer refused since FA-7C: FA3CB2.inv-goal.stale)',
+      [[ambTry, anTry, odTry].map(t => t[1]), siTry[1], atm.run('window._geodePayLinkedIntent')], [[true, true, true], true, 'replace']);
 
     const card = { debts: [{ id: 'dC', name: 'Card', balance: 1000, minPayment: 50, apr: 25 }] };
     const bl = b2Ambiguous(null, card), bd = b2Ambiguous(null, card);
     const blTry = attempt(bl, a => a.editPayment('im', { investId: '' })), bdTry = attempt(bd, a => a.editPayment('im', { investId: '', debtId: 'dC' }));
-    invariant('FA3CB2.scope', 'Bill and debt destinations keep their FA-3C-B behaviour (for investment rows an FA-7C decision): the ambiguous paid ISA row can still become a bill or a debt payment; since FA-7B the row is not investment authority, so the ISA keeps the £200 its opening anchor holds (ISA £5,200 each)',
+    invariant('FA3CB2.scope', 'Bill and debt destinations keep their FA-3C-B behaviour: the ambiguous paid ISA row can still become a bill or a debt payment. The change is prospective (FA-7C): the row is not investment authority, so the ISA keeps the £200 its opening anchor holds (ISA £5,200 each), nothing reversed or invented',
       [blTry[0], bl.snap().inv.iA, bdTry[0], bd.snap().inv.iA], [[], 5200, [], 5200]);
 
     const dl = b2Ambiguous(legacyInvPay('iz', { rec: 'yes', date: '2026-06-05', investId: 'iZ' }));
@@ -4161,9 +4165,10 @@ function fa3cb3aForm() {
     const goalTry = attempt(goal, a => a.modalEdit('pm', { goalId: '', investId: 'iA' }));
     invariant('FA3CB3A.b2-still-refuses', 'The red-team bypass is closed: the ambiguous paid ISA row renamed and reloaded after the transition is still ambiguous — lastPaidYM empty, no event, no investment carry — so ISA → Holiday is still refused, nothing changed (ISA £5,200, Holiday £1,000); the ambiguous Holiday row (holding its transition carry) renamed and reloaded is still refused Holiday → ISA',
       [isaAfter, isaTry, b2View(isa), b3aProv(goal, 'pm'), goalTry], [[['', 0, 0], 0], [[REFUSED_MOVE], true], [1000, 1000, 5200], ['', 0, 1], [[REFUSED_MOVE], true]]);
+    const candAugust = b2Candidate(isa, 'im');
     isa.advance('2026-09-02', 'reload'); isa.reload();
-    invariant('FA3CB3A.fa7-evidence', 'The undated ISA evidence FA-7 will carry survives the edit: geodeLegacyCarryCandidate gives the same ISA £200 candidate before the rename, after it, after reload and the refused relink, and after the September reload',
-      [cand0, candSaved, b2Candidate(isa, 'im')], [B2_CANDIDATE, B2_CANDIDATE, B2_CANDIDATE]);
+    invariant('FA3CB3A.fa7-evidence', 'The undated ISA evidence survives the edit: geodeLegacyCarryCandidate gives the same ISA £200 candidate before the rename, after it, and after reload and the refused relink. In September (FA-7C) the row, its £200 held by the ISA opening anchor, becomes upcoming: nothing completed, so no candidate, no event, ISA £5,200 (before FA-7C it stayed completed)',
+      [cand0, candSaved, candAugust, b2Candidate(isa, 'im'), isa.state().payments[0].status, isa.events().length, isa.snap().inv.iA], [B2_CANDIDATE, B2_CANDIDATE, B2_CANDIDATE, null, 'upcoming', 0, 5200]);
   });
 
   scenario('FA-3C-B.3a — temporal and migration weaknesses left open for FA-3C-B.3b, as FA-3C-B.3b leaves them', () => {
@@ -4594,8 +4599,8 @@ function fa3ccLifecycle() {
     const invSeen = [invLook()];
     inv.advance('2026-09-10', 'reload'); invSeen.push(invLook());
     inv.advance('2026-10-10', 'reload'); invSeen.push(invLook());
-    invariant('FA3CC.c3.investment', 'Schema-2 paid ISA monthly rows stamped August with no completion — one native-looking, one relinked from a removed investment (the recorder\'s row-evidence path) — are never dated: not by that edit, not by the safety net, not at rollover; with no completion owning their month both stay completed, preserved for FA-7C; since FA-7B a paid row without a completion is no cash flow, so the ISA stays at its opening anchor (£5,000; before FA-7B the rows counted, £5,350)',
-      invSeen, [[0, ['paid', 'paid'], 5000], [0, ['paid', 'paid'], 5000], [0, ['paid', 'paid'], 5000]]);
+    invariant('FA3CC.c3.investment', 'Schema-2 paid ISA monthly rows stamped August with no completion — one native-looking, one relinked from a removed investment (the recorder\'s row-evidence path) — are never dated: not by that edit, not by the safety net, not at rollover. Since FA-7B a paid row without a completion is no cash flow (ISA £5,000, the opening anchor; before FA-7B the rows counted, £5,350); since FA-7C such a row is lifecycle only, so both become upcoming once their stamped month (August) has passed — nothing recorded, ISA £5,000 (before FA-7C they stayed completed)',
+      invSeen, [[0, ['paid', 'paid'], 5000], [0, ['upcoming', 'upcoming'], 5000], [0, ['upcoming', 'upcoming'], 5000]]);
   });
 
   scenario('FA-3C-C C4b — a carried monthly row resets once its carry\'s month has passed; the carry stays', () => {
@@ -4623,9 +4628,9 @@ function fa3ccLifecycle() {
 
     const mix = new App(CARRY_MIX, '2026-08-20');
     mix.advance('2026-09-05', 'reload'); mix.advance('2026-10-05', 'reload');
-    invariant('FA3CC.c4b.monthly-only', 'Only carried monthly rows reset: by October the carried monthly Holiday and Car rows are upcoming, while the carried annual and negative one-off rows, the dated one-off, the unstamped ISA row and the removed-goal row stay completed; all four carries kept, nothing reversed or dated; Holiday £1,350, Car £540',
-      [mix.state().payments.map(p => [p.id, p.status, p.lastPaidYM || '']), activeCarryRows(authority(mix).active).length, resolutionRows(mix), mix.events().length, mix.snap().goal],
-      [[['p1', 'paid', ''], ['px', 'upcoming', ''], ['pa', 'paid', ''], ['pn', 'paid', ''], ['pb', 'upcoming', ''], ['im', 'paid', ''], ['pg', 'paid', '']], 4, [], 1, { gH: 1350, gB: 540 }]);
+    invariant('FA3CC.c4b.monthly-only', 'Only carried monthly rows reset: by October the carried monthly Holiday and Car rows are upcoming, while the carried annual and negative one-off rows, the dated one-off and the removed-goal row stay completed; all four carries kept, nothing reversed or dated; Holiday £1,350, Car £540. The unstamped ISA row (no carry: its £200 is held by the ISA opening anchor) is lifecycle only since FA-7C and is upcoming too; ISA £5,200, no event',
+      [mix.state().payments.map(p => [p.id, p.status, p.lastPaidYM || '']), activeCarryRows(authority(mix).active).length, resolutionRows(mix), mix.events().length, mix.snap().goal, mix.snap().inv.iA],
+      [[['p1', 'paid', ''], ['px', 'upcoming', ''], ['pa', 'paid', ''], ['pn', 'paid', ''], ['pb', 'upcoming', ''], ['im', 'upcoming', ''], ['pg', 'paid', '']], 4, [], 1, { gH: 1350, gB: 540 }, 5200]);
 
     const before = new App(GA_STATE(), '2026-08-10');
     before.toggle('pm'); before.reload();
@@ -5345,12 +5350,12 @@ function fa7bEvidence() {
     si.at('2026-06-25');
     si.smartImport([{ name: 'ISA early June', amount: 200, date: '2026-06-05', link: 'invest:iA' }, { name: 'ISA 22 June', amount: 150, date: '2026-06-22', link: 'invest:iA' }]);
     const imported = si.activeEvents().map(e => [e.amount, e.source, e.dueDateSnapshot]);
-    const noRecompute = si.snap().inv.iA;
+    const sameSession = si.snap().inv.iA;
     fa7bRecompute(si);
     const recomputed = si.snap().inv.iA;
     si.reload();
-    invariant('FA7B.effective.smart-import', 'Back-dated import: on 25 June Smart Import records a 5 June £200 and a 22 June £150 transaction. A recompute (Smart Import itself does not recompute: FA-7C) gives £5,750 — the 5 June £200 is held by the 20 June observation, the 22 June £150 follows it; reload agrees',
-      [imported, noRecompute, recomputed, si.snap().inv.iA], [[[200, 'smart_import', '2026-06-05'], [150, 'smart_import', '2026-06-22']], 5600, 5750, 5750]);
+    invariant('FA7B.effective.smart-import', 'Back-dated import: on 25 June Smart Import records a 5 June £200 and a 22 June £150 transaction: £5,750 at once in the same session (FA-7C: Smart Import recomputes; before it the session showed £5,600 until a recompute) — the 5 June £200 is held by the 20 June observation, the 22 June £150 follows it; a further recompute and a reload agree',
+      [imported, sameSession, recomputed, si.snap().inv.iA], [[[200, 'smart_import', '2026-06-05'], [150, 'smart_import', '2026-06-22']], 5750, 5750, 5750]);
 
     const merge = freshApp(a => a.contribute({ name: 'ISA monthly', amount: 200, date: '2026-06-10', status: 'upcoming', rec: 'yes', investId: 'iA' }));
     const row = merge.state().payments[0].id;
@@ -5433,6 +5438,155 @@ function fa7bEvidence() {
   });
 }
 
+// ───────────────────────────── FA-7C investment occurrence lifecycle ─────────────────────────────
+
+/** ISA (legacy base £5,000) holding an ambiguous paid monthly £200 row (no lastPaidYM): the legacy figure £5,200. */
+const FA7C_AMBIGUOUS = extra => legacyInvState({ balance: 5200 }, Object.assign({ payments: [legacyInvPay('im', { rec: 'yes', date: '2026-06-05' })] }, extra || {}));
+/** [row status, lastPaidYM, ISA, events, contribution carries, ISA valuations] */
+const fa7cLook = (app, id) => {
+  const p = app.state().payments.filter(x => x.id === (id || 'im'))[0];
+  return [p ? p.status : 'deleted', p ? p.lastPaidYM || '' : '', app.snap().inv.iA, app.events().length, (app.state().contributionCarry || []).length, fa7bVals(app).length];
+};
+
+function fa7cLifecycle() {
+  MODES.forEach(mode => scenario('FA-7C AMBIGUOUS ROW — absorbed by the opening anchor, lifecycle only, month boundary [' + mode + ']', () => {
+    const app = new App(FA7C_AMBIGUOUS(), '2026-08-10');
+    const seen = [fa7cLook(app)];
+    app.reload(); seen.push(fa7cLook(app));
+    clockAt(app, '2026-08-31', 23, 50);
+    if (mode === 'reload') app.reload(); else app.render();
+    seen.push(fa7cLook(app));
+    clockAt(app, '2026-09-01', 0, 10);
+    if (mode === 'reload') app.reload(); else app.render();
+    seen.push(fa7cLook(app));
+    const dueSep = app.state().payments[0].date;
+    app.advance('2026-09-10', mode);
+    app.toggle('im');
+    const completed = [fa7cLook(app), app.activeEvents().map(e => [e.entityType + ':' + e.entityId, e.occurrenceYm, e.amount, e.source])];
+    app.reload();
+    const PAID = ['paid', '', 5200, 0, 0, 1], UP = ['upcoming', '', 5200, 0, 0, 1];
+    invariant('FA7C.ambiguous.monthly', 'A/B/C: the ambiguous paid ISA row (its £200 held by the opening anchor, £5,200) stays completed through the transition month — loads and renders on the 10th and at 23:50 on 31 August — and is upcoming at 00:10 on 1 September (due ' + dueSep + '), with no lastPaidYM, no completion and no carry invented and ISA still £5,200; completing September records a dated 2026-09 £200 completion: £5,400, also after reload',
+      [seen, dueSep, completed, app.snap().inv.iA],
+      [[PAID, PAID, PAID, UP], '2026-09-05', [['paid', '2026-09', 5400, 1, 0, 1], [['investment:iA', '2026-09', 200, 'mark_completed']]], 5400]);
+  }));
+
+  scenario('FA-7C AMBIGUOUS ROW — year boundary', () => {
+    const app = new App(FA7C_AMBIGUOUS(), '2026-12-15');
+    const dec = fa7cLook(app);
+    clockAt(app, '2026-12-31', 23, 50); app.reload();
+    const nye = fa7cLook(app);
+    clockAt(app, '2027-01-01', 0, 10); app.reload();
+    invariant('FA7C.ambiguous.year', 'Q: transitioned on 15 December 2026, the absorbed row stays completed through 23:50 on 31 December and is upcoming at 00:10 on 1 January 2027 (due ' + app.state().payments[0].date + '); ISA £5,200 throughout, nothing recorded',
+      [dec, nye, fa7cLook(app), app.state().payments[0].date], [['paid', '', 5200, 0, 0, 1], ['paid', '', 5200, 0, 0, 1], ['upcoming', '', 5200, 0, 0, 1], '2027-01-05']);
+  });
+
+  scenario('FA-7C AMBIGUOUS ROW — no anchor, no reset; delete keeps the anchor value', () => {
+    const legacy = legacyLoad(FA7C_AMBIGUOUS(), '2026-08-10');
+    legacy.advance('2026-10-05', 'reload');
+    invariant('FA7C.ambiguous.no-anchor', 'Where the investment has no valid valuation (schema-1 fallback: legacy authority, the row is the value) the ambiguous row keeps its paid state through October: ISA £5,200, no valuation',
+      [fa7cLook(legacy)], [['paid', '', 5200, 0, 0, 0]]);
+
+    const delPaid = new App(FA7C_AMBIGUOUS(), '2026-08-10');
+    delPaid.del('im');
+    const afterPaid = [fa7cLook(delPaid), delPaid.snap().inv.iA];
+    delPaid.reload();
+    const delLater = new App(FA7C_AMBIGUOUS(), '2026-08-10');
+    delLater.advance('2026-09-05', 'reload'); delLater.del('im'); delLater.reload();
+    invariant('FA7C.ambiguous.delete', 'D: deleting the absorbed template while completed (August) or after its reset (September) removes the row only — no reversal for evidence that never existed, no event, the opening anchor untouched: ISA £5,200, also after reload',
+      [afterPaid, fa7cLook(delPaid), fa7bVals(delPaid), fa7cLook(delLater)],
+      [[['deleted', '', 5200, 0, 0, 1], 5200], ['deleted', '', 5200, 0, 0, 1], [[5200, '2026-08-10', 'legacy_transition']], ['deleted', '', 5200, 0, 0, 1]]);
+  });
+
+  scenario('FA-7C AMBIGUOUS ROW — relink is prospective', () => {
+    const app = new App(FA7C_AMBIGUOUS({ investments: [Object.assign(ISA(), { balance: 5200 }), PENSION()] }), '2026-08-10');
+    app.editPayment('im', { investId: 'iB' });
+    const moved = [app.snap().inv.iA, app.snap().inv.iB, app.events().length, fa7bVals(app, 'iA'), fa7bVals(app, 'iB'), app.state().payments[0].status];
+    app.advance('2026-09-05', 'reload');
+    const reset = [app.state().payments[0].status, app.snap().inv.iA, app.snap().inv.iB];
+    app.at('2026-09-10'); app.toggle('im'); app.reload();
+    invariant('FA7C.relink', 'E/F: the absorbed ambiguous row moved ISA → Pension in August moves no history: ISA keeps £5,200 (its anchor), Pension £3,000, no event, both anchors unchanged; the row resets in September; its September completion is a Pension occurrence: Pension £3,200, ISA £5,200',
+      [moved, reset, app.activeEvents().map(e => [e.entityType + ':' + e.entityId, e.occurrenceYm, e.amount]), app.snap().inv.iA, app.snap().inv.iB],
+      [[5200, 3000, 0, [[5200, '2026-08-10', 'legacy_transition']], [[3000, '2026-08-10', 'legacy_transition']], 'paid'], ['upcoming', 5200, 3000],
+        [['investment:iB', '2026-09', 200]], 5200, 3200]);
+  });
+}
+
+function fa7cAnnual() {
+  MODES.forEach(mode => scenario('FA-7C J7 — annual ISA £250 in 2026, template £300, 2027 occurrence £300 [' + mode + ']', () => {
+    const app = freshApp();
+    const id = app.contribute({ name: 'ISA annual', amount: 250, date: '2026-06-10', status: 'upcoming', rec: 'annual', investId: 'iA' });
+    app.at('2026-06-10'); app.toggle(id);
+    const ev = () => app.activeEvents().map(e => [e.occurrenceYm, e.amount, e.recurrence]);
+    const row = () => { const p = app.state().payments.filter(x => x.id === id)[0]; return [p.status, p.amount, p.date, p.lastPaidYM || '']; };
+    const seq = [[app.snap().inv.iA, ev(), row()]];
+    app.editPayment(id, { amount: 300 }); seq.push([app.snap().inv.iA, ev(), row()]);
+    app.advance('2026-12-02', mode); seq.push([app.snap().inv.iA, ev(), row()]);
+    app.advance('2027-06-01', mode); seq.push([app.snap().inv.iA, ev(), row()]);
+    app.at('2027-06-10'); app.toggle(id); seq.push([app.snap().inv.iA, ev(), row()]);
+    app.reload(); seq.push([app.snap().inv.iA, ev(), row()]);
+    const y26 = ['2026-06', 250, 'annual'], y27 = ['2027-06', 300, 'annual'];
+    invariant('FA7C.J7', 'J7 / G-J: anchor £5,000 → 2026 completion £250: £5,250, row advanced to June 2027 → template edited to £300: £5,250, the 2026 completion keeps £250 → December: still completed → June 2027: the upcoming 2027 occurrence at £300, ISA £5,250, the 2026 £250 still active → completing 2027 records £300: £5,550, row advanced to June 2028 → reload £5,550. No reversal: entering 2027 never undoes 2026',
+      [seq, app.events().filter(e => e.eventType === 'reversal').length],
+      [[[5250, [y26], ['paid', 250, '2027-06-10', '2026-06']], [5250, [y26], ['paid', 300, '2027-06-10', '2026-06']], [5250, [y26], ['paid', 300, '2027-06-10', '2026-06']],
+        [5250, [y26], ['upcoming', 300, '2027-06-10', '']], [5550, [y26, y27], ['paid', 300, '2028-06-10', '2027-06']], [5550, [y26, y27], ['paid', 300, '2028-06-10', '2027-06']]], 0]);
+  }));
+
+  scenario('FA-7C ANNUAL — an investment without a valuation keeps the annual exclusion', () => {
+    const app = legacyLoad(baseState(), '2026-06-05');
+    const id = app.contribute({ name: 'ISA annual', amount: 250, date: '2026-06-10', status: 'upcoming', rec: 'annual', investId: 'iA' });
+    app.at('2026-06-10'); app.toggle(id);
+    app.advance('2027-06-01', 'reload');
+    const p = app.state().payments[0];
+    const bad = legacyLoad(baseState({ investments: [Object.assign(ISA(), { valuations: [{ id: 'vbad', value: 'x', date: '2026-06-05', source: 'manual', recordedAt: 1 }] })] }), '2026-06-05');
+    const badId = bad.contribute({ name: 'ISA annual', amount: 250, date: '2026-06-10', status: 'upcoming', rec: 'annual', investId: 'iA' });
+    bad.at('2026-06-10'); bad.toggle(badId);
+    bad.advance('2027-06-01', 'reload');
+    const q = bad.state().payments[0];
+    invariant('FA7C.annual.no-anchor', 'On the schema-1 fallback with no valid valuation — none, or only an invalid one (legacy authority: the paid row is the value) — the annual ISA row is not reset in June 2027: still paid for 2026-06, ISA £5,250',
+      [[p.status, p.lastPaidYM], app.snap().inv.iA, fa7bVals(app).length, [q.status, q.lastPaidYM], bad.snap().inv.iA], [['paid', '2026-06'], 5250, 0, ['paid', '2026-06'], 5250]);
+  });
+}
+
+function fa7cSmartImport() {
+  scenario('FA-7C SMART IMPORT — same-session recompute', () => {
+    const app = freshApp();
+    app.at('2026-06-20');
+    app.smartImport([{ name: 'Holiday top-up', amount: 100, date: '2026-06-18', link: 'goal:gH' }, { name: 'ISA top-up', amount: 200, date: '2026-06-18', link: 'invest:iA' }]);
+    const session = [app.snap().goal.gH, app.snap().inv.iA];
+    fa7bRecompute(app);
+    const again = [app.snap().goal.gH, app.snap().inv.iA];
+    app.reload();
+    invariant('FA7C.smart-import', 'K/L/P: importing a Holiday £100 and an ISA £200 transaction (18 June) shows Holiday £1,100 and ISA £5,200 at once in the same session (before FA-7C both stayed stale until a recompute or reload); a further recompute and a reload agree',
+      [session, again, [app.snap().goal.gH, app.snap().inv.iA]], [[1100, 5200], [1100, 5200], [1100, 5200]]);
+
+    const goalOnly = freshApp();
+    goalOnly.at('2026-06-20');
+    goalOnly.smartImport([{ name: 'Holiday top-up', amount: 100, date: '2026-06-18', link: 'goal:gH' }]);
+    invariant('FA7C.smart-import.goal-only', 'A goal-only import moves the goal, never investment authority: Holiday £1,100, ISA £5,000 (its anchor, no flow)',
+      [goalOnly.snap().goal.gH, fa7bLook(goalOnly)], [1100, [5000, 5000, 5000, 5000, 'legacy_transition', 0, 0, false]]);
+
+    const ordered = freshApp();
+    ordered.at('2026-06-20'); ordered.saveInvestment('iA', 'ISA', 5600);
+    ordered.at('2026-06-25');
+    ordered.smartImport([{ name: 'ISA early June', amount: 200, date: '2026-06-05', link: 'invest:iA' }]);
+    const backDated = ordered.snap().inv.iA;
+    ordered.smartImport([{ name: 'ISA 22 June', amount: 150, date: '2026-06-22', link: 'invest:iA' }]);
+    invariant('FA7C.smart-import.order', 'M/N: after a £5,600 observation on 20 June, a back-dated 5 June £200 import stays held by it in the same session (£5,600); a 22 June £150 import follows it at once (£5,750)',
+      [backDated, ordered.snap().inv.iA], [5600, 5750]);
+
+    const merge = freshApp(a => a.contribute({ name: 'ISA monthly', amount: 200, date: '2026-06-10', status: 'upcoming', rec: 'yes', investId: 'iA' }));
+    const row = merge.state().payments[0].id;
+    merge.at('2026-06-20');
+    const item = { name: 'ISA monthly', amount: 200, date: '2026-06-15', link: 'invest:iA', mergeId: row };
+    merge.smartImport([item]);
+    const first = [merge.snap().inv.iA, merge.activeEvents().length];
+    merge.smartImport([item]);
+    merge.reload();
+    invariant('FA7C.smart-import.merge', 'O: merging a £200 import into the ISA row completes it once (£5,200, one completion, same session); importing the same transaction into it again records nothing more: £5,200, one completion, also after reload',
+      [first, merge.snap().inv.iA, merge.activeEvents().length], [[5200, 1], 5200, 1]);
+  });
+}
+
 // ───────────────────────────── run ─────────────────────────────
 
 let PROGRAM;
@@ -5453,6 +5607,7 @@ function main() {
   fa3cbActions(); fa3cbValidation(); fa3cbTimelines(); fa3cbIntegration(); fa3cb2Boundary(); fa3cb3aForm(); fa3cb3bTemporal();
   fa3ccTransition(); fa3ccCrash(); fa3ccAuthority(); fa3ccLifecycle(); fa3ccRefusal(); fa3ccPositions();
   fa7bTransition(); fa7bSafety(); fa7bJourneys(); fa7bEvidence();
+  fa7cLifecycle(); fa7cAnnual(); fa7cSmartImport();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
   migrationFixtures();
 
