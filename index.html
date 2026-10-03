@@ -1358,8 +1358,11 @@ try {
 var KEY = 'geode_v6';
 /** Deploy/runtime marker for support and PWA freshness checks (80N-P.1); not persisted. */
 var BEYND_RUNTIME_VERSION = 'v1.0.75';
-/** Local persisted-state schema marker for backup/restore validation (bump when structure changes). */
-var GEODE_SCHEMA_VERSION = 1;
+/**
+ * Local persisted-state schema marker for backup/restore validation (bump when structure changes).
+ * 2: goal Saved is base + dated contribution events + legacy carries − releases (geodeSchema2Transition).
+ */
+var GEODE_SCHEMA_VERSION = 2;
 /** Until splash finishes, save() must not bump last-active (avoids sync-on-load skipping lock). */
 var _geodeBootstrap = true;
 var _geodeFirstBoot = false;
@@ -1578,6 +1581,13 @@ function setAppearance(v) {
     if (typeof tab !== 'undefined' && tab === 'me') rMe();
   } catch (e2) {}
 }
+/**
+ * FA-3C-C: schema of stored data. A missing or invalid marker means data written before the marker existed
+ * (schema 1), never the current GEODE_SCHEMA_VERSION; only a fresh install starts at the current version.
+ */
+function geodePersistedSchemaVersion(v) {
+  return typeof v === 'number' && isFinite(v) && v === Math.floor(v) && v >= 1 ? v : 1;
+}
 function load() {
   var _loadedAppearanceWasMissing = false;
   try {
@@ -1589,15 +1599,7 @@ function load() {
       for (var k in p) S[k] = p[k];
       if (!S.finRegion || !/^(UK|US|EU|Other)$/.test(String(S.finRegion))) S.finRegion = 'UK';
       if (S.planStrategy !== 'debt' && S.planStrategy !== 'balanced' && S.planStrategy !== 'growth') S.planStrategy = 'balanced';
-      var _sv = S._schemaVersion;
-      if (
-        typeof _sv !== 'number' ||
-        !isFinite(_sv) ||
-        _sv !== Math.floor(_sv) ||
-        _sv < 1
-      ) {
-        S._schemaVersion = GEODE_SCHEMA_VERSION;
-      }
+      S._schemaVersion = geodePersistedSchemaVersion(p._schemaVersion);
     }
   } catch(e) {}
   if (!S.snapshots || typeof S.snapshots !== 'object' || Array.isArray(S.snapshots)) S.snapshots = {};
@@ -1660,12 +1662,14 @@ function load() {
   }
   geodeNormalizeContributionEvents(S);
   geodeNormalizeContributionCarry(S);
-  geodeSeedLegacyContributionEvents();
-  syncRecurringPayments();
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
-  geodeNormalizeDebtHealthFields(S);
   geodeNormalizeSavingsReleases(S);
+  /** FA-3C-C: the transition reads legacy paid rows, so it runs before recurring sync resets them. */
+  if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
+  else geodeSchema2Transition();
+  syncRecurringPayments();
+  geodeNormalizeDebtHealthFields(S);
   geodeNormalizeDebtPaymentEvents(S);
   /** Stage 80R-D.1: align display saved/balance with base fields + paid payments after boot. */
   geodeRecomputeBalancesFromPayments();
@@ -4549,7 +4553,7 @@ function geodePaymentBalanceEffect(state, p) {
 }
 
 /**
- * Completed contributions geodeRecomputeBalancesFromPayments currently adds to a goal: total, and the part from
+ * Completed contributions geodeRecomputeBalancesFromPayments adds to a goal in schema 1: total, and the part from
  * monthly-recurring rows, which stop counting when the month rolls over.
  */
 function geodeGoalCountedContributions(state, goal) {
@@ -4564,8 +4568,13 @@ function geodeGoalCountedContributions(state, goal) {
   return out;
 }
 
+/**
+ * Sole writer of the g.saved / inv.balance caches every reader uses. Schema 2: goals hold geodeSchema2GoalPosition
+ * (payment rows no longer add history). Investments, and goals in schema 1, rebuild from base + paid rows − releases.
+ */
 function geodeRecomputeBalancesFromPayments() {
   try {
+    var schema2 = geodeSchema2Active(S);
     (S.goals || []).forEach(function (g) {
       g.saved = toNum(g.baseSaved);
     });
@@ -4577,12 +4586,17 @@ function geodeRecomputeBalancesFromPayments() {
     (S.payments || []).forEach(function (p) {
       var eff = geodePaymentBalanceEffect(S, p);
       if (!eff) return;
-      if (eff.goal) eff.goal.saved += eff.amount;
-      else eff.investment.balance += eff.amount;
+      if (eff.goal) {
+        if (!schema2) eff.goal.saved += eff.amount;
+      } else eff.investment.balance += eff.amount;
     });
 
     (S.goals || []).forEach(function (g) {
       if (!g || g.id == null) return;
+      if (schema2) {
+        g.saved = geodeSchema2GoalPosition(S, g);
+        return;
+      }
       var ded = geodeSavingsReleaseDeductionSumForSource(S, g.id);
       if (ded > 0) {
         g.saved = Math.max(0, Math.round((toNum(g.saved) - ded) * 100) / 100);
@@ -6650,8 +6664,9 @@ function geodeDebtPaymentActiveCompletions(state) {
 
 /**
  * FA-3A: goal/investment contribution ledger — append-only memory of each paid occurrence of a goal- or
- * investment-linked payment row (completion) and of each undo (reversal). Observational only: no balance, Plan,
- * Monthly Left or recompute path reads it. Capture never edits or removes an event; events whose payment or
+ * investment-linked payment row (completion) and of each undo (reversal). FA-3C-C: in schema 2 goal completions are
+ * part of goal Saved (geodeSchema2GoalPosition); investment completions stay history only until FA-7, and Monthly
+ * Left never reads the ledger. Capture never edits or removes an event; events whose payment or
  * goal/investment no longer exists stay valid. Debt rows are recorded in debtPaymentEvents instead.
  */
 function geodeNormalizeContributionEvents(state) {
@@ -6742,7 +6757,7 @@ function geodeContributionLedger(list) {
   return { kept: kept, active: active };
 }
 
-/** FA-3A: unreversed completions. A reversal never carries value of its own. Read-only; never feeds an engine. */
+/** FA-3A: unreversed completions. A reversal never carries value of its own. Read-only. */
 function geodeContributionActiveCompletions(state) {
   return geodeContributionLedger(state && state.contributionEvents).active;
 }
@@ -7013,6 +7028,7 @@ function geodeRecordContributionDeletion(row, source) {
  * so no due-date snapshot is kept. A paid state that is still a legacy carry's occurrence (geodeContributionCarryForRow)
  * is left to the carry: the reset ends the row's hold on it, and the carry stays as history.
  * FA-3C-B.3b: the occurrence is the one migration would accept (geodeLegacyContributionSeedFields), never the due month.
+ * FA-3C-C: schema 1 only — in schema 2 migration accepts none, and syncRecurringPayments does not call it.
  */
 function geodeEnsureContributionCompletion(row, source) {
   try {
@@ -7037,8 +7053,11 @@ function geodeEnsureContributionCompletion(row, source) {
  * only when it lies in the occurrence month.
  * FA-3C-B.3b: an occurrence after the current month (a future one-off, a future-stamped lastPaidYM) proves none — the
  * effect stays as undated legacy evidence (carry / FA-7), never re-dated to the current or due month.
+ * FA-3C-C: schema 2 proves none — after the transition, row fields never become dated history, however time,
+ * edits or sync change them.
  */
 function geodeLegacyContributionSeedFields(state, p) {
+  if (geodeSchema2Active(state)) return null;
   if (!p || !geodePaymentBalanceEffect(state, p)) return null;
   var fields = geodeContributionCompletionFields(state, p);
   if (!fields) return null;
@@ -7052,8 +7071,8 @@ function geodeLegacyContributionSeedFields(state, p) {
 }
 
 /**
- * FA-3B: seed completions for paid occurrences recorded before the ledger existed. Runs on every load, after
- * normalisation and before syncRecurringPayments resets completed monthly rows; idempotent, so no marker is stored.
+ * FA-3B: seed completions for paid occurrences recorded before the ledger existed. FA-3C-C: runs once, as the first
+ * step of geodeSchema2Transition (before syncRecurringPayments resets completed monthly rows); idempotent.
  * Only payments with no ledger history are seeded: once the ledger holds any event for a payment, its transitions
  * are the recorder's (a form re-save rewrites a paid monthly row's lastPaidYM without a new payment, which the
  * recorder deliberately leaves unrecorded). A payment with a legacy carry is seen too: the carry already owns its
@@ -7091,7 +7110,8 @@ function geodeSeedLegacyContributionEvents() {
  * when money moved; recurrence and dueDateSnapshot describe the row at that moment and are never an occurrence (a
  * record naming an occurrenceYm is invalid). Carries are created only by the schema 1→2 transition (source
  * 'schema2_transition', geodeSchema2TransitionCarryRecords); later changes are appended as resolution records, never
- * as new carries. Observational: no balance, Plan, Monthly Left or recompute path reads it.
+ * as new carries. FA-3C-C: in schema 2 active goal carries are part of goal Saved (geodeSchema2GoalPosition); Monthly
+ * Left never reads them.
  */
 function geodeNormalizeContributionCarry(state) {
   state = state || S;
@@ -7199,7 +7219,7 @@ function geodeContributionCarryLedger(list) {
   return { kept: kept, active: active };
 }
 
-/** FA-3C-A: carries still in effect (after their resolutions). Read-only; never feeds an engine. */
+/** FA-3C-A: carries still in effect (after their resolutions). Read-only. */
 function geodeContributionCarryActive(state) {
   return geodeContributionCarryLedger(state && state.contributionCarry).active;
 }
@@ -7293,6 +7313,9 @@ function geodeContributionCarryFollowRow(carry, after, source) {
  * while paid, nor the reverse, unless its paid state is a dated completion it still represents
  * (geodeContributionPriorCompletion), which the recorder then moves as the same occurrence; an undated or earlier
  * occurrence has nothing that could move it truthfully. Bill and debt amounts are not judged here.
+ * FA-3C-C: in schema 2 a paid row whose effect did not count (a bill, a debt row, £0, a removed goal or investment)
+ * cannot start counting toward a goal while staying paid — no completion or carry could own that money without
+ * inventing when it moved; completing it again records it now.
  */
 function geodeContributionSaveRefusal(state, row, next) {
   var amount = Math.round(toNum(next && next.amount) * 100) / 100;
@@ -7308,6 +7331,9 @@ function geodeContributionSaveRefusal(state, row, next) {
     }
     if (carry && carry.kind === 'legacy_negative_effect' && amount > 0) {
       return 'This older entry can\u2019t be turned into a contribution. Mark it not completed, then add the contribution separately. Nothing has been changed.';
+    }
+    if (geodeSchema2Active(state) && next.kind === 'goal' && amount > 0 && !eff) {
+      return 'This payment is already marked as completed, so it can\u2019t start counting toward a goal from here. If the money went to this goal, mark it not completed, then complete it again. Nothing has been changed.';
     }
   }
   if (!contribution || amount > 0) return '';
@@ -7340,12 +7366,12 @@ function geodeLegacyCarryCandidate(state, p, dated) {
 
 /**
  * FA-3C-A: the goal carries the schema 1→2 transition would create — the only way a carry may ever come into being.
- * Pure: returns new records and never touches state. Reads rows as load leaves them after syncRecurringPayments (what
- * the legacy display counts). Goal-linked rows only: investments keep legacy authority until FA-7, which can derive
- * its carries from the same rows with geodeLegacyCarryCandidate. Payments that already have a carry get none, so a
- * repeated run creates nothing; the id is derived from the payment, so the same state yields the same records.
- * Not called by load or any action until the transition is wired; after it, missing occurrence evidence is a
- * validation problem, never a reason to create compatibility state.
+ * Pure: returns new records and never touches state. Reads rows as geodeSchema2Transition sees them, before
+ * syncRecurringPayments resets completed monthly rows (what the legacy display counts). Goal-linked rows only:
+ * investments keep legacy authority until FA-7, which can derive its carries from the same rows with
+ * geodeLegacyCarryCandidate. Payments that already have a carry get none, so a repeated run creates nothing; the id
+ * is derived from the payment, so the same state yields the same records. Called only by geodeSchema2Transition;
+ * after it, missing occurrence evidence is a validation problem, never a reason to create compatibility state.
  */
 function geodeSchema2TransitionCarryRecords(state, createdAt) {
   state = state || S;
@@ -7374,7 +7400,7 @@ function geodeSchema2TransitionCarryRecords(state, createdAt) {
 
 /**
  * FA-3C-A: a goal's schema-2 parts — baseSaved, active dated goal completions, active goal carries and confirmed
- * event-derived releases (legacy base-delta releases are already inside baseSaved). Simulation only.
+ * event-derived releases (legacy base-delta releases are already inside baseSaved).
  */
 function geodeSchema2GoalParts(state, goal) {
   var gid = String(goal.id);
@@ -7389,9 +7415,10 @@ function geodeSchema2GoalParts(state, goal) {
 }
 
 /**
- * FA-3C-A: the goal position schema 2 would make authoritative — base + dated + carry − released, with the recompute's
- * release clamp at 0. Completions and carries of a goal that no longer exists are never reached. Simulation only: no
- * display, recompute, Plan or Monthly Left path calls it.
+ * FA-3C-A: a goal's own position — base + dated + carry − released, with the release clamp at 0. FA-3C-C: in schema 2
+ * this is goal Saved: geodeRecomputeBalancesFromPayments writes it to g.saved, which every reader uses (a goal linked
+ * to a positive investment still displays that investment, geodeGoalEffectiveSavedFromState). Payment rows add
+ * nothing. Completions and carries of a goal that no longer exists are never reached.
  */
 function geodeSchema2GoalPosition(state, goal) {
   if (!goal) return 0;
@@ -7400,18 +7427,11 @@ function geodeSchema2GoalPosition(state, goal) {
   return p.released > 0 ? Math.max(0, Math.round((sum - p.released) * 100) / 100) : sum;
 }
 
-/** FA-3C-A: what a goal would display under schema 2; linked goals stay investment-derived until FA-7 (geodeGoalEffectiveSavedFromState). */
-function geodeSchema2GoalEffectiveSaved(state, goal) {
-  if (!goal) return 0;
-  if (geodeGoalHasPositiveLinkedInvestmentForState(state, goal)) return geodeGoalLinkedInvBalanceForState(state, goal.id);
-  return geodeSchema2GoalPosition(state, goal);
-}
-
 /**
- * FA-3C-A: the baseSaved a Saved So Far correction to `entered` would store under schema 2, so that
+ * FA-3C-A: the baseSaved a Saved So Far correction to `entered` stores under schema 2 (saveGoal), so that
  * geodeSchema2GoalPosition returns `entered`; null when refused (entered or the new base below 0, i.e. below what dated
- * completions and carries already hold). It corrects the goal's own position, as saveGoal does; a linked goal keeps
- * displaying its investments. Simulation only: saveGoal keeps its FA-2 rule.
+ * completions and carries already hold). It corrects the goal's own position; a linked goal keeps displaying its
+ * investments.
  */
 function geodeSchema2GoalCorrectionBase(state, goal, entered) {
   if (!goal) return null;
@@ -7419,6 +7439,159 @@ function geodeSchema2GoalCorrectionBase(state, goal, entered) {
   var p = geodeSchema2GoalParts(state, goal);
   var base = Math.round((want - p.dated - p.carry + p.released) * 100) / 100;
   return want < 0 || base < 0 ? null : base;
+}
+
+/** FA-3C-C: state is schema 2 — goal Saved is geodeSchema2GoalPosition, and payment-row fields prove no history. */
+function geodeSchema2Active(state) {
+  var v = state && state._schemaVersion;
+  return typeof v === 'number' && v >= 2;
+}
+
+/**
+ * FA-3C-C: goal authority problems in `state`, as readable strings; never changes state. Every paid row whose goal
+ * effect counts (geodePaymentBalanceEffect) needs an owner for it: the active completion its pointer names or that is
+ * keyed by its occurrence month, for the same goal, else the active carry for its payment and goal. Problems: such a
+ * row with no owner; any investment carry; an active completion dated after the current month. atTransition adds a
+ * row owned by both a completion and a carry (the transition carries only undated rows), and conservation per goal:
+ * active completions + carries must equal the counting rows' effects + the completions and carries no counting row
+ * owns (history the rows no longer show). One pass over completions, carries and rows.
+ */
+function geodeSchema2AuthorityProblems(state, atTransition) {
+  var problems = [];
+  function add(map, id, v) {
+    map[id] = (map[id] || 0) + v;
+  }
+  var goals = Object.create(null);
+  (state.goals || []).forEach(function (g) { if (g && g.id != null) goals[String(g.id)] = true; });
+  var events = geodeContributionActiveCompletions(state);
+  var byId = Object.create(null), byKey = Object.create(null), carryFor = Object.create(null), held = Object.create(null);
+  var ledger = Object.create(null), rows = Object.create(null), unheld = Object.create(null);
+  events.forEach(function (e) {
+    byId[e.id] = e;
+    byKey[e.paymentId + '|' + e.occurrenceYm] = e;
+    if (!geodeContributionYmTrusted(e.occurrenceYm)) problems.push('completion ' + e.id + ' is dated after the current month');
+    if (e.entityType === 'goal') add(ledger, e.entityId, e.amount);
+  });
+  var carries = geodeContributionCarryActive(state);
+  carries.forEach(function (c) {
+    if (c.entityType !== 'goal') {
+      problems.push('investment carry ' + c.carryId);
+      return;
+    }
+    carryFor[c.paymentId] = c;
+    add(ledger, c.entityId, c.amount);
+  });
+  (state.payments || []).forEach(function (p) {
+    var eff = geodePaymentBalanceEffect(state, p);
+    if (!eff || !eff.goal) return;
+    var pid = String(p.id || ''), gid = String(eff.goal.id);
+    add(rows, gid, eff.amount);
+    var ev = byId[String(p.contributionEventId || '')];
+    if (!ev || ev.paymentId !== pid) ev = byKey[pid + '|' + geodeContributionOccurrenceYm(p)] || null;
+    if (ev && !(ev.entityType === 'goal' && ev.entityId === gid)) ev = null;
+    var carry = carryFor[pid] && carryFor[pid].entityId === gid ? carryFor[pid] : null;
+    if (ev) held[ev.id] = true;
+    else if (carry) held['carry|' + pid] = true;
+    else problems.push('payment ' + pid + ' counts toward goal ' + gid + ' with no completion or carry');
+    if (ev && carry && atTransition) problems.push('payment ' + pid + ' has both a completion and a carry');
+  });
+  if (!atTransition) return problems;
+  events.forEach(function (e) { if (e.entityType === 'goal' && !held[e.id]) add(unheld, e.entityId, e.amount); });
+  carries.forEach(function (c) { if (c.entityType === 'goal' && !held['carry|' + c.paymentId]) add(unheld, c.entityId, c.amount); });
+  Object.keys(goals).forEach(function (gid) {
+    var position = Math.round((ledger[gid] || 0) * 100) / 100;
+    var accounted = Math.round(((rows[gid] || 0) + (unheld[gid] || 0)) * 100) / 100;
+    if (position !== accounted) problems.push('goal ' + gid + ' history ' + position + ' does not match ' + accounted);
+  });
+  return problems;
+}
+
+/** FA-3C-C: schema-2 load check — logs geodeSchema2AuthorityProblems. Repairs nothing: an unowned row still adds nothing to goal Saved. */
+function geodeSchema2IntegrityReport(state) {
+  try {
+    var problems = geodeSchema2AuthorityProblems(state, false);
+    if (problems.length) console.warn('[geode] schema 2 integrity: ' + problems.join('; '));
+    return problems;
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * FA-3C-C: the transition's single write — the whole state at KEY, read back to confirm. Unlike save(), it has no
+ * snapshot or archive side effects and reports failure instead of swallowing it.
+ */
+function geodeSchema2CommitTransition() {
+  try {
+    var json = JSON.stringify(S);
+    localStorage.setItem(KEY, json);
+    return localStorage.getItem(KEY) === json;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * FA-3C-C: the one-time schema 1 → 2 transition, run by load() while stored data is schema 1, before
+ * syncRecurringPayments resets completed rows. Seeds the dated completions legacy rows prove, carries the goal effects
+ * they cannot date, validates the result (geodeSchema2AuthorityProblems) and persists the whole state once at schema 2
+ * (geodeSchema2CommitTransition). On any failure the in-memory state is restored exactly and stays schema 1 (legacy
+ * row authority); nothing was persisted, so the next load retries. Returns whether schema 2 was committed.
+ */
+function geodeSchema2Transition() {
+  var keep = JSON.stringify({ payments: S.payments, contributionEvents: S.contributionEvents, contributionCarry: S.contributionCarry });
+  var version = S._schemaVersion;
+  var why = '';
+  try {
+    geodeSeedLegacyContributionEvents();
+    S.contributionCarry = S.contributionCarry.concat(geodeSchema2TransitionCarryRecords(S));
+    var problems = geodeSchema2AuthorityProblems(S, true);
+    if (problems.length) {
+      why = problems.join('; ');
+    } else {
+      S._schemaVersion = GEODE_SCHEMA_VERSION;
+      if (geodeSchema2CommitTransition()) return true;
+      why = 'storage';
+    }
+  } catch (e) {
+    why = String((e && e.message) || e);
+  }
+  var back = JSON.parse(keep);
+  S.payments = back.payments;
+  S.contributionEvents = back.contributionEvents;
+  S.contributionCarry = back.contributionCarry;
+  S._schemaVersion = version;
+  console.warn('[geode] schema 2 transition not completed, staying on schema 1: ' + why);
+  if (why === 'storage') {
+    try {
+      toast('Could not save data (storage may be full).', 'warn');
+    } catch (_eT) {}
+  }
+  return false;
+}
+
+/**
+ * FA-3C-C: whether syncRecurringPayments resets completed monthly row p in month ym under schema 2. A row still holding
+ * a legacy carry (geodeContributionCarryForRow) resets once ym is later than the carry's local creation month: the
+ * carry stays as history and nothing is dated. A row whose goal or investment effect counts resets only when an active
+ * completion owns its recorded occurrence (pointer, or lastPaidYM), so no effect is dropped without its history.
+ * Rows with no effect (bills, debts, dead links) reset as in schema 1. `carried` (optional): paymentId → true for every
+ * payment with an active carry, built once per sync so rows without one skip the carry lookup.
+ */
+function geodeSchema2RecurringResetDue(state, p, ym, carried) {
+  var before = geodeContributionEventSnapshot(p);
+  var carry = !carried || carried[String(p.id || '')] ? geodeContributionCarryForRow(state, before) : null;
+  if (carry) {
+    var createdYm = '';
+    (state.contributionCarry || []).forEach(function (r) {
+      if (r && r.kind !== 'resolution' && r.id === carry.carryId) createdYm = geodeDateToLocalISO(new Date(r.createdAt)).slice(0, 7);
+    });
+    return !!createdYm && ym > createdYm;
+  }
+  if (!p.lastPaidYM || p.lastPaidYM === ym) return false;
+  if (!geodePaymentBalanceEffect(state, p)) return true;
+  return geodeContributionYmTrusted(p.lastPaidYM) &&
+    !!(geodeContributionPointerTarget(state, before) || geodeContributionActiveCompletion(state, before.id, p.lastPaidYM));
 }
 
 /** DP-3: recorded-payment summary for one debt, matched on each event's own debtId. Never stored. */
@@ -9007,17 +9180,26 @@ function geodeRealityStatus() {
  * Recurring payments marked paid reset to upcoming when the calendar month changes (no scheduler).
  * FA-3C-B.3b: a row whose goal/investment effect counts resets only from a trusted lastPaidYM — the reset erases the
  * row's evidence, so a future or malformed stamp leaves it paid as undated legacy evidence instead.
+ * FA-3C-C: schema 2 resets by geodeSchema2RecurringResetDue and records nothing — the history is already the
+ * completion or carry the row held.
  */
 function syncRecurringPayments() {
   if (!S) return;
   var ym = currentYM();
   var changed = false;
+  var schema2 = geodeSchema2Active(S);
+  var carried = null;
+  if (schema2) {
+    carried = Object.create(null);
+    geodeContributionCarryActive(S).forEach(function (c) { carried[c.paymentId] = true; });
+  }
   if (S.payments && S.payments.length) {
     for (var i = 0; i < S.payments.length; i++) {
       var p = S.payments[i];
-      if (p.rec === 'yes' && p.status === 'paid' && p.lastPaidYM && p.lastPaidYM !== ym &&
+      if (p.rec !== 'yes' || p.status !== 'paid') continue;
+      if (schema2 ? geodeSchema2RecurringResetDue(S, p, ym, carried) : p.lastPaidYM && p.lastPaidYM !== ym &&
           (geodeContributionYmTrusted(p.lastPaidYM) || !geodePaymentBalanceEffect(S, p))) {
-        geodeEnsureContributionCompletion(p, 'rollover_safety_net');
+        if (!schema2) geodeEnsureContributionCompletion(p, 'rollover_safety_net');
         p.status = 'upcoming';
         p.lastPaidYM = '';
         delete p.debtPaymentCompletionEventId;
@@ -12582,6 +12764,7 @@ function geodeSmartImportConfirm() {
   var mergedSpending = 0;
   var mergedContrib = 0;
   var linkedKinds = { debt: 0, goal: 0, invest: 0 };
+  var refusedMerges = 0;
   setLastSnapshotBeforeChange();
   for (var i = 0; i < n; i++) {
     var incEl = document.getElementById('gim-inc-' + i);
@@ -12657,7 +12840,10 @@ function geodeSmartImportConfirm() {
       };
       if (mergeMode === 'merge' && r && r.existingDupKind === 'payment' && r.existingDupId) {
         var pex = (S.payments || []).filter(function (p) { return String(p.id || '') === String(r.existingDupId); })[0];
-        if (pex && geodeContributionSaveRefusal(S, pex, { kind: pk, status: st, amount: am })) continue;
+        if (pex && geodeContributionSaveRefusal(S, pex, { kind: pk, status: st, amount: am })) {
+          refusedMerges++;
+          continue;
+        }
         if (pex) {
           var cevBefore = geodeContributionEventSnapshot(pex);
           pex.name = name;
@@ -12711,8 +12897,19 @@ function geodeSmartImportConfirm() {
     payBeforeN: payBeforeN,
     leftBefore: leftBefore,
     leftAfter: calcMonthlyLeftover(S),
-    linkedKinds: linkedKinds
+    linkedKinds: linkedKinds,
+    refusedMerges: refusedMerges
   });
+}
+
+/** FA-3C-C: import summary line for merges geodeContributionSaveRefusal refused (those imports were left out), or ''. */
+function geodeSmartImportRefusedMergeLine(n) {
+  n = Number(n) || 0;
+  if (n <= 0) return '';
+  if (n === 1) {
+    return '1 imported payment couldn\u2019t be merged into the matching item, so it was left out. Nothing else changed. If it\u2019s a separate payment, import it again as a new item.';
+  }
+  return n + ' imported payments couldn\u2019t be merged into the matching items, so they were left out. Nothing else changed. If they\u2019re separate payments, import them again as new items.';
 }
 
 function geodeSmartImportShowHandoffModal(sum) {
@@ -12739,6 +12936,7 @@ function geodeSmartImportShowHandoffModal(sum) {
     if (linked.invest) bits.push('investment');
     linkedLine = 'Linked contributions added: ' + bits.join(', ') + '.';
   }
+  var refusedLine = geodeSmartImportRefusedMergeLine(sum.refusedMerges);
 
   // Pick one “next action” using existing suggested-action logic.
   var nextTitle = '';
@@ -12770,6 +12968,7 @@ function geodeSmartImportShowHandoffModal(sum) {
         (sum.mergedContrib || 0) +
         ' contributions.</div>'
       : '') +
+    (refusedLine ? '<div class="smart-summary-merge">' + escHtmlLite(refusedLine) + '</div>' : '') +
     '<div class="smart-summary-impact"><strong>Impact:</strong> ' +
     escHtmlLite(impactLine) +
     '</div>' +
@@ -37324,17 +37523,22 @@ function saveGoal(id) {
   var prev = id ? S.goals.filter(function(x){ return x.id===id; })[0] : null;
   var savedRaw = (document.getElementById('gs')||{}).value;
   // Existing goal: Saved So Far is the displayed position. Only a changed value moves it, by re-anchoring baseSaved so
-  // the display equals the new amount; a monthly-recurring completion stops counting at rollover, so it blocks this.
+  // the display equals the new amount. Schema 1: a monthly-recurring completion stops counting at rollover, so it
+  // blocks this. Schema 2: the position is base + dated completions + carries − releases (geodeSchema2GoalCorrectionBase).
   var correctedBase = null;
   if (prev && geodeEditAmountChanged(savedRaw, (document.getElementById('geode_goal_saved_orig')||{}).value, prev.saved)) {
     var wantSaved = Math.round(Number(String(savedRaw).trim()) * 100) / 100;
-    var counted = geodeGoalCountedContributions(S, prev);
-    if (counted.recurring > 0) {
-      toast('We can\u2019t safely update this amount yet. A recurring contribution from this month is still included in your total. Your current amount has been left unchanged.', 'warn');
-      return;
+    if (geodeSchema2Active(S)) {
+      correctedBase = geodeSchema2GoalCorrectionBase(S, prev, wantSaved);
+    } else {
+      var counted = geodeGoalCountedContributions(S, prev);
+      if (counted.recurring > 0) {
+        toast('We can\u2019t safely update this amount yet. A recurring contribution from this month is still included in your total. Your current amount has been left unchanged.', 'warn');
+        return;
+      }
+      correctedBase = Math.round((wantSaved - counted.total + geodeSavingsReleaseDeductionSumForSource(S, prev.id)) * 100) / 100;
     }
-    correctedBase = Math.round((wantSaved - counted.total + geodeSavingsReleaseDeductionSumForSource(S, prev.id)) * 100) / 100;
-    if (wantSaved < 0 || correctedBase < 0) {
+    if (correctedBase === null || wantSaved < 0 || correctedBase < 0) {
       toast('We can\u2019t lower Saved So Far that far here, because it\u2019s below what\u2019s already marked complete for this goal. Your current amount has been left unchanged.', 'warn');
       return;
     }
