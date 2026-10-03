@@ -53,7 +53,7 @@ const PRODUCTION_FUNCTIONS = [
   // Monthly Left
   'calcMonthlyLeftover', 'calcMonthlyLeftoverConfirmedOnly', 'sumPaymentsMonthlyOutflow',
   'sumPaymentsMonthlyOutflowConfirmedOnly', 'paymentCountsForMonthlyOutflow', 'paymentCountsForMonthlyOutflowConfirmedOnly',
-  'sumExpensesMonthly', 'geodeExpenseIsOneOff', 'geodeExpenseIsExpiredOneOff', 'geodeExpenseMonthValue',
+  'geodePaymentIsLapsedVoluntaryOneOff', 'sumExpensesMonthly', 'geodeExpenseIsOneOff', 'geodeExpenseIsExpiredOneOff', 'geodeExpenseMonthValue',
   'geodeExpenseDateValue', 'geodePaymentCountsAsPaidInCurrentMonth', 'geodeOverdueItems',
   // entity edits and Quick Setup
   'saveGoal', 'geodeEditAmountChanged', 'doDep', 'saveInv', 'geodeQsDone', 'geodeQuickSetupNum',
@@ -665,10 +665,10 @@ class App {
 
 const DEFECTS = {
   D1: 'Recurring goal/investment contributions lose prior months at rollover (syncRecurringPayments resets the row; geodeRecomputeBalancesFromPayments rebuilds from currently-paid rows only).',
-  D2: 'Quick Setup "Monthly essentials" housing/food/transport are stored as one-off expenses and drop out of later months (geodeQsDone).',
+  D2: 'Quick Setup "Monthly essentials" housing/food/transport are stored as one-off expenses and drop out of later months (geodeQsDone). Repaired in FA-4A; guarded by the QS and FA4A.qs checks.',
   D3: 'Goal/investment edit forms write the displayed total into baseSaved/baseBalance, re-adding paid rows and re-deducting releases (saveGoal, saveInv). Repaired in FA-2; guarded by the E, R2 and FA2 checks.',
   D4: 'Same-month linked save overwrites or merges a different unpaid row for the same goal/investment (geodeSavePayApply upsert, geodeMergeDuplicateLinkedContributionsSameMonth). Repaired in FA-1; guarded by the IDENTITY and FA-1 checks.',
-  D5: 'An unpaid voluntary one-off contribution keeps reducing every later month\'s Monthly Left (paymentCountsForMonthlyOutflow overdue rule).',
+  D5: 'An unpaid voluntary one-off contribution keeps reducing every later month\'s Monthly Left (paymentCountsForMonthlyOutflow overdue rule). Repaired in FA-4A; guarded by the ML.vol and FA4A.lapse checks.',
   D6: 'Same-session rollover and reload disagree: the persisted g.saved / inv.balance cache stays stale until the next recompute.',
   D7: 'A savings release sized against a balance that rollover later shrinks hides later contributions (release deduction clamps at 0).',
   D8: 'Undoing a recurring completion does not revert the due-date advance, so complete → undo cycles push the next due date into later months (togglePay).',
@@ -1066,14 +1066,14 @@ function quickSetup() {
     const app = new App(baseState({ income: 0, goals: [], investments: [] }), '2026-06-10');
     app.quickSetup({ income: '2500', incomeType: 'regular', hasDependants: false,
       expenses: { housing: '900', food: '300', transport: '150', bills: '120' }, debt: { total: '', min: '' } });
-    current('QS.rec', 'Quick Setup expense recurrence (housing, food, transport, bills)',
-      app.state().expenses.map(e => [e.id, e.rec]), [['qs_housing', 'no'], ['qs_food', 'no'], ['qs_transport', 'no'], ['qs_bills', 'yes']]);
+    invariant('QS.rec', 'Quick Setup monthly essentials are stored as monthly expenses (D2 closed by FA-4A)',
+      app.state().expenses.map(e => [e.id, e.rec]), [['qs_housing', 'yes'], ['qs_food', 'yes'], ['qs_transport', 'yes'], ['qs_bills', 'yes']]);
     let s = app.snap('Jun 10 setup');
     invariant('QS.jun', 'June Monthly Left', s.left, 1030);
     app.advance('2026-07-02', mode); s = app.snap('Jul 02 rollover');
-    target('QS.jul', 'July Monthly Left', s.left, 1030, 2380, 'D2');
+    invariant('QS.jul', 'July Monthly Left (D2 closed by FA-4A)', s.left, 1030);
     app.advance('2026-08-02', mode); s = app.snap('Aug 02 rollover');
-    target('QS.aug', 'August Monthly Left', s.left, 1030, 2380, 'D2');
+    invariant('QS.aug', 'August Monthly Left (D2 closed by FA-4A)', s.left, 1030);
     timelines[mode] = app.timeline;
   }));
   scenario('QUICK SETUP — same-session vs reload', () => parity('QS.parity', 'QUICK SETUP', timelines, undefined, ''));
@@ -1085,9 +1085,9 @@ function monthlyLeft() {
     app.contribute({ name: 'Holiday extra', amount: 250, date: '2026-06-20', status: 'upcoming', rec: 'no', goalId: 'gH' });
     invariant('ML.vol.jun', 'June Monthly Left', app.snap().left, 2750);
     app.advance('2026-07-02', mode);
-    target('ML.vol.jul', 'July Monthly Left (voluntary contribution lapsed, not a liability)', app.snap().left, 3000, 2750, 'D5');
+    invariant('ML.vol.jul', 'July Monthly Left (voluntary contribution lapsed, not a liability; D5 closed by FA-4A)', app.snap().left, 3000);
     app.advance('2026-08-02', mode);
-    target('ML.vol.aug', 'August Monthly Left', app.snap().left, 3000, 2750, 'D5');
+    invariant('ML.vol.aug', 'August Monthly Left (D5 closed by FA-4A)', app.snap().left, 3000);
   }));
   MODES.forEach(mode => scenario('MONTHLY LEFT — unpaid one-off bill £250 in June [' + mode + ']', () => {
     const app = new App(baseState(), '2026-06-10');
@@ -1098,6 +1098,142 @@ function monthlyLeft() {
     app.advance('2026-08-02', mode);
     current('ML.bill.aug', 'August Monthly Left', app.snap().left, 2750);
   }));
+}
+
+/** FA-4A (D2): Quick Setup essentials are monthly; re-runs update in place and never downgrade; history stays where it is. */
+function fa4aQuickSetup() {
+  const data = over => ({ income: '2500', incomeType: 'regular', hasDependants: false,
+    expenses: Object.assign({ housing: '900', food: '300', transport: '150', bills: '120' }, over || {}), debt: { total: '', min: '' } });
+  const rows = app => app.state().expenses.map(e => [e.id, e.rec, e.amount]);
+  const timelines = {};
+  MODES.forEach(mode => scenario('FA-4A QUICK SETUP — fresh setup in June, re-run in July, August [' + mode + ']', () => {
+    const app = new App(baseState({ income: 0, goals: [], investments: [] }), '2026-06-10');
+    app.quickSetup(data());
+    invariant('FA4A.qs.fresh', 'A fresh Quick Setup stores Housing, Food and groceries, Transport and Bills as monthly expenses',
+      app.state().expenses.map(e => [e.id, e.name, e.cat, e.rec, e.amount]),
+      [['qs_housing', 'Housing', 'housing', 'yes', 900], ['qs_food', 'Food and groceries', 'food', 'yes', 300],
+        ['qs_transport', 'Transport', 'transport', 'yes', 150], ['qs_bills', 'Bills and subscriptions', 'subs', 'yes', 120]]);
+    app.snap('Jun 10 setup');
+    app.advance('2026-07-02', mode); app.snap('Jul 02 rollover');
+    app.quickSetup(data({ housing: '950' }));
+    let s = app.snap('Jul 02 re-run');
+    invariant('FA4A.qs.rerun.rows', 'Re-running Quick Setup in July updates the same four rows in place: still monthly, no duplicates',
+      rows(app), [['qs_housing', 'yes', 950], ['qs_food', 'yes', 300], ['qs_transport', 'yes', 150], ['qs_bills', 'yes', 120]]);
+    invariant('FA4A.qs.rerun.left', 'July Monthly Left after the re-run (£2,500 − £950 − £300 − £150 − £120)', s.left, 980);
+    app.advance('2026-08-02', mode); s = app.snap('Aug 02 rollover');
+    invariant('FA4A.qs.aug', 'August keeps the four monthly essentials and their Monthly Left', [rows(app), s.left],
+      [[['qs_housing', 'yes', 950], ['qs_food', 'yes', 300], ['qs_transport', 'yes', 150], ['qs_bills', 'yes', 120]], 980]);
+    timelines[mode] = app.timeline;
+  }));
+  scenario('FA-4A QUICK SETUP — same-session vs reload', () => parity('FA4A.qs.parity', 'FA-4A QUICK SETUP', timelines, undefined, ''));
+
+  scenario('FA-4A QUICK SETUP — a re-run never downgrades a monthly row', () => {
+    const app = new App(baseState({ income: 0, goals: [], investments: [],
+      expenses: [{ id: 'qs_housing', name: 'Housing', amount: 900, cat: 'housing', rec: 'yes', date: '2026-05-10' }] }), '2026-06-10');
+    app.quickSetup(data({ housing: '900', food: '', transport: '', bills: '' }));
+    invariant('FA4A.qs.keep.monthly', 'A re-run that includes Housing keeps the already-monthly qs_housing monthly, once', rows(app), [['qs_housing', 'yes', 900]]);
+    app.quickSetup(data({ housing: '', food: '300', transport: '', bills: '' }));
+    invariant('FA4A.qs.keep.untouched', 'A re-run that leaves Housing blank leaves qs_housing as it was and adds Food as monthly',
+      rows(app), [['qs_housing', 'yes', 900], ['qs_food', 'yes', 300]]);
+  });
+
+  scenario('FA-4A QUICK SETUP — one-off qs_ rows from earlier builds are neither migrated nor restored', () => {
+    const legacyRow = { id: 'qs_housing', name: 'Housing', amount: 900, cat: 'housing', rec: 'no', date: '2026-06-10' };
+    const app = new App(baseState({ expenses: [legacyRow] }), '2026-06-15');
+    invariant('FA4A.qs.legacy.kept', 'Booting in June leaves the stored one-off qs_housing one-off (no migration)', rows(app), [['qs_housing', 'no', 900]]);
+    const archived = () => (app.state().archivedExpenses || []).filter(e => e.id === 'qs_housing').map(e => [e.id, e.rec, e.amount, e.date]);
+    app.advance('2026-07-02', 'session'); app.advance('2026-07-20', 'reload'); app.advance('2026-08-02', 'reload'); app.advance('2026-08-03', 'session');
+    invariant('FA4A.qs.archived', 'Across July and August renders and reloads the archived row stays archived once and is not restored',
+      [rows(app), archived(), app.snap().left], [[], [['qs_housing', 'no', 900, '2026-06-10']], 3000]);
+    app.quickSetup(data({ housing: '900', food: '', transport: '', bills: '' }));
+    invariant('FA4A.qs.archived.rerun', 'Only an explicit re-run with a Housing amount creates one active monthly qs_housing; the archive keeps its row unchanged',
+      [rows(app), archived()], [[['qs_housing', 'yes', 900]], [['qs_housing', 'no', 900, '2026-06-10']]]);
+  });
+}
+
+/** FA-4A (D5): an unpaid one-off goal or investment contribution lapses at the month boundary; debt and bill rows stay liabilities. */
+function fa4aLapse() {
+  const GOAL = { label: 'Catch up on Holiday', amount: 120 };
+  const INVEST = { label: 'Invest what remains', amount: 120 };
+  const CARD = () => ({ id: 'dC', name: 'Card', balance: 2000, apr: 20, minp: 50 });
+  const plan = (app, step) => { const v = app.planView(step); return { applied: v.applied, scheduled: v.scheduled, gap: v.gap }; };
+  const stored = app => app.state().payments.map(p => [p.id, p.status, p.date, p.amount, p.rec, p.lastPaidYM || '', p.goalId || '', p.investId || '', p.debtId || '']);
+  const timelines = {};
+  MODES.forEach(mode => scenario('FA-4A LAPSE — goal, investment, debt and bill one-offs left unpaid from June [' + mode + ']', () => {
+    const app = new App(baseState({ incomeExplicitlySet: true, debts: [CARD()] }), '2026-06-05', PROGRAM.plan);
+    const ids = {
+      goal: app.contribute({ name: 'Holiday extra', amount: 250, date: '2026-06-20', status: 'upcoming', rec: 'no', goalId: 'gH' }),
+      invest: app.contribute({ name: 'ISA top-up', amount: 200, date: '2026-06-22', status: 'upcoming', rec: 'no', investId: 'iA' }),
+      debt: app.contribute({ name: 'Card extra', amount: 150, date: '2026-06-24', status: 'upcoming', rec: 'no', debtId: 'dC' }),
+      bill: app.contribute({ name: 'Boiler service', amount: 100, date: '2026-06-25', status: 'upcoming', rec: 'no' })
+    };
+    const counts = () => { const r = app.snap().rows; return Object.keys(ids).map(k => [k, r.filter(x => x.id === ids[k])[0].countsInMonthlyLeft]); };
+    let s = app.snap('Jun 05 scheduled');
+    const june = { rows: stored(app), events: app.events(), debt: app.state().debts[0].balance };
+    invariant('FA4A.lapse.jun', 'June: all four count; Monthly Left £3,000 − £700; Plan sees £250 Holiday and £200 ISA scheduled',
+      [s.left, counts(), plan(app, GOAL), plan(app, INVEST)],
+      [2300, [['goal', true], ['invest', true], ['debt', true], ['bill', true]],
+        { applied: 0, scheduled: 250, gap: 0 }, { applied: 0, scheduled: 200, gap: 0 }]);
+
+    app.advance('2026-07-02', mode); s = app.snap('Jul 02 rollover');
+    invariant('FA4A.lapse.jul.counts', 'July: goal and investment one-offs lapse (A, B); debt-linked and bill one-offs still count (C, D)', counts(),
+      [['goal', false], ['invest', false], ['debt', true], ['bill', true]]);
+    invariant('FA4A.lapse.jul.left', 'July Monthly Left: £3,000 − £150 debt − £100 bill', s.left, 2750);
+    invariant('FA4A.lapse.jul.overdue', 'Home overdue list still shows all four unpaid rows (E)', [s.homeOverduePayments, s.rows.map(r => r.effective)],
+      [4, ['overdue', 'overdue', 'overdue', 'overdue']]);
+    invariant('FA4A.lapse.jul.plan', 'Plan scheduled amounts exclude the lapsed rows (G): nothing scheduled for Holiday or ISA', [plan(app, GOAL), plan(app, INVEST)],
+      [{ applied: 0, scheduled: 0, gap: 120 }, { applied: 0, scheduled: 0, gap: 120 }]);
+
+    const julyId = app.contribute({ name: 'Holiday July', amount: 80, date: '2026-07-20', status: 'upcoming', rec: 'no', goalId: 'gH' });
+    s = app.snap('Jul 02 July contribution');
+    invariant('FA4A.lapse.jul.current', 'A July goal one-off still counts in July: Monthly Left £2,670, Plan sees £80 scheduled',
+      [s.left, s.rows.filter(r => r.id === julyId)[0].countsInMonthlyLeft, plan(app, GOAL)], [2670, true, { applied: 0, scheduled: 80, gap: 40 }]);
+
+    app.advance('2026-08-02', mode); s = app.snap('Aug 02 rollover');
+    invariant('FA4A.lapse.aug.left', 'August: the July one-off lapses too; debt and bill still count (£2,750)', s.left, 2750);
+    invariant('FA4A.lapse.aug.plan', 'August Plan: nothing scheduled for Holiday or ISA', [plan(app, GOAL), plan(app, INVEST)],
+      [{ applied: 0, scheduled: 0, gap: 120 }, { applied: 0, scheduled: 0, gap: 120 }]);
+    invariant('FA4A.lapse.stored', 'Lapsing changes nothing stored (F): June rows unchanged and unpaid, no contribution events, Holiday £1,000, ISA £5,000, Card £2,000',
+      [stored(app).filter(r => r[0] !== julyId), app.events(), s.goal.gH, s.inv.iA, app.state().debts[0].balance],
+      [june.rows, june.events, 1000, 5000, june.debt]);
+    timelines[mode] = app.timeline;
+  }));
+  scenario('FA-4A LAPSE — same-session vs reload', () => parity('FA4A.lapse.parity', 'FA-4A LAPSE (H)', timelines, undefined, ''));
+
+  scenario('FA-4A LAPSE — classification matrix in July 2026', () => {
+    const app = new App(baseState({ incomeExplicitlySet: true }), '2026-07-10', PROGRAM.plan);
+    const row = (id, o) => Object.assign({ id, name: id, amount: 10, status: 'upcoming', rec: 'no', date: '2026-06-20', goalId: '', investId: '', debtId: '' }, o);
+    const matrix = [
+      [row('goal-june', { goalId: 'gH' }), true, false],
+      [row('goal-june-stored-overdue', { goalId: 'gH', status: 'overdue' }), true, false],
+      [row('goal-december', { goalId: 'gH', date: '2025-12-20' }), true, false],
+      [row('invest-june', { investId: 'iA' }), true, false],
+      [row('goal-and-debt-june', { goalId: 'gH', debtId: 'dC' }), false, true],
+      [row('invest-and-debt-june', { investId: 'iA', debtId: 'dC' }), false, true],
+      [row('debt-june', { debtId: 'dC' }), false, true],
+      [row('bill-june', {}), false, true],
+      [row('goal-june-paid', { goalId: 'gH', status: 'paid' }), false, false],
+      [row('goal-monthly-june', { goalId: 'gH', rec: 'yes' }), false, true],
+      [row('goal-annual-june', { goalId: 'gH', rec: 'annual' }), false, true],
+      [row('goal-july-past-day', { goalId: 'gH', date: '2026-07-05' }), false, true],
+      [row('goal-july', { goalId: 'gH', date: '2026-07-20' }), false, true],
+      [row('goal-august', { goalId: 'gH', date: '2026-08-20' }), false, false],
+      [row('goal-no-date', { goalId: 'gH', date: '' }), false, true]
+    ];
+    app.ctx.__rowsJson = JSON.stringify(matrix.map(m => m[0]));
+    const observed = JSON.parse(app.run('JSON.stringify(JSON.parse(__rowsJson).map(function (p) { var lapsed = geodePaymentIsLapsedVoluntaryOneOff(p); ' +
+      'return [p.id, lapsed, paymentCountsForMonthlyOutflow(p), paymentCountsForMonthlyOutflowDisplay(p), paymentCountsForMonthlyOutflow(p) || lapsed]; }))'));
+    invariant('FA4A.lapse.matrix', 'Per row: lapsed, counts in Monthly Left, counts in Plan scheduled (always the same), reaches the Review overdue-contribution count',
+      observed, matrix.map(m => [m[0].id, m[1], m[2], m[2], m[2] || m[1]]));
+    app.at('2027-01-05');
+    app.ctx.__rowsJson = JSON.stringify([row('goal-dec-2026', { goalId: 'gH', date: '2026-12-20' }), row('goal-jan-2027', { goalId: 'gH', date: '2027-01-02' }),
+      row('goal-bad-date', { goalId: 'gH', date: 'soon' })]);
+    invariant('FA4A.lapse.year', 'January 2027: a December goal one-off has lapsed; a January one-off (day already past) and an unreadable date have not',
+      JSON.parse(app.run('JSON.stringify(JSON.parse(__rowsJson).map(function (p) { return [p.id, geodePaymentIsLapsedVoluntaryOneOff(p)]; }))')),
+      [['goal-dec-2026', true], ['goal-jan-2027', false], ['goal-bad-date', false]]);
+    invariant('FA4A.lapse.review', 'rReview still counts a lapsed contribution among the overdue contributions to check',
+      extractFunction(PROGRAM.src, 'rReview').text.indexOf('if (!paymentCountsForMonthlyOutflow(p) && !geodePaymentIsLapsedVoluntaryOneOff(p)) continue;') >= 0, true);
+  });
 }
 
 function identity() {
@@ -4534,7 +4670,7 @@ function main() {
   }
   harnessFidelity();
   goalA(); goalB(); goalC(); goalD(); goalE(); goalF(); goalG(); goalH();
-  missedRecurring(); investments(); quickSetup(); monthlyLeft(); identity(); identityMatrix(); planActions(); releases(); deposits();
+  missedRecurring(); investments(); quickSetup(); monthlyLeft(); fa4aQuickSetup(); fa4aLapse(); identity(); identityMatrix(); planActions(); releases(); deposits();
   fa2Goals(); fa2Investments(); fa2Deposits();
   fa3aLedger(); fa3aGoals(); fa3aInvestments(); fa3aSmartImport(); fa3aDeletion(); fa3aIdentity(); fa3aRollover(); fa3aProtection(); fa3aAnnual(); fa3aOccurrence();
   fa3bOrder(); fa3bMatrix(); fa3bPointers(); fa3bParity(); fa3bLifecycle();

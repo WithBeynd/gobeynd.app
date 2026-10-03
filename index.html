@@ -4791,12 +4791,29 @@ function geodeRecomputeBalancesFromPayments() {
 }
 
 /**
+ * An unpaid one-off goal or investment contribution due in an earlier month is a lapsed intention, not a liability:
+ * it stops reducing Monthly Left and Plan's scheduled amounts. A debt link always keeps the row a liability.
+ * The row itself is left as stored (still unpaid and visible as overdue).
+ */
+function geodePaymentIsLapsedVoluntaryOneOff(p) {
+  if (!p || p.status === 'paid') return false;
+  if (p.rec === 'yes' || p.rec === 'annual') return false;
+  if (p.debtId) return false;
+  if (!p.goalId && !p.investId) return false;
+  var dueYm = String(p.date || '').slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(dueYm)) return false;
+  return dueYm < currentYM();
+}
+
+/**
  * FLOW: scheduled payments that affect “left this month”.
  * — Recurring (repeat monthly): counts as this month’s outflow until marked paid; once paid, counts if paid this month.
  * — One-time: counts if due this calendar month (or overdue / no date, same as before).
+ * — Lapsed voluntary one-offs (geodePaymentIsLapsedVoluntaryOneOff) never count.
  */
 function paymentCountsForMonthlyOutflow(p) {
   if (!p) return false;
+  if (geodePaymentIsLapsedVoluntaryOneOff(p)) return false;
   if (geodePaymentEffectiveStatus(p) === 'overdue') return true;
   if (p.status === 'overdue') return true;
   if (p.rec === 'yes') {
@@ -5135,6 +5152,7 @@ function geodeNeedsReviewContributionHomeInsightTitle(state) {
 /** Display-only: same inclusion rule as outflow, but respects derived overdue. */
 function paymentCountsForMonthlyOutflowDisplay(p) {
   if (!p) return false;
+  if (geodePaymentIsLapsedVoluntaryOneOff(p)) return false;
   var st = geodePaymentEffectiveStatus(p);
   if (st === 'overdue') return true;
   if (p.rec === 'yes') {
@@ -38256,7 +38274,7 @@ function rReview(el) {
     for (var pi = 0; pi < plist.length; pi++) {
       var p = plist[pi];
       if (!p) continue;
-      if (!paymentCountsForMonthlyOutflow(p)) continue;
+      if (!paymentCountsForMonthlyOutflow(p) && !geodePaymentIsLapsedVoluntaryOneOff(p)) continue;
       if (String(p.status || '') === 'paid') continue;
       if (!p.date || !geodeIsoDateIsPast(String(p.date).slice(0, 10))) continue;
       var kind = String(p.payKind || '').toLowerCase();
@@ -38986,9 +39004,9 @@ function geodeQsDone(){
   if(qd.incomeType){S.incomeType=qd.incomeType;S.incomeTypeUserSet=true;}
   if(typeof qd.hasDependants==='boolean') S.hasDependants=qd.hasDependants;
   var expQs = [
-    { key: 'housing', name: 'Housing', cat: 'housing', rec: 'no' },
-    { key: 'food', name: 'Food and groceries', cat: 'food', rec: 'no' },
-    { key: 'transport', name: 'Transport', cat: 'transport', rec: 'no' },
+    { key: 'housing', name: 'Housing', cat: 'housing', rec: 'yes' },
+    { key: 'food', name: 'Food and groceries', cat: 'food', rec: 'yes' },
+    { key: 'transport', name: 'Transport', cat: 'transport', rec: 'yes' },
     { key: 'bills', name: 'Bills and subscriptions', cat: 'subs', rec: 'yes' }
   ];
   for (var _eqi = 0; _eqi < expQs.length; _eqi++) {
