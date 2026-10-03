@@ -67,7 +67,7 @@ const PRODUCTION_FUNCTIONS = [
   'geodeDebtPaymentActiveCompletion', 'geodeDebtPaymentEventId', 'geodeRecordDebtPaymentTransition',
   'geodeDebtPaymentYmValid', 'geodeDebtPaymentPointerTarget',
   // contribution ledger (FA-3A): captured on the same payment paths; nothing reads it for balances yet
-  'geodeNormalizeContributionEvents', 'geodeContributionYmValid', 'geodeContributionEventValid', 'geodeContributionLedger',
+  'geodeNormalizeContributionEvents', 'geodeContributionYmValid', 'geodeContributionYmTrusted', 'geodeContributionEventValid', 'geodeContributionLedger',
   'geodeContributionActiveCompletions', 'geodeContributionActiveCompletion', 'geodeContributionEntityRef',
   'geodeContributionRecurrence', 'geodeContributionOccurrenceYm', 'geodeContributionEventSnapshot',
   'geodeContributionCompletionFields', 'geodeContributionPointerTarget', 'geodeContributionYmAdd', 'geodeContributionRowRepresents',
@@ -3369,10 +3369,12 @@ function fa3cb2Boundary() {
 
     const dl = b2Ambiguous(legacyInvPay('iz', { rec: 'yes', date: '2026-06-05', investId: 'iZ' }));
     const dlTry = attempt(dl, b2ToGoal('iz'));
-    invariant('FA3CB2.dead-link', 'The rule protects an effect that counts, not a link field: a paid row still naming a removed investment adds nothing anywhere, so moving it to Holiday is not refused — Holiday gains the one completion the save records; Holiday £1,200 = simulated, ISA at its £5,000 base (the row never counted there)',
-      [dlTry[0], b2Active(dl).length, b2View(dl)], [[], 1, [1200, 1200, 5000]]);
-    current('FA3CB2.dead-link.occurrence', 'That completion\'s month is not proven by the row: the save keeps lastPaidYM empty (FA-3C-B.3a), so the recorder falls back to the due month — bounding that fallback is FA-3C-B.3b',
-      b2Active(dl), [['goal:gH', '2026-06', 200]]);
+    invariant('FA3CB2.dead-link', 'The rule protects an effect that counts, not a link field: a paid row still naming a removed investment adds nothing anywhere, so moving it to Holiday is not refused — legacy Holiday counts the paid row (£1,200), ISA stays at its £5,000 base (the row never counted there)',
+      [dlTry[0], dl.snap().goal.gH, dl.snap().inv.iA], [[], 1200, 5000]);
+    invariant('FA3CB2.dead-link.occurrence', 'FA-3C-B.3b: the move proves no completion now and the row names no occurrence (lastPaidYM empty), so no completion is recorded — not at the stale due month (2026-06); the effect stays undated legacy evidence (FA-3C-A candidate: Holiday £200 undated)',
+      [b2Active(dl), b2Candidate(dl, 'iz')], [[], Object.assign({}, B2_CANDIDATE, { paymentId: 'iz', entityType: 'goal', entityId: 'gH' })]);
+    current('FA3CB3B.dead-link.after-transition', 'Once transition carries are stored, a paid row that only now counts toward a goal has neither dated evidence nor a carry: legacy Holiday £1,200, simulated £1,000 — the schema-2 switch must refuse or carry it (FA-3C-C)',
+      b2View(dl), [1200, 1000, 5000]);
   });
 }
 
@@ -3528,8 +3530,8 @@ function fa3cb3aForm() {
 
   scenario('FA-3C-B.3a STATUS — only a status change writes lastPaidYM, through the existing completion and reversal lifecycle', () => {
     const complete = rec => { const a = b3aLoad([b3aUpcoming('u', rec)]); a.modalEdit('u', { status: 'paid' }); return [b3aRow(a, 'u').lastPaidYM || '', b3aActive(a), b3aView(a)]; };
-    invariant('FA3CB3A.status.unpaid-paid', 'Upcoming → Completed through the form records the completion as before: monthly stamps lastPaidYM 2026-08 and records 2026-08; annual and one-off keep lastPaidYM empty and record their due month (2026-08); legacy and simulated £1,200',
-      ['yes', 'annual', 'no'].map(complete), ['2026-08', '', ''].map(ym => [ym, [['goal:gH', '2026-08', 200]], [1200, 1200]]));
+    invariant('FA3CB3A.status.unpaid-paid', 'Upcoming → Completed through the form records the completion now (2026-08): monthly and — like togglePay, FA-3C-B.3b — annual stamp lastPaidYM 2026-08; one-off keeps it empty; legacy and simulated £1,200',
+      ['yes', 'annual', 'no'].map(complete), ['2026-08', '2026-08', ''].map(ym => [ym, [['goal:gH', '2026-08', 200]], [1200, 1200]]));
     const undo = rec => { const a = b3aLoad([b3aUpcoming('u', rec)]); a.toggle('u'); a.modalEdit('u', { status: 'upcoming' }); return [b3aRow(a, 'u').lastPaidYM || '', b3aActive(a), a.events().map(e => e.eventType), b3aView(a)]; };
     invariant('FA3CB3A.status.paid-unpaid', 'Completed natively → set back to Scheduled through the form: lastPaidYM cleared and the completion reversed — monthly, annual and one-off; legacy and simulated £1,000',
       ['yes', 'annual', 'no'].map(undo), ['yes', 'annual', 'no'].map(() => ['', [], ['completion', 'reversal'], [1000, 1000]]));
@@ -3552,24 +3554,215 @@ function fa3cb3aForm() {
       [cand0, candSaved, b2Candidate(isa, 'im')], [B2_CANDIDATE, B2_CANDIDATE, B2_CANDIDATE]);
   });
 
-  scenario('FA-3C-B.3a — temporal and migration weaknesses that stay open for FA-3C-B.3b (documented, not repaired)', () => {
-    const completions = app => app.events().filter(e => e.eventType === 'completion').map(e => [e.occurrenceYm, e.recurrence, e.source]);
-    current('FA3CB3A.b3-open.future-oneoff', 'A legacy paid Holiday one-off due 10 December 2026 loaded in August is seeded for December (no time limit on migration)',
-      completions(b3aLoad([legacyPay('f1', { date: '2026-12-10' })])), [['2026-12', 'one_off', 'migration']]);
-    current('FA3CB3A.b3-open.future-lastpaid', 'A paid monthly row whose stored lastPaidYM is 2027-03 loaded in August 2026 is seeded for March 2027',
-      completions(b3aLoad([legacyPay('f2', { amount: 200, rec: 'yes', lastPaidYM: '2027-03', date: '2026-06-05' })])), [['2027-03', 'monthly', 'migration']]);
-    current('FA3CB3A.b3-open.malformed-safety-net', 'A paid monthly row with an invalid lastPaidYM (2026-13): migration refuses it, but the rollover safety net records it at the due month (2026-06)',
-      completions(b3aLoad([legacyPay('f3', { amount: 200, rec: 'yes', lastPaidYM: '2026-13', date: '2026-06-05' })])), [['2026-06', 'monthly', 'rollover_safety_net']]);
+  scenario('FA-3C-B.3a — temporal and migration weaknesses left open for FA-3C-B.3b, as FA-3C-B.3b leaves them', () => {
+    const f1 = b3aLoad([legacyPay('f1', { date: '2026-12-10' })]);
+    invariant('FA3CB3A.b3-open.future-oneoff', 'FA-3C-B.3b: a legacy paid Holiday one-off due 10 December 2026 loaded in August is not seeded — a future month proves no occurrence; the row stays paid and legacy Holiday still counts it (£1,250)',
+      [b3bCompletions(f1), b3aRow(f1, 'f1').status, f1.snap().goal.gH], [[], 'paid', 1250]);
+    const f2 = b3aLoad([legacyPay('f2', { amount: 200, rec: 'yes', lastPaidYM: '2027-03', date: '2026-06-05' })]);
+    invariant('FA3CB3A.b3-open.future-lastpaid', 'FA-3C-B.3b: a paid monthly row whose stored lastPaidYM is 2027-03 loaded in August 2026 is not seeded, and rollover does not erase it — it stays paid with its stamp; legacy Holiday £1,200',
+      [b3bCompletions(f2), b3aRow(f2, 'f2').status, b3aRow(f2, 'f2').lastPaidYM, f2.snap().goal.gH], [[], 'paid', '2027-03', 1200]);
+    const f3 = b3aLoad([legacyPay('f3', { amount: 200, rec: 'yes', lastPaidYM: '2026-13', date: '2026-06-05' })]);
+    invariant('FA3CB3A.b3-open.malformed-safety-net', 'FA-3C-B.3b: a paid monthly row with an invalid lastPaidYM (2026-13) gets no completion — no due-month fallback — and rollover does not erase it; legacy Holiday £1,200',
+      [b3bCompletions(f3), b3aRow(f3, 'f3').status, b3aRow(f3, 'f3').lastPaidYM, f3.snap().goal.gH], [[], 'paid', '2026-13', 1200]);
     const far = b3aLoad([legacyPay('f4', { status: 'upcoming', date: '2099-01-10' })]); far.toggle('f4');
-    current('FA3CB3A.b3-open.native-future-oneoff', 'Completing an upcoming one-off due January 2099 records its due month (2099-01)', completions(far), [['2099-01', 'one_off', 'mark_completed']]);
+    invariant('FA3CB3A.b3-open.native-future-oneoff', 'FA-3C-B.3b: completing an upcoming one-off due January 2099 in August 2026 records August 2026 — the money moved now, the due date is only the schedule',
+      b3bCompletions(far), [['2026-08', 'one_off', 'mark_completed']]);
     const zero = b3aLoad([legacyPay('f5', { amount: 0 })]); zero.modalEdit('f5', { amount: '200' });
     const zeroSession = [zero.events().length, b3aView(zero)];
     zero.reload();
-    current('FA3CB3A.b3-open.late-seed', 'A paid £0 Holiday one-off corrected to £200 records nothing in the session (legacy £1,200, simulated £1,000); the next load seeds it at its due month — migration runs on every schema-1 load',
-      [zeroSession, completions(zero)], [[0, [1200, 1000]], [['2026-06', 'one_off', 'migration']]]);
+    invariant('FA3CB3A.b3-open.late-seed', 'FA-3C-B.3b: a paid £0 Holiday one-off corrected to £200 is dated in the session by the evidence migration accepts (a paid one-off due June 2026): legacy and simulated £1,200 at once, and the next load seeds nothing more',
+      [zeroSession, b3bCompletions(zero)], [[1, [1200, 1200]], [['2026-06', 'one_off', 'payment_form']]]);
     const oneOff = b3aLoad([B3A_GOAL()]); oneOff.modalEdit('pm', { rec: 'no' }); oneOff.reload();
-    current('FA3CB3A.b3-open.recurrence-to-oneoff', 'The ambiguous paid monthly row deliberately changed to One-off: the save writes no lastPaidYM, but the next load seeds a one-off at its due month (2026-06) — migration trusts the edited row',
-      completions(oneOff), [['2026-06', 'one_off', 'migration']]);
+    current('FA3CB3A.b3-open.recurrence-to-oneoff', 'Stays CURRENT for FA-3C-C (seeding only at the transition, C3): the ambiguous paid monthly row changed to One-off records nothing itself, but the next schema-1 load seeds a one-off at its due month (2026-06) — without a transition marker a former monthly row\'s due date cannot be told from a one-off\'s',
+      b3bCompletions(oneOff), [['2026-06', 'one_off', 'migration']]);
+  });
+}
+
+/** [occurrence, recurrence, source] of every completion in the ledger. */
+const b3bCompletions = app => app.events().filter(e => e.eventType === 'completion').map(e => [e.occurrenceYm, e.recurrence, e.source]);
+/** [occurrence, recurrence, source, due-date snapshot] of the active completions. */
+const b3bDated = app => app.activeEvents().map(e => [e.occurrenceYm, e.recurrence, e.source, e.dueDateSnapshot]);
+/** geodeContributionYmTrusted for each value at the app's clock. */
+const b3bTrusted = (app, list) => list.map(ym => JSON.parse(app.run('JSON.stringify(geodeContributionYmTrusted(' + JSON.stringify(ym) + '))')));
+/** geodeLegacyContributionSeedFields for every row: what migration would accept. */
+const b3bSeedFields = app => JSON.parse(app.run('JSON.stringify(S.payments.map(function (p) { return geodeLegacyContributionSeedFields(S, p); }))'));
+/** The rollover safety net called directly on a row, as syncRecurringPayments calls it before a reset. */
+const b3bEnsure = (app, id) => app.run('geodeEnsureContributionCompletion(S.payments.filter(function (p) { return p.id === ' + JSON.stringify(id) + '; })[0], "rollover_safety_net"); save();');
+/** Carries a schema-2 transition run now would create: [payment, entity, kind, amount] */
+const b3bTransition = app => schema2(app).created.map(c => [c.paymentId, c.entityType + ':' + c.entityId, c.kind, c.amount]);
+/** [legacy Holiday, simulated with no new carries, simulated with a transition now] */
+const b3bTriple = app => [app.snap().goal.gH, schema2(app, null).goals.gH.shown, schema2(app).goals.gH.shown];
+/** As b3aLoad, with migration seeding disabled: only the rollover safety net can record a completion. */
+const b3bUnseeded = (payments, clock) => {
+  const app = new App(legacyState({}, { payments, goals: [HOLIDAY(), CAR()], debts: [CARD()] }), clock || B3A_AT);
+  app.run('geodeSeedLegacyContributionEvents = function () {};');
+  app.reload();
+  return app;
+};
+const b3bStatus = (app, ids) => ids.map(id => [b3aRow(app, id).status, b3aRow(app, id).lastPaidYM || '']);
+const B3B_FUTURE_ONEOFF = () => legacyPay('f1', { date: '2026-12-10' });
+const B3B_FUTURE_STAMP = () => legacyPay('f2', { amount: 200, rec: 'yes', lastPaidYM: '2027-03', date: '2026-06-05' });
+const B3B_MALFORMED = () => legacyPay('f3', { amount: 200, rec: 'yes', lastPaidYM: '2026-13', date: '2026-06-05' });
+
+function fa3cb3bTemporal() {
+  scenario('FA-3C-B.3b TEMPORAL EVIDENCE — a completion is dated only by trusted evidence, never after the current month', () => {
+    const dec = b3aLoad([], '2026-12-10');
+    const decTrust = b3bTrusted(dec, ['2026-12', '2027-01', '2025-12', '2026-13', '2026-00', 'garbage', '', '2026-1', null]);
+    dec.at('2027-01-10');
+    invariant('FA3CB3B.helper.boundary', 'geodeContributionYmTrusted: in December 2026, 2026-12 and 2025-12 are trusted; 2027-01 (future), 2026-13, 2026-00, garbage, empty, 2026-1 and null are not; in January 2027, 2026-12 and 2027-01 are trusted and 2027-02 is not',
+      [decTrust, b3bTrusted(dec, ['2026-12', '2027-01', '2027-02'])], [[true, false, true, false, false, false, false, false, false], [true, true, false]]);
+
+    const fo = b3aLoad([B3B_FUTURE_ONEOFF(), legacyInvPay('fi', { date: '2026-12-10' })]); fo.reload(); fo.reload();
+    invariant('FA3CB3B.future-oneoff.no-seed', 'Legacy paid one-offs due December 2026 (Holiday £250, ISA £200) loaded in August and reloaded twice: no completion, rows still paid, legacy Holiday £1,250 and ISA £5,200 unchanged',
+      [b3bCompletions(fo), b3bStatus(fo, ['f1', 'fi']), fo.snap().goal.gH, fo.snap().inv.iA], [[], [['paid', ''], ['paid', '']], 1250, 5200]);
+
+    const fl = b3aLoad([B3B_FUTURE_STAMP(), legacyPay('fa', { amount: 200, rec: 'annual', lastPaidYM: '2026-09', date: '2027-09-05' })]); fl.reload(); fl.reload();
+    invariant('FA3CB3B.future-lastpaid.no-seed', 'Paid monthly (lastPaidYM 2027-03) and annual (lastPaidYM 2026-09) rows loaded in August 2026 and reloaded twice: no completion, no fallback to the due month, stamps and paid status kept; legacy Holiday £1,400',
+      [b3bCompletions(fl), b3bStatus(fl, ['f2', 'fa']), fl.snap().goal.gH], [[], [['paid', '2027-03'], ['paid', '2026-09']], 1400]);
+
+    const bad = ['2026-13', '2026-00', 'garbage', '2026-8'];
+    const ml = b3aLoad(bad.map((ym, i) => legacyPay('m' + i, { amount: 200, rec: 'yes', lastPaidYM: ym, date: '2026-06-05' })));
+    bad.forEach((ym, i) => b3bEnsure(ml, 'm' + i)); ml.reload();
+    invariant('FA3CB3B.malformed-lastpaid.no-fallback', 'Paid monthly rows with lastPaidYM 2026-13, 2026-00, garbage and 2026-8: neither migration, rollover nor the safety net called directly records a completion — no due-month fallback; rows stay paid with their stamps; legacy Holiday £1,800',
+      [b3bCompletions(ml), b3bStatus(ml, bad.map((ym, i) => 'm' + i)), ml.snap().goal.gH], [[], bad.map(ym => ['paid', ym]), 1800]);
+
+    const ft = b3aLoad([legacyPay('n1', { amount: 200, status: 'upcoming', date: '2099-01-10' })]); ft.toggle('n1'); ft.reload();
+    const ff = b3aLoad([legacyPay('n1', { amount: 200, status: 'upcoming', date: '2099-01-10' })]); ff.modalEdit('n1', { status: 'paid' }); ff.reload();
+    const fn = b3aLoad([]); const fnId = fn.contribute({ name: 'Holiday later', amount: 200, date: '2099-01-10', status: 'paid', rec: 'no', goalId: 'gH' }); fn.reload();
+    const ftDated = b3bDated(ft); ft.toggle('n1');
+    invariant('FA3CB3B.native-future-oneoff.current-occurrence', 'A one-off due January 2099 completed in August 2026 — by Mark completed, by the form (Scheduled → Completed) or created Completed — records August 2026 with the 2099 due date as its schedule snapshot; after reload the row still represents it (legacy and simulated £1,200), and undoing reverses it',
+      [ftDated, b3bDated(ff), b3bDated(fn), [ft.pointer('n1'), b3aActive(ft)], [!!ff.pointer('n1'), !!fn.pointer(fnId)], b3aView(ff)],
+      [[['2026-08', 'one_off', 'mark_completed', '2099-01-10']], [['2026-08', 'one_off', 'payment_form', '2099-01-10']], [['2026-08', 'one_off', 'payment_form', '2099-01-10']], [null, []], [true, true], [1200, 1200]]);
+
+    const pdue = (id, rec) => legacyPay(id, { amount: 200, rec, status: 'upcoming', date: '2026-06-10' });
+    const pt = b3aLoad([pdue('o1', 'no')]); pt.toggle('o1'); pt.reload();
+    const pf = b3aLoad([pdue('o1', 'no'), pdue('a1', 'annual')]); pf.modalEdit('o1', { status: 'paid' }); pf.modalEdit('a1', { status: 'paid' }); pf.reload();
+    const pfDated = b3bDated(pf), pfView = b3aView(pf), ptDated = b3bDated(pt), pfStamp = b3aRow(pf, 'a1').lastPaidYM || '';
+    pt.toggle('o1'); pf.toggle('o1'); pf.toggle('a1');
+    invariant('FA3CB3B.native-past-due.current-occurrence', 'Past-due June items completed in August: nothing in the app asks when the money moved and "Completed means the money has moved", so the one-off (Mark completed or form) and the annual (form, lastPaidYM stamped 2026-08) record August 2026 with June as the schedule snapshot; after reload still represented (legacy and simulated £1,400), undoing reverses them',
+      [ptDated, pfDated, pfView, pfStamp, [b3aActive(pt), b3aActive(pf)]],
+      [[['2026-08', 'one_off', 'mark_completed', '2026-06-10']], [['2026-08', 'one_off', 'payment_form', '2026-06-10'], ['2026-08', 'annual', 'payment_form', '2026-06-10']], [1400, 1400], '2026-08', [[], []]]);
+
+    const sm = b3aLoad([b3aUpcoming('s1', 'no'), legacyPay('s2', { amount: 200, date: '2026-08-05' })]); sm.toggle('s1');
+    invariant('FA3CB3B.same-month-oneoff', 'A one-off due 5 August completed in August records August (Mark completed), and a legacy paid one-off due 5 August is seeded for August — both keep the due date as snapshot',
+      b3bDated(sm).sort(), [['2026-08', 'one_off', 'mark_completed', '2026-08-05'], ['2026-08', 'one_off', 'migration', '2026-08-05']].sort());
+
+    const rn = b3aLoad([b3aUpcoming('nm', 'yes')]); rn.toggle('nm'); rn.modalEdit('nm', { rec: 'no' }); rn.reload();
+    const ra = b3aLoad([B3A_GOAL()]); ra.modalEdit('pm', { rec: 'no' });
+    invariant('FA3CB3B.recurrence-to-oneoff.no-invention', 'A monthly completion recorded in August, changed to One-off while paid, keeps its recorded occurrence (August 2026, now one-off) and nothing else after reload; the ambiguous paid monthly row changed to One-off records nothing in the save (the next schema-1 load still seeds it: FA3CB3A.b3-open.recurrence-to-oneoff, CURRENT)',
+      [b3bDated(rn).map(r => r.slice(0, 2)), b3bCompletions(rn).length, ra.events().length], [[['2026-08', 'one_off']], 2, 0]);
+
+    const dl = b3aLoad([legacyInvPay('iz', { rec: 'yes', date: '2026-06-05', investId: 'iZ' }), legacyInvPay('iy', { date: '2026-12-10', investId: 'iZ' })]);
+    b2ToGoal('iz')(dl); b2ToGoal('iy')(dl);
+    invariant('FA3CB3B.dead-link.occurrence', 'Before the transition, paid rows naming a removed investment (monthly due June, lastPaidYM empty; one-off due December) moved to Holiday record no completion — not the stale due month, not the future one; legacy Holiday £1,400, and a transition run now carries both undated, so simulated £1,400 too',
+      [b3bCompletions(dl), b3bTransition(dl), b3bTriple(dl)], [[], [['iz', 'goal:gH', 'undated_contribution', 200], ['iy', 'goal:gH', 'undated_contribution', 200]], [1400, 1000, 1400]]);
+  });
+
+  scenario('FA-3C-B.3b MIGRATION — the seed and the rollover safety net accept the same evidence: valid and not after the current month', () => {
+    const le = b3aLoad([legacyPay('z1', { amount: 0 }), legacyPay('z2', { amount: 0, rec: 'yes', date: '2026-06-05' }),
+      legacyPay('z3', { amount: 0, rec: 'yes', lastPaidYM: '2026-08', date: '2026-06-05' }), legacyPay('z4', { amount: 0, date: '2026-12-10' })]);
+    ['z1', 'z2', 'z3', 'z4'].forEach(id => le.modalEdit(id, { amount: '200' }));
+    invariant('FA3CB3B.late-edit.same-session', 'Paid £0 Holiday rows corrected to £200 in one session: only an effect that newly counts is dated, and only by evidence migration accepts — the one-off due June (2026-06) and the monthly row stamped 2026-08 are recorded; the unstamped monthly row and the one-off due December stay undated; legacy £1,800, simulated £1,400 with no new carries, £1,800 with a transition now',
+      [b3bCompletions(le), b3bTriple(le)], [[['2026-06', 'one_off', 'payment_form'], ['2026-08', 'monthly', 'payment_form']], [1800, 1400, 1800]]);
+
+    const vp = b3aLoad([legacyPay('p1', {}), legacyPay('p2', { amount: 200, rec: 'yes', lastPaidYM: '2026-08', date: '2026-06-05' }),
+      legacyPay('p3', { amount: 200, rec: 'yes', lastPaidYM: '2026-07', date: '2026-06-05' }), legacyPay('p4', { amount: 200, rec: 'annual', lastPaidYM: '2026-03', date: '2027-03-05' })]);
+    invariant('FA3CB3B.seed.valid-past', 'Valid past or current evidence is still seeded as before: one-off due June (with its due date), monthly stamped August and July, annual stamped March; the July row then rolls over to upcoming',
+      [seededRows(vp), b3aRow(vp, 'p3').status], [[['p1', 'goal:gH', '2026-06', 250, 'one_off', '2026-06-10', 'migration'], ['p2', 'goal:gH', '2026-08', 200, 'monthly', '', 'migration'],
+        ['p3', 'goal:gH', '2026-07', 200, 'monthly', '', 'migration'], ['p4', 'goal:gH', '2026-03', 200, 'annual', '', 'migration']], 'upcoming']);
+
+    const fr = b3aLoad([B3B_FUTURE_ONEOFF(), legacyPay('f2', { amount: 200, rec: 'yes', lastPaidYM: '2026-09', date: '2026-06-05' }),
+      legacyPay('fa', { amount: 200, rec: 'annual', lastPaidYM: '2027-01', date: '2027-09-05' })]);
+    invariant('FA3CB3B.seed.future-rejected', 'Evidence after August 2026 — one-off due December, monthly stamped September, annual stamped January 2027 — gives no seed fields and no completion; nothing is re-dated to the current or due month',
+      [b3bSeedFields(fr), b3bCompletions(fr)], [[null, null, null], []]);
+
+    const mr = b3aLoad([legacyPay('q1', { amount: 200, rec: 'yes', lastPaidYM: '2026-13', date: '2026-06-05' }), legacyPay('q2', { amount: 200, rec: 'yes', lastPaidYM: '2026-00', date: '2026-06-05' }),
+      legacyPay('q3', { amount: 200, rec: 'yes', lastPaidYM: 'garbage', date: '2026-06-05' }), legacyPay('q4', { amount: 200, rec: 'yes', date: '2026-06-05' }),
+      legacyPay('q5', { date: '2026-13-01' }), legacyPay('q6', { date: '' })]);
+    invariant('FA3CB3B.seed.malformed-rejected', 'Malformed or missing evidence — lastPaidYM 2026-13, 2026-00, garbage or empty; a one-off dated 2026-13-01 or undated — gives no seed fields and no completion',
+      [b3bSeedFields(mr), b3bCompletions(mr)], [[null, null, null, null, null, null], []]);
+
+    const sf = b3bUnseeded([legacyPay('sv', { amount: 200, rec: 'yes', lastPaidYM: '2026-07', date: '2026-06-05' }), legacyPay('sf', { amount: 200, rec: 'yes', lastPaidYM: '2026-09', date: '2026-06-05' }), B3B_FUTURE_ONEOFF()]);
+    b3bEnsure(sf, 'sf'); b3bEnsure(sf, 'f1');
+    invariant('FA3CB3B.safety-net.future-rejected', 'With migration seeding off, rollover records the July-stamped row (2026-07) and resets it; the September-stamped row is neither recorded nor reset, and the safety net called directly on it or on the December one-off records nothing',
+      [b3bCompletions(sf), b3bStatus(sf, ['sv', 'sf', 'f1'])], [[['2026-07', 'monthly', 'rollover_safety_net']], [['upcoming', ''], ['paid', '2026-09'], ['paid', '']]]);
+
+    const sm = b3bUnseeded([legacyPay('sv', { amount: 200, rec: 'yes', lastPaidYM: '2026-07', date: '2026-06-05' }), B3B_MALFORMED(), legacyPay('sg', { amount: 200, rec: 'yes', lastPaidYM: 'garbage', date: '2026-06-05' })]);
+    b3bEnsure(sm, 'f3'); b3bEnsure(sm, 'sg');
+    invariant('FA3CB3B.safety-net.malformed-rejected', 'With migration seeding off, rows stamped 2026-13 and garbage are neither recorded at their due month (2026-06) nor reset, even when the safety net is called on them directly; the valid July row is recorded and reset',
+      [b3bCompletions(sm), b3bStatus(sm, ['sv', 'f3', 'sg'])], [[['2026-07', 'monthly', 'rollover_safety_net']], [['upcoming', ''], ['paid', '2026-13'], ['paid', 'garbage']]]);
+
+    const ml = b3aLoad([B3B_FUTURE_STAMP(), B3B_MALFORMED(), B3A_GOAL()]);
+    invariant('FA3CB3B.monthly-left.untrusted-stamp', 'Legacy display effect of keeping them paid: monthly rows stamped 2027-03 or 2026-13 count in Monthly Left exactly like the ambiguous paid monthly row with no stamp — not as this month\'s outflow',
+      ml.rows().map(r => [r.id, r.status, r.countsInMonthlyLeft]), [['f2', 'paid', false], ['f3', 'paid', false], ['pm', 'paid', false]]);
+
+    const si = b3aLoad([]);
+    si.smartImport([{ name: 'Holiday July', amount: 200, date: '2026-07-20', link: 'goal:gH' }, { name: 'Holiday December', amount: 200, date: '2026-12-20', link: 'goal:gH' }]);
+    invariant('FA3CB3B.smart-import.transaction-month', 'Smart Import rows keep their transaction month: a July transaction records 2026-07; a December one is imported as scheduled and records nothing',
+      [b3bCompletions(si), si.state().payments.map(p => p.status)], [[['2026-07', 'one_off', 'smart_import']], ['paid', 'upcoming']]);
+  });
+
+  scenario('FA-3C-B.3b PRESERVATION — rejected evidence stays where carries, FA-7 and FA-3C-B.2 find it', () => {
+    const b2f = b2Ambiguous(legacyInvPay('im', { date: '2026-12-10' })), b2s = b2Ambiguous(legacyInvPay('im', { rec: 'yes', lastPaidYM: '2027-03', date: '2026-06-05' }));
+    const b2fTry = attempt(b2f, b2ToGoal('im')), b2sTry = attempt(b2s, b2ToGoal('im'));
+    invariant('FA3CB3B.b2.future-remains-ambiguous', 'A paid ISA one-off due December and a paid ISA monthly stamped 2027-03 are not dated by the rejected seed, so they stay ambiguous: ISA → Holiday is refused and nothing changes (Holiday £1,000 = simulated, ISA £5,200)',
+      [b2fTry, b2sTry, b3bCompletions(b2f).concat(b3bCompletions(b2s)), b2View(b2f), b2View(b2s)], [[[REFUSED_MOVE], true], [[REFUSED_MOVE], true], [], [1000, 1000, 5200], [1000, 1000, 5200]]);
+
+    const cg = b3aLoad([B3B_FUTURE_ONEOFF(), B3B_FUTURE_STAMP(), B3B_MALFORMED()]);
+    invariant('FA3CB3B.carry.future-preserved', 'Holiday rows whose evidence was rejected (one-off due December £250, monthly stamped 2027-03 £200, monthly stamped 2026-13 £200) are what a transition carries, undated: legacy Holiday £1,650 = simulated with the transition',
+      [b3bTransition(cg), b3bTriple(cg)], [[['f1', 'goal:gH', 'undated_contribution', 250], ['f2', 'goal:gH', 'undated_contribution', 200], ['f3', 'goal:gH', 'undated_contribution', 200]], [1650, 1000, 1650]]);
+
+    const fi = b3aLoad([legacyInvPay('i1', { date: '2026-12-10' }), legacyInvPay('i2', { rec: 'yes', lastPaidYM: '2027-03', date: '2026-06-05' }), legacyInvPay('i3', { rec: 'yes', lastPaidYM: '2026-13', date: '2026-06-05' })]);
+    const cand = id => { const c = b2Candidate(fi, id); return c && [c.entityType + ':' + c.entityId, c.kind, c.amount, c.recurrence]; };
+    invariant('FA3CB3B.fa7.future-preserved', 'ISA rows whose evidence was rejected stay FA-7 evidence: each still gives an undated ISA £200 candidate, no investment carry is created, and legacy ISA keeps £5,600',
+      [['i1', 'i2', 'i3'].map(cand), b3bTransition(fi), fi.snap().inv.iA],
+      [[['investment:iA', 'undated_contribution', 200, 'one_off'], ['investment:iA', 'undated_contribution', 200, 'monthly'], ['investment:iA', 'undated_contribution', 200, 'monthly']], [], 5600]);
+  });
+
+  scenario('FA-3C-B.3b STABILITY — reloads, months and years', () => {
+    const tl = b3aLoad([legacyPay('p1', {}), B3B_FUTURE_ONEOFF(), B3B_FUTURE_STAMP(), B3B_MALFORMED(), legacyPay('n1', { amount: 200, status: 'upcoming', date: '2026-06-10' }), b3aUpcoming('n2', 'yes')]);
+    tl.toggle('n1'); tl.toggle('n2');
+    const tlMoney = b3aMoney(tl), tlView = b3bTriple(tl);
+    for (let i = 0; i < 10; i++) tl.reload();
+    invariant('FA3CB3B.ten-load', 'Valid, future, malformed and natively completed rows loaded ten more times: rows, ledgers, carries and caches unchanged, three completions (June one-off seeded, past-due one-off and monthly completed in August), legacy £2,300 = simulated with a transition',
+      [same(b3aMoney(tl), tlMoney), b3bCompletions(tl).length, b3bTriple(tl), tlView], [true, 3, [2300, 1650, 2300], [2300, 1650, 2300]]);
+
+    const cm = b3aLoad([legacyPay('cm', { amount: 200, rec: 'yes', status: 'upcoming', date: '2026-06-05' }), legacyPay('co', { amount: 200, status: 'upcoming', date: '2026-08-20' })], '2026-06-10');
+    cm.toggle('cm'); cm.toggle('co');
+    cm.advance('2026-07-10', 'reload'); cm.toggle('cm');
+    cm.advance('2026-08-10', 'reload');
+    invariant('FA3CB3B.cross-month', 'June → July → August: a monthly completed in June and July records 2026-06 and 2026-07 and rolls over; a one-off due 20 August completed in June records June (when the money moved), not August; legacy Holiday £1,200 (D1), simulated £1,600',
+      [b3bCompletions(cm), b3bStatus(cm, ['cm', 'co']), b3aView(cm)],
+      [[['2026-06', 'monthly', 'mark_completed'], ['2026-06', 'one_off', 'mark_completed'], ['2026-07', 'monthly', 'mark_completed']], [['upcoming', ''], ['paid', '']], [1200, 1600]]);
+
+    const cy = b3aLoad([legacyPay('ym', { amount: 200, rec: 'yes', status: 'upcoming', date: '2026-12-05' }), legacyPay('yo', { amount: 200, status: 'upcoming', date: '2027-01-15' }),
+      legacyPay('yl', { amount: 200, rec: 'yes', lastPaidYM: '2026-12', date: '2026-12-05' })], '2026-12-10');
+    cy.toggle('ym'); cy.toggle('yo');
+    const cyDec = [b3bCompletions(cy), b3bStatus(cy, ['ym', 'yl'])];
+    cy.advance('2027-01-10', 'reload');
+    invariant('FA3CB3B.cross-year', 'December 2026 → January 2027: the legacy row stamped 2026-12 is seeded for December; a monthly and a one-off due 15 January completed in December record 2026-12; in January 2026-12 < 2027-01, so both monthly rows roll over (their completions kept) and nothing is dated 2027',
+      [cyDec, b3bCompletions(cy), b3bStatus(cy, ['ym', 'yl', 'yo'])],
+      [[[['2026-12', 'monthly', 'migration'], ['2026-12', 'monthly', 'mark_completed'], ['2026-12', 'one_off', 'mark_completed']], [['paid', '2026-12'], ['paid', '2026-12']]],
+        [['2026-12', 'monthly', 'migration'], ['2026-12', 'monthly', 'mark_completed'], ['2026-12', 'one_off', 'mark_completed']], [['upcoming', ''], ['upcoming', ''], ['paid', '']]]);
+
+    const look = app => [b3bDated(app), b3bTriple(app), app.state().payments.map(p => [p.id, p.status, p.lastPaidYM || '', !!p.contributionEventId])];
+    const cases = [
+      ['native future one-off', b3aLoad([legacyPay('n1', { amount: 200, status: 'upcoming', date: '2099-01-10' })]), a => a.toggle('n1')],
+      ['native past-due annual (form)', b3aLoad([legacyPay('a1', { amount: 200, rec: 'annual', status: 'upcoming', date: '2026-06-10' })]), a => a.modalEdit('a1', { status: 'paid' })],
+      ['£0 → £200 one-off', b3aLoad([legacyPay('z1', { amount: 0 })]), a => a.modalEdit('z1', { amount: '200' })],
+      ['£0 → £200 unstamped monthly', b3aLoad([legacyPay('z2', { amount: 0, rec: 'yes', date: '2026-06-05' })]), a => a.modalEdit('z2', { amount: '200' })],
+      ['dead link → Holiday', b3aLoad([legacyInvPay('iz', { rec: 'yes', date: '2026-06-05', investId: 'iZ' })]), b2ToGoal('iz')],
+      ['monthly completion → One-off', b3aLoad([b3aUpcoming('nm', 'yes')]), a => { a.toggle('nm'); a.modalEdit('nm', { rec: 'no' }); }]
+    ];
+    invariant('FA3CB3B.same-session-reload', 'Each B.3b action seen in the same session and after a reload is identical — active completions, legacy and simulated values, row status, stamp and pointer: ' + cases.map(c => c[0]).join(', '),
+      cases.map(([label, app, act]) => { act(app); const s = look(app); app.reload(); return [label, same(look(app), s)]; }), cases.map(c => [c[0], true]));
+
+    const ma = b3aLoad([B3B_FUTURE_ONEOFF(), legacyPay('f2', { amount: 200, rec: 'yes', lastPaidYM: '2026-09', date: '2026-06-05' })]);
+    const maAug = b3bCompletions(ma);
+    ma.advance('2026-09-10', 'reload'); const maSep = b3bCompletions(ma);
+    ma.advance('2026-12-10', 'reload');
+    current('FA3CB3B.c3.evidence-matures', 'Stays CURRENT for FA-3C-C (seeding only at the transition, C3): rejected future evidence is seeded on a later schema-1 load once its month arrives — the September stamp in September, the December one-off in December — never before',
+      [maAug, maSep, b3bCompletions(ma)], [[], [['2026-09', 'monthly', 'migration']], [['2026-09', 'monthly', 'migration'], ['2026-12', 'one_off', 'migration']]]);
   });
 }
 
@@ -3616,7 +3809,7 @@ function main() {
   fa3aLedger(); fa3aGoals(); fa3aInvestments(); fa3aSmartImport(); fa3aDeletion(); fa3aIdentity(); fa3aRollover(); fa3aProtection(); fa3aAnnual(); fa3aOccurrence();
   fa3bOrder(); fa3bMatrix(); fa3bPointers(); fa3bParity(); fa3bLifecycle();
   fa3caNormalise(); fa3caMatrix(); fa3caTransition(); fa3caResolutions(); fa3caLinkedAndCorrection(); fa3caLifecycle();
-  fa3cbActions(); fa3cbValidation(); fa3cbTimelines(); fa3cbIntegration(); fa3cb2Boundary(); fa3cb3aForm();
+  fa3cbActions(); fa3cbValidation(); fa3cbTimelines(); fa3cbIntegration(); fa3cb2Boundary(); fa3cb3aForm(); fa3cb3bTemporal();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');

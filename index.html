@@ -6668,6 +6668,11 @@ function geodeContributionYmValid(ym) {
   return typeof ym === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(ym);
 }
 
+/** FA-3C-B.3b: a valid month no later than the current month — the only occurrence a completion may be given. Both sides are fixed-width YYYY-MM, so string order is month order. */
+function geodeContributionYmTrusted(ym) {
+  return geodeContributionYmValid(ym) && ym <= currentYM();
+}
+
 function geodeContributionEventValid(e) {
   if (!e || typeof e !== 'object' || Array.isArray(e)) return false;
   if (e.eventType !== 'completion' && e.eventType !== 'reversal') return false;
@@ -6790,29 +6795,28 @@ function geodeContributionOccurrenceYm(row) {
   return geodeContributionYmValid(dueYm) ? dueYm : '';
 }
 
-/** FA-3A: fields needed to classify a contribution row transition, captured before the row is mutated. */
+/** FA-3A: fields needed to classify a contribution row transition, captured before the row is mutated. contributing: the row's effect counts (geodePaymentBalanceEffect), not merely a link. */
 function geodeContributionEventSnapshot(p) {
   if (!p) return null;
-  var ref = geodeContributionEntityRef(S, p);
   return {
     id: String(p.id || ''),
     status: String(p.status || ''),
     rec: String(p.rec || ''),
     date: String(p.date || ''),
     lastPaidYM: String(p.lastPaidYM || ''),
-    contributing: !!ref,
+    contributing: !!geodePaymentBalanceEffect(S, p),
     eventId: String(p.contributionEventId || '')
   };
 }
 
-/** FA-3A: the completion a row's paid occurrence would record (no id or timestamp yet), or null if it records none. */
-function geodeContributionCompletionFields(state, row) {
+/** FA-3A: the completion a row's paid occurrence would record (no id or timestamp yet), or null if it records none. occurrenceYm, when given, replaces the row's own occurrence month. */
+function geodeContributionCompletionFields(state, row, occurrenceYm) {
   var paymentId = String(row.id || '');
   var ref = geodeContributionEntityRef(state, row);
   if (!paymentId || !ref) return null;
   var amount = Math.round(toNum(row.amount) * 100) / 100;
   if (!isFinite(amount) || amount <= 0) return null;
-  var occYm = geodeContributionOccurrenceYm(row);
+  var occYm = occurrenceYm || geodeContributionOccurrenceYm(row);
   if (!occYm) return null;
   return {
     paymentId: paymentId,
@@ -6934,8 +6938,13 @@ function geodeAppendContributionReversal(completion, source) {
  * Becomes paid: append a completion for its paid occurrence unless one is already active.
  * Stops being paid: append a reversal of that occurrence's active completion.
  * Stays paid: if the amount, goal/investment or recurrence changed, reverse the active completion and append its
- * replacement for the same occurrence. A paid row without a recorded completion gains one only when it was not
- * contributing before; completions from before the ledger existed are left to migration.
+ * replacement for the same occurrence. A paid row without a recorded completion gains one only when its effect did
+ * not count before; completions from before the ledger existed are left to migration.
+ * FA-3C-B.3b: the occurrence comes from evidence the action actually has. Becoming paid through the app (mark
+ * completed, payment form) proves the money moved now: the current month, whatever the due date says. Smart Import
+ * rows carry their transaction date. A row that was already paid and only now counts proves no completion now: it is
+ * dated by the same row evidence migration accepts (geodeLegacyContributionSeedFields), else left undated. No path
+ * records a month after the current one.
  * Reversals and replacements touch a completion only while the row still represents its occurrence
  * (geodeContributionRowRepresents); otherwise the history is left as recorded.
  * The row pointer (contributionEventId) references the active completion of the row's current paid occurrence and
@@ -6950,7 +6959,8 @@ function geodeRecordContributionTransition(before, after, source) {
     var wasPaid = !!before && before.status === 'paid';
     var prior = wasPaid ? geodeContributionPriorCompletion(S, before) : null;
     var carry = prior ? null : geodeContributionCarryForRow(S, before);
-    var next = String(after.status || '') === 'paid' ? geodeContributionCompletionFields(S, after) : null;
+    var actionYm = !wasPaid && source !== 'smart_import' ? currentYM() : '';
+    var next = String(after.status || '') === 'paid' ? geodeContributionCompletionFields(S, after, actionYm) : null;
     delete after.contributionEventId;
     if (carry) {
       geodeContributionCarryFollowRow(carry, after, source);
@@ -6966,10 +6976,15 @@ function geodeRecordContributionTransition(before, after, source) {
     if (prior) {
       next.occurrenceYm = prior.occurrenceYm;
       next.dueDateSnapshot = prior.dueDateSnapshot;
-    } else if (wasPaid && before.contributing) {
-      return;
-    } else if (before && !wasPaid) {
-      next.dueDateSnapshot = String(before.date || '').slice(0, 10);
+    } else if (wasPaid) {
+      if (before.contributing) return;
+      var evidence = geodeLegacyContributionSeedFields(S, after);
+      if (!evidence) return;
+      next.occurrenceYm = evidence.occurrenceYm;
+      next.dueDateSnapshot = evidence.dueDateSnapshot;
+    } else {
+      if (!geodeContributionYmTrusted(next.occurrenceYm)) return;
+      if (before) next.dueDateSnapshot = String(before.date || '').slice(0, 10);
     }
     after.contributionEventId = geodeAppendContributionCompletion(next, source).id;
   } catch (_eCev) {}
@@ -6997,6 +7012,7 @@ function geodeRecordContributionDeletion(row, source) {
  * recorded first (a completion from before the ledger existed has none). The due date may already be advanced,
  * so no due-date snapshot is kept. A paid state that is still a legacy carry's occurrence (geodeContributionCarryForRow)
  * is left to the carry: the reset ends the row's hold on it, and the carry stays as history.
+ * FA-3C-B.3b: the occurrence is the one migration would accept (geodeLegacyContributionSeedFields), never the due month.
  */
 function geodeEnsureContributionCompletion(row, source) {
   try {
@@ -7005,7 +7021,7 @@ function geodeEnsureContributionCompletion(row, source) {
     var before = geodeContributionEventSnapshot(row);
     if (geodeContributionPointerTarget(S, before)) return;
     if (geodeContributionCarryForRow(S, before)) return;
-    var fields = geodeContributionCompletionFields(S, row);
+    var fields = geodeLegacyContributionSeedFields(S, row);
     if (!fields) return;
     fields.dueDateSnapshot = '';
     geodeAppendContributionCompletion(fields, source);
@@ -7019,6 +7035,8 @@ function geodeEnsureContributionCompletion(row, source) {
  * advanced). A monthly or annual row without lastPaidYM (Smart Import merge, form-saved annual) does not say which
  * occurrence it completed, and its date may already be the next due date, so it proves none. The due date is kept
  * only when it lies in the occurrence month.
+ * FA-3C-B.3b: an occurrence after the current month (a future one-off, a future-stamped lastPaidYM) proves none — the
+ * effect stays as undated legacy evidence (carry / FA-7), never re-dated to the current or due month.
  */
 function geodeLegacyContributionSeedFields(state, p) {
   if (!p || !geodePaymentBalanceEffect(state, p)) return null;
@@ -7028,6 +7046,7 @@ function geodeLegacyContributionSeedFields(state, p) {
     if (!geodeContributionYmValid(String(p.lastPaidYM || ''))) return null;
     fields.occurrenceYm = String(p.lastPaidYM);
   }
+  if (!geodeContributionYmTrusted(fields.occurrenceYm)) return null;
   if (fields.dueDateSnapshot.slice(0, 7) !== fields.occurrenceYm) fields.dueDateSnapshot = '';
   return fields;
 }
@@ -8984,7 +9003,11 @@ function geodeRealityStatus() {
   return { hasData: true, gap: gap, status: status, confidence: confidence, daysOld: daysOld, activitySinceCheck: activitySinceCheck };
 }
 
-/** Recurring payments marked paid reset to upcoming when the calendar month changes (no scheduler). */
+/**
+ * Recurring payments marked paid reset to upcoming when the calendar month changes (no scheduler).
+ * FA-3C-B.3b: a row whose goal/investment effect counts resets only from a trusted lastPaidYM — the reset erases the
+ * row's evidence, so a future or malformed stamp leaves it paid as undated legacy evidence instead.
+ */
 function syncRecurringPayments() {
   if (!S) return;
   var ym = currentYM();
@@ -8992,7 +9015,8 @@ function syncRecurringPayments() {
   if (S.payments && S.payments.length) {
     for (var i = 0; i < S.payments.length; i++) {
       var p = S.payments[i];
-      if (p.rec === 'yes' && p.status === 'paid' && p.lastPaidYM && p.lastPaidYM !== ym) {
+      if (p.rec === 'yes' && p.status === 'paid' && p.lastPaidYM && p.lastPaidYM !== ym &&
+          (geodeContributionYmTrusted(p.lastPaidYM) || !geodePaymentBalanceEffect(S, p))) {
         geodeEnsureContributionCompletion(p, 'rollover_safety_net');
         p.status = 'upcoming';
         p.lastPaidYM = '';
@@ -39436,7 +39460,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
       if (debtid) existing.rec = existing.rec === 'yes' || rec === 'yes' ? 'yes' : 'no';
       if (st === 'paid') {
         existing.status = 'paid';
-        if (existing.rec === 'yes') existing.lastPaidYM = currentYM();
+        if (existing.rec === 'yes' || existing.rec === 'annual') existing.lastPaidYM = currentYM();
         else existing.lastPaidYM = '';
       } else {
         existing.status =
@@ -39493,7 +39517,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     ex.payKind = payKind;
     // FA-3C-B.3a: lastPaidYM is occurrence evidence; a row that stays completed keeps it whatever else the form changed.
     if(st!=='paid')ex.lastPaidYM='';
-    else if(!exWasPaid)ex.lastPaidYM=rec==='yes'?currentYM():'';
+    else if(!exWasPaid)ex.lastPaidYM=rec==='yes'||rec==='annual'?currentYM():'';
     if (!ex.createdAt) ex.createdAt = Date.now();
     savedPayRow = ex;
     savedPayRowId = ex.id;
@@ -39504,7 +39528,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     if (debtid || gid || invid) didUpsert = geodeUpsertLinkedPaymentForThisMonth();
     if (!didUpsert) {
       var row={id:uid(),name:nm,amount:Number(am),date:dt,status:st,rec:rec,lastPaidYM:'',goalId:gid,investId:invid,debtId:debtid,payKind:payKind,createdAt:Date.now()};
-      if(rec==='yes'&&st==='paid')row.lastPaidYM=currentYM();
+      if((rec==='yes'||rec==='annual')&&st==='paid')row.lastPaidYM=currentYM();
       if (payLinkedIntent === 'new' && (gid || invid)) row.directContribution = true;
       S.payments.push(row);
       savedPayRow = row;
