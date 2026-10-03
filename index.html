@@ -1834,10 +1834,14 @@ function load() {
    * FA-3C-C: the transition reads legacy paid rows, so it runs before recurring sync resets them. Release safety: it
    * starts only once no older app copy can be served in this browser (geodeShellReadiness); until then data stays
    * schema 1. Data newer than this runtime is neither checked nor moved.
+   * FA-7B: legacy investment figures are read from the same untouched rows; investments move to valuation authority
+   * only on schema-2 data, after the goal transition and before recurring sync.
    */
+  var _geodeInvOpening = _geodeRuntimeStale ? [] : geodeInvestmentLegacyOpeningValues(S);
   if (!_geodeRuntimeStale) {
     if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
     else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();
+    if (geodeSchema2Active(S)) geodeInvestmentAuthorityTransition(S, _geodeInvOpening);
   }
   syncRecurringPayments();
   geodeNormalizeDebtHealthFields(S);
@@ -4727,6 +4731,292 @@ function geodePaymentBalanceEffect(state, p) {
   return null;
 }
 
+/** FA-7B: a real calendar date written 'YYYY-MM-DD'. */
+function geodeInvestmentIsoDateValid(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  var m = Number(s.slice(5, 7)), d = Number(s.slice(8, 10));
+  return m >= 1 && m <= 12 && d >= 1 && d <= new Date(Number(s.slice(0, 4)), m, 0).getDate();
+}
+
+/**
+ * FA-7B: a valuation that may anchor an investment's position: { id, value, date 'YYYY-MM-DD', recordedAt, source }.
+ * Sources: manual (value edited), manual_create (new investment), legacy_transition (opening anchor). Anything else
+ * (including a future provider source) is not authority yet.
+ */
+function geodeInvestmentValuationValid(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  if (typeof v.id !== 'string' || !v.id) return false;
+  if (typeof v.value !== 'number' || !isFinite(v.value)) return false;
+  if (!geodeInvestmentIsoDateValid(v.date)) return false;
+  if (typeof v.recordedAt !== 'number' || !isFinite(v.recordedAt)) return false;
+  return v.source === 'manual' || v.source === 'manual_create' || v.source === 'legacy_transition';
+}
+
+/** FA-7B: the investment's valid valuations (first of each id), in stored order. Malformed entries are ignored, never removed. */
+function geodeInvestmentValuations(inv) {
+  var list = inv && Array.isArray(inv.valuations) ? inv.valuations : [];
+  var seen = Object.create(null);
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    var v = list[i];
+    if (!geodeInvestmentValuationValid(v) || seen[v.id]) continue;
+    seen[v.id] = true;
+    out.push(v);
+  }
+  return out;
+}
+
+/** FA-7B: whether evidence effective on `date`, recorded at `at`, falls after `anchor` — by date, then recordedAt. */
+function geodeInvestmentOrderedAfter(date, at, anchor) {
+  return date > anchor.date || (date === anchor.date && at > anchor.recordedAt);
+}
+
+/** FA-7B: the latest valid valuation by (date, recordedAt, id), or null — null keeps the investment on legacy authority. */
+function geodeInvestmentLatestValuation(inv) {
+  var best = null;
+  geodeInvestmentValuations(inv).forEach(function (v) {
+    if (!best || geodeInvestmentOrderedAfter(v.date, v.recordedAt, best) ||
+        (v.date === best.date && v.recordedAt === best.recordedAt && v.id > best.id)) best = v;
+  });
+  return best;
+}
+
+/**
+ * FA-7B: the day one completion's money became real. Smart Import: the transaction date. Otherwise the earlier of the
+ * due date and the local day it was recorded — completed early, the day it was marked; on or after the due date, the
+ * due date. With no due date: the day it was recorded, at the latest the last day of its occurrence month.
+ */
+function geodeContributionEffectiveDate(e) {
+  var recorded = geodeDateToLocalISO(new Date(e.recordedAt));
+  var due = String(e.dueDateSnapshot || '');
+  if (geodeInvestmentIsoDateValid(due)) {
+    if (e.source === 'smart_import') return due;
+    return due < recorded ? due : recorded;
+  }
+  var ym = String(e.occurrenceYm);
+  var monthEnd = ym + '-' + new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0).getDate();
+  return monthEnd < recorded ? monthEnd : recorded;
+}
+
+/**
+ * FA-7B: the investment's active completions as cash flows { id, amount, date, at }. A payment occurrence keeps the
+ * earliest (effective date, recordedAt) any of its completions had, so a replacement, relink or undo-and-complete-again
+ * corrects the amount without moving when the money became real.
+ */
+function geodeInvestmentContributionFlows(state, invId) {
+  var ledger = geodeContributionLedger(state && state.contributionEvents);
+  var first = Object.create(null);
+  ledger.kept.forEach(function (e) {
+    if (e.eventType !== 'completion') return;
+    var key = e.paymentId + '|' + e.occurrenceYm;
+    var date = geodeContributionEffectiveDate(e);
+    var f = first[key];
+    if (!f || date < f.date || (date === f.date && e.recordedAt < f.at)) first[key] = { date: date, at: e.recordedAt };
+  });
+  var out = [];
+  ledger.active.forEach(function (e) {
+    if (e.entityType !== 'investment' || e.entityId !== invId) return;
+    var f = first[e.paymentId + '|' + e.occurrenceYm];
+    out.push({ id: e.id, amount: e.amount, date: f.date, at: f.at });
+  });
+  return out;
+}
+
+/**
+ * FA-7B: withdrawals from the investment { id, amount, date, at } — the releases the legacy deduction counts (confirmed,
+ * event-derived, positive), ordered by release date, then createdAt. A release without a valid date is never after a valuation.
+ */
+function geodeInvestmentReleaseFlows(state, invId) {
+  var out = [];
+  ((state && state.savingsReleases) || []).forEach(function (r) {
+    if (!r || String(r.sourceId || '') !== invId) return;
+    if (r.confirmedByUser === false) return;
+    if (String(r.balanceMutationMode || 'base_delta') !== 'event_derived') return;
+    var amt = toNum(r.amount);
+    if (amt <= 0) return;
+    var date = String(r.date || '');
+    out.push({ id: String(r.id || ''), amount: amt, date: geodeInvestmentIsoDateValid(date) ? date : '',
+      at: typeof r.createdAt === 'number' && isFinite(r.createdAt) ? r.createdAt : 0 });
+  });
+  return out;
+}
+
+/**
+ * FA-7B: investment position from its latest valid valuation, or null when it has none (legacy authority).
+ * rawValue = anchor value + contributions after it − qualifying releases after it; value clamps it at 0 for display.
+ * Payment rows never add to it. estimated: some cash flow after the anchor moved it; otherwise value is the observed anchor.
+ * An observed value (manual, manual_create) already holds every contribution and release effective by its date (same
+ * day: recorded before it), so only later ones count; editing or undoing an earlier contribution leaves it unchanged.
+ * A legacy_transition anchor is Beynd's own figure when the ledger stood as at its recordedAt: active completions added
+ * since count, and completions active then but reversed or replaced since are taken back out — the ledger's change, at
+ * any effective date. Releases recorded after it count.
+ */
+function geodeInvestmentPosition(state, inv) {
+  var anchor = geodeInvestmentLatestValuation(inv);
+  if (!anchor) return null;
+  var id = String(inv.id);
+  var flows = 0, releases = 0, moved = false;
+  var ledgerAnchor = anchor.source === 'legacy_transition';
+  if (ledgerAnchor) {
+    var list = state && Array.isArray(state.contributionEvents) ? state.contributionEvents : [];
+    var then = Object.create(null);
+    geodeContributionLedger(list.filter(function (e) { return e && e.recordedAt <= anchor.recordedAt; })).active.forEach(function (e) {
+      if (e.entityType === 'investment' && e.entityId === id) then[e.id] = e.amount;
+    });
+    geodeContributionLedger(list).active.forEach(function (e) {
+      if (e.entityType !== 'investment' || e.entityId !== id) return;
+      if (then[e.id] !== undefined) {
+        delete then[e.id];
+        return;
+      }
+      flows += e.amount;
+      moved = true;
+    });
+    Object.keys(then).forEach(function (k) {
+      flows -= then[k];
+      moved = true;
+    });
+  } else {
+    geodeInvestmentContributionFlows(state, id).forEach(function (f) {
+      if (!geodeInvestmentOrderedAfter(f.date, f.at, anchor)) return;
+      flows += f.amount;
+      moved = true;
+    });
+  }
+  geodeInvestmentReleaseFlows(state, id).forEach(function (r) {
+    if (ledgerAnchor ? r.at <= anchor.recordedAt : !geodeInvestmentOrderedAfter(r.date, r.at, anchor)) return;
+    releases += r.amount;
+    moved = true;
+  });
+  flows = Math.round(flows * 100) / 100;
+  releases = Math.round(releases * 100) / 100;
+  var raw = Math.round((anchor.value + flows - releases) * 100) / 100;
+  return { value: Math.max(0, raw), rawValue: raw, anchor: anchor, flowsSince: flows, releasesSince: releases, estimated: moved };
+}
+
+/**
+ * FA-7B: the pre-FA-7B investment figure — base + completed rows (geodePaymentBalanceEffect) − event-derived releases,
+ * clamped at 0 only when a release applies. Authority for an investment with no valid valuation, and the value of its
+ * legacy_transition anchor.
+ */
+function geodeInvestmentLegacyBalance(state, inv) {
+  var bal = toNum(inv.baseBalance);
+  (state.payments || []).forEach(function (p) {
+    var eff = geodePaymentBalanceEffect(state, p);
+    if (eff && eff.investment === inv) bal += eff.amount;
+  });
+  if (inv.id == null) return bal;
+  var ded = geodeSavingsReleaseDeductionSumForSource(state, inv.id);
+  return ded > 0 ? Math.max(0, Math.round((bal - ded) * 100) / 100) : bal;
+}
+
+/** FA-7B: the figure inv.balance caches — the position (clamped at 0) once a valid valuation anchors it, else the legacy figure. */
+function geodeInvestmentDisplayBalance(state, inv) {
+  var pos = geodeInvestmentPosition(state, inv);
+  return pos ? pos.value : geodeInvestmentLegacyBalance(state, inv);
+}
+
+/** FA-7B: capital contributed since tracking — every active completion minus qualifying releases, whatever the valuations. Not a value. */
+function geodeInvestmentCapitalSinceTracking(state, inv) {
+  var id = String(inv.id);
+  var sum = 0;
+  geodeInvestmentContributionFlows(state, id).forEach(function (f) { sum += f.amount; });
+  geodeInvestmentReleaseFlows(state, id).forEach(function (r) { sum -= r.amount; });
+  return Math.round(sum * 100) / 100;
+}
+
+/**
+ * FA-7B: a recordedAt for a new valuation of inv that orders after every contribution event, release and valuation it
+ * already has — an observation subsumes everything recorded before it, even within the same millisecond.
+ */
+function geodeInvestmentValuationRecordedAt(state, inv, now) {
+  var id = String(inv.id);
+  var at = now;
+  geodeContributionLedger(state && state.contributionEvents).kept.forEach(function (e) {
+    if (e.entityType === 'investment' && e.entityId === id && e.recordedAt >= at) at = e.recordedAt + 1;
+  });
+  geodeInvestmentReleaseFlows(state, id).forEach(function (r) { if (r.at >= at) at = r.at + 1; });
+  geodeInvestmentValuations(inv).forEach(function (v) { if (v.recordedAt >= at) at = v.recordedAt + 1; });
+  return at;
+}
+
+/**
+ * FA-7B: appends a valuation of inv observed today (source manual / manual_create) and returns it; null — nothing
+ * appended — for a non-finite value or when the latest valuation is dated after today (the device clock is behind it;
+ * a valuation is never future-dated).
+ */
+function geodeInvestmentAppendValuation(state, inv, value, source) {
+  var amount = Math.round(Number(value) * 100) / 100;
+  if (!inv || !isFinite(amount)) return null;
+  var today = geodeTodayLocalISO();
+  var latest = geodeInvestmentLatestValuation(inv);
+  if (latest && latest.date > today) return null;
+  var v = { id: 'val_' + uid(), value: amount, date: today, recordedAt: geodeInvestmentValuationRecordedAt(state, inv, Date.now()), source: source };
+  if (!Array.isArray(inv.valuations)) inv.valuations = [];
+  inv.valuations.push(v);
+  return v;
+}
+
+/**
+ * FA-7B: per investment (by index), the legacy figure of each investment with no valid valuation, read by load() from
+ * stored data before the schema-2 transition and recurring sync touch it — what the old model showed just before transition.
+ */
+function geodeInvestmentLegacyOpeningValues(state) {
+  var out = [];
+  (state.investments || []).forEach(function (inv, i) {
+    if (!inv || inv.id == null || geodeInvestmentLatestValuation(inv)) return;
+    out[i] = Math.round(geodeInvestmentLegacyBalance(state, inv) * 100) / 100;
+  });
+  return out;
+}
+
+/** FA-7B: the latest recordedAt / createdAt among the investment's contribution events and releases (0 when it has none). */
+function geodeInvestmentEvidenceLatestAt(state, inv) {
+  var id = String(inv.id);
+  var at = 0;
+  geodeContributionLedger(state && state.contributionEvents).kept.forEach(function (e) {
+    if (e.entityType === 'investment' && e.entityId === id && e.recordedAt > at) at = e.recordedAt;
+  });
+  geodeInvestmentReleaseFlows(state, id).forEach(function (r) { if (r.at > at) at = r.at; });
+  return at;
+}
+
+/**
+ * FA-7B: the one-time move of legacy investments to valuation authority, run by load() on schema-2 data before
+ * syncRecurringPayments. Each investment `opening` names (geodeInvestmentLegacyOpeningValues) that still has no valid
+ * valuation gains one legacy_transition anchor at that value, dated today, its recordedAt the latest evidence it holds,
+ * so it subsumes every contribution and release already recorded and only later ones move it: the new position equals
+ * the legacy figure. The id is fixed per investment and a valid anchor is never added twice. If any position does not
+ * equal its opening value, every anchor is removed again and all investments stay on legacy authority until the next
+ * load. Nothing is written here: the anchors reach storage with the next whole-state save, which always follows them,
+ * so stored data is either untouched or holds the anchors together with any row reset after them.
+ */
+function geodeInvestmentAuthorityTransition(state, opening) {
+  var undo = [];
+  try {
+    var today = geodeTodayLocalISO();
+    (state.investments || []).forEach(function (inv, i) {
+      if (!inv || opening[i] === undefined || inv.id == null || geodeInvestmentLatestValuation(inv)) return;
+      undo.push([inv, Object.prototype.hasOwnProperty.call(inv, 'valuations'), inv.valuations]);
+      var anchor = { id: 'val_legacy_' + String(inv.id), value: opening[i], date: today,
+        recordedAt: geodeInvestmentEvidenceLatestAt(state, inv), source: 'legacy_transition' };
+      inv.valuations = (Array.isArray(inv.valuations) ? inv.valuations.slice() : []).concat([anchor]);
+      var pos = geodeInvestmentPosition(state, inv);
+      if (!pos || pos.anchor !== anchor || pos.rawValue !== opening[i]) {
+        throw new Error('investment ' + inv.id + ' opens at ' + (pos ? pos.rawValue : 'none') + ', legacy ' + opening[i]);
+      }
+    });
+    return true;
+  } catch (e) {
+    undo.forEach(function (u) {
+      if (u[1]) u[0].valuations = u[2];
+      else delete u[0].valuations;
+    });
+    console.warn('[geode] investment valuation transition not completed, staying on legacy authority: ' + String((e && e.message) || e));
+    return false;
+  }
+}
+
 /**
  * Completed contributions geodeRecomputeBalancesFromPayments adds to a goal in schema 1: total, and the part from
  * monthly-recurring rows, which stop counting when the month rolls over.
@@ -4745,7 +5035,9 @@ function geodeGoalCountedContributions(state, goal) {
 
 /**
  * Sole writer of the g.saved / inv.balance caches every reader uses. Schema 2: goals hold geodeSchema2GoalPosition
- * (payment rows no longer add history). Investments, and goals in schema 1, rebuild from base + paid rows − releases.
+ * (payment rows no longer add history); in schema 1 they rebuild from base + paid rows − releases.
+ * FA-7B: investments hold geodeInvestmentDisplayBalance — the valuation-anchored position, or the legacy figure for an
+ * investment with no valid valuation.
  */
 function geodeRecomputeBalancesFromPayments() {
   try {
@@ -4755,15 +5047,13 @@ function geodeRecomputeBalancesFromPayments() {
     });
 
     (S.investments || []).forEach(function (inv) {
-      inv.balance = toNum(inv.baseBalance);
+      if (inv) inv.balance = geodeInvestmentDisplayBalance(S, inv);
     });
 
     (S.payments || []).forEach(function (p) {
       var eff = geodePaymentBalanceEffect(S, p);
-      if (!eff) return;
-      if (eff.goal) {
-        if (!schema2) eff.goal.saved += eff.amount;
-      } else eff.investment.balance += eff.amount;
+      if (!eff || !eff.goal) return;
+      if (!schema2) eff.goal.saved += eff.amount;
     });
 
     (S.goals || []).forEach(function (g) {
@@ -4775,14 +5065,6 @@ function geodeRecomputeBalancesFromPayments() {
       var ded = geodeSavingsReleaseDeductionSumForSource(S, g.id);
       if (ded > 0) {
         g.saved = Math.max(0, Math.round((toNum(g.saved) - ded) * 100) / 100);
-      }
-    });
-
-    (S.investments || []).forEach(function (inv) {
-      if (!inv || inv.id == null) return;
-      var dedInv = geodeSavingsReleaseDeductionSumForSource(S, inv.id);
-      if (dedInv > 0) {
-        inv.balance = Math.max(0, Math.round((toNum(inv.balance) - dedInv) * 100) / 100);
       }
     });
   } catch (e) {
@@ -7256,7 +7538,8 @@ function geodeRecordContributionTransition(before, after, source) {
       next.dueDateSnapshot = evidence.dueDateSnapshot;
     } else {
       if (!geodeContributionYmTrusted(next.occurrenceYm)) return;
-      if (before) next.dueDateSnapshot = String(before.date || '').slice(0, 10);
+      // FA-7B: a Smart Import merge keeps the transaction date it wrote to the row (when the money became real).
+      if (before && source !== 'smart_import') next.dueDateSnapshot = String(before.date || '').slice(0, 10);
     }
     after.contributionEventId = geodeAppendContributionCompletion(next, source).id;
   } catch (_eCev) {}
@@ -41029,7 +41312,13 @@ function saveInv(id){
   var _invCs      = String(((document.getElementById('xcs')||{}).value)||'').trim();
   var _invGoalId  = String(((document.getElementById('xgoalid')||{}).value)||'').trim();
   function _doSaveInv() {
-    var invBeforeLocal = prevInv ? toNum(prevInv.balance) : 0;
+    // FA-7B: an entered Balance is an observation of today's value; it must become the latest valuation.
+    var latestVal = prevInv && balChanged ? geodeInvestmentLatestValuation(prevInv) : null;
+    if (latestVal && latestVal.date > geodeTodayLocalISO()) {
+      toast('This value can\u2019t be saved yet: your device date is earlier than the last value you entered. Check the date and try again.', 'warn');
+      return;
+    }
+    var invBeforeLocal = prevInv ? geodeInvestmentDisplayBalance(S, prevInv) : 0;
     setLastSnapshotBeforeChange();
     var obj={name:nm,type:_invType,balance:Number(bal),returns:_invR,platform:_invP,notes:_invO,purpose:_invPurpose,horizon:_invHorizon,contributionStyle:_invCs,goalId:_invGoalId};
     obj.baseBalance = obj.balance;
@@ -41045,11 +41334,12 @@ function saveInv(id){
     if(id){for(var i=0;i<S.investments.length;i++){if(S.investments[i].id===id){Object.assign(S.investments[i],obj);break;}}msg='Investment updated.';}
     else{obj.id=uid();S.investments.push(obj);msg='Investment added.';}
     var invRowId = id || obj.id;
-    geodeRecomputeBalancesFromPayments();
     var invRowAfter = S.investments.filter(function(x){ return x.id===invRowId; })[0];
-    var invAfterLocal = invRowAfter ? toNum(invRowAfter.balance) : 0;
-    var invDeltaLocal = invAfterLocal - invBeforeLocal;
-    if (balChanged && invDeltaLocal !== 0) appendActivityLog('invest', invDeltaLocal, { investId: invRowId, source: 'balance_update' });
+    var observed = balChanged ? geodeInvestmentAppendValuation(S, invRowAfter, Number(bal), prevInv ? 'manual' : 'manual_create') : null;
+    geodeRecomputeBalancesFromPayments();
+    // The change is the observation against the position just before it, not against the recomputed figure.
+    var invDeltaLocal = observed ? Math.round((observed.value - invBeforeLocal) * 100) / 100 : 0;
+    if (invDeltaLocal !== 0) appendActivityLog('invest', invDeltaLocal, { investId: invRowId, source: 'balance_update' });
     save();
     geodeSuccessToast(geodeStageLToastAfterSave(msg, 'invest', { _seed: Date.now() }));
     closeModal();

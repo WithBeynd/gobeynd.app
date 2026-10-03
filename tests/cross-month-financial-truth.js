@@ -56,6 +56,12 @@ const PRODUCTION_FUNCTIONS = [
   'geodeRecomputeBalancesFromPayments', 'geodePaymentBalanceEffect', 'geodeGoalCountedContributions',
   'geodeNormalizeGoalInvestBaseFields', 'geodeSavingsReleaseDeductionSumForSource',
   'geodeGoalEffectiveSavedFromState', 'geodeGoalHasPositiveLinkedInvestmentForState', 'geodeGoalLinkedInvBalanceForState',
+  // investment position authority (FA-7B): valuation anchors, contribution / release ordering, the load-time transition
+  'geodeInvestmentIsoDateValid', 'geodeInvestmentValuationValid', 'geodeInvestmentValuations', 'geodeInvestmentOrderedAfter',
+  'geodeInvestmentLatestValuation', 'geodeContributionEffectiveDate', 'geodeInvestmentContributionFlows', 'geodeInvestmentReleaseFlows',
+  'geodeInvestmentPosition', 'geodeInvestmentLegacyBalance', 'geodeInvestmentDisplayBalance', 'geodeInvestmentCapitalSinceTracking',
+  'geodeInvestmentValuationRecordedAt', 'geodeInvestmentAppendValuation', 'geodeInvestmentLegacyOpeningValues', 'geodeInvestmentEvidenceLatestAt',
+  'geodeInvestmentAuthorityTransition',
   // Monthly Left
   'calcMonthlyLeftover', 'calcMonthlyLeftoverConfirmedOnly', 'sumPaymentsMonthlyOutflow',
   'sumPaymentsMonthlyOutflowConfirmedOnly', 'paymentCountsForMonthlyOutflow', 'paymentCountsForMonthlyOutflowConfirmedOnly',
@@ -205,9 +211,11 @@ function __reload() {
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
   geodeNormalizeSavingsReleases(S);
+  var _geodeInvOpening = _geodeRuntimeStale ? [] : geodeInvestmentLegacyOpeningValues(S);
   if (!_geodeRuntimeStale) {
     if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
     else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();
+    if (geodeSchema2Active(S)) geodeInvestmentAuthorityTransition(S, _geodeInvOpening);
   }
   syncRecurringPayments();
   geodeNormalizeDebtPaymentEvents(S);
@@ -670,16 +678,16 @@ class App {
 // ───────────────────────────── results ─────────────────────────────
 
 const DEFECTS = {
-  D1: 'Recurring goal/investment contributions lose prior months at rollover (syncRecurringPayments resets the row; geodeRecomputeBalancesFromPayments rebuilds from currently-paid rows only).',
+  D1: 'Recurring goal/investment contributions lose prior months at rollover (syncRecurringPayments resets the row; geodeRecomputeBalancesFromPayments rebuilds from currently-paid rows only). Goals repaired by schema-2 goal authority (FA-3); investments repaired in FA-7B (valuation anchor + completions); guarded by the I, FA3B and FA7B checks.',
   D2: 'Quick Setup "Monthly essentials" housing/food/transport are stored as one-off expenses and drop out of later months (geodeQsDone). Repaired in FA-4A; guarded by the QS and FA4A.qs checks.',
   D3: 'Goal/investment edit forms write the displayed total into baseSaved/baseBalance, re-adding paid rows and re-deducting releases (saveGoal, saveInv). Repaired in FA-2; guarded by the E, R2 and FA2 checks.',
   D4: 'Same-month linked save overwrites or merges a different unpaid row for the same goal/investment (geodeSavePayApply upsert, geodeMergeDuplicateLinkedContributionsSameMonth). Repaired in FA-1; guarded by the IDENTITY and FA-1 checks.',
   D5: 'An unpaid voluntary one-off contribution keeps reducing every later month\'s Monthly Left (paymentCountsForMonthlyOutflow overdue rule). Repaired in FA-4A; guarded by the ML.vol and FA4A.lapse checks.',
-  D6: 'Same-session rollover and reload disagree: the persisted g.saved / inv.balance cache stays stale until the next recompute.',
+  D6: 'Same-session rollover and reload disagree: the persisted g.saved / inv.balance cache stays stale until the next recompute. For investments repaired in FA-7B (row resets no longer move the position); guarded by the I.parity and FA7B checks.',
   D7: 'A savings release sized against a balance that rollover later shrinks hides later contributions (release deduction clamps at 0).',
   D8: 'Undoing a recurring completion does not revert the due-date advance, so complete → undo cycles push the next due date into later months (togglePay). Repaired in FA-4B; guarded by the H.date and FA4B.undo checks.',
   D9: 'Editing a recurring template while its current month is completed rewrites the recorded occurrence amount (single mutable row). Repaired in FA-4C; guarded by the F2 and FA4C checks.',
-  D10: 'Entering an investment value adds currently-paid contributions on top of the entered value (saveInv baseBalance + paid rows).',
+  D10: 'Entering an investment value adds currently-paid contributions on top of the entered value (saveInv baseBalance + paid rows). Repaired in FA-7B (the entered value is a valuation anchor); guarded by the I.val, FA2.I.explicit and FA7B checks.',
   D11: 'Annual recurrence lifecycle: completing an annual row moves its due date a year ahead at once and nothing resets it, so the completed occurrence drops out of Monthly Left and Plan, next year\'s row still shows paid, and tapping it undoes instead of completing (togglePay). Repaired in FA-4B; guarded by the FA3A.annual and FA4B.annual checks.'
 };
 
@@ -779,8 +787,10 @@ function harnessFidelity() {
   scenario('Harness fidelity — shims mirror production boot and render', () => {
     const load = PROGRAM.structural.load;
     const order = ['geodeNoteFinancialBoot(d);', 'S._schemaVersion = geodePersistedSchemaVersion(p._schemaVersion);', 'geodeNormalizeContributionEvents(S);', 'geodeNormalizeContributionCarry(S);',
-      'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();', 'geodeNormalizeSavingsReleases(S);', 'if (!_geodeRuntimeStale) {',
-      'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, 'syncRecurringPayments();',
+      'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();', 'geodeNormalizeSavingsReleases(S);',
+      'var _geodeInvOpening = _geodeRuntimeStale ? [] : geodeInvestmentLegacyOpeningValues(S);', 'if (!_geodeRuntimeStale) {',
+      'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE,
+      'if (geodeSchema2Active(S)) geodeInvestmentAuthorityTransition(S, _geodeInvOpening);', 'syncRecurringPayments();',
       'geodeNormalizeDebtPaymentEvents(S);', 'geodeRecomputeBalancesFromPayments();'];
     const at = order.map(c => load.indexOf(c));
     invariant('fidelity.load', 'load() runs the reload-shim sequence in this order', at.every((p, i) => p >= 0 && (i === 0 || p > at[i - 1])), true);
@@ -1038,16 +1048,16 @@ function investments() {
     let s = app.snap('Jun 10 completed');
     invariant('I.jun', 'June completed: ISA', s.inv.iA, 5200);
     app.advance('2026-07-02', mode); s = app.snap('Jul 02 rollover');
-    target('I.jul.rollover', 'July rollover keeps June', s.inv.iA, 5200, by(mode, { reload: 5000 }), 'D1');
+    invariant('I.jul.rollover', 'July rollover keeps June (D1 closed for investments by FA-7B: the June completion, not the reset row, is the cash flow)', s.inv.iA, 5200);
     app.at('2026-07-10'); app.toggle(id); s = app.snap('Jul 10 completed');
-    target('I.jul', 'July completed: ISA', s.inv.iA, 5400, 5200, 'D1');
+    invariant('I.jul', 'July completed: ISA (D1 closed by FA-7B)', s.inv.iA, 5400);
     app.advance('2026-08-02', mode); s = app.snap('Aug 02 rollover');
-    target('I.aug.rollover', 'August rollover keeps June + July', s.inv.iA, 5400, by(mode, { session: 5200, reload: 5000 }), 'D1');
+    invariant('I.aug.rollover', 'August rollover keeps June + July (D1 closed by FA-7B)', s.inv.iA, 5400);
     app.at('2026-08-10'); app.toggle(id); s = app.snap('Aug 10 completed');
-    target('I.aug', 'August completed: ISA', s.inv.iA, 5600, 5200, 'D1');
+    invariant('I.aug', 'August completed: ISA (D1 closed by FA-7B)', s.inv.iA, 5600);
     timelines[mode] = app.timeline;
   }));
-  scenario('INVESTMENT — same-session vs reload', () => parity('I.parity', 'INVESTMENT', timelines, ['Jul 02 rollover', 'Aug 02 rollover'], 'D6'));
+  scenario('INVESTMENT — same-session vs reload', () => parity('I.parity', 'INVESTMENT (D6 closed for investments by FA-7B: row resets no longer move the position, so the cache never goes stale at rollover)', timelines));
 
   scenario('INVESTMENT — value entered as £5,600 on 20 July', () => {
     const app = new App(baseState(), '2026-06-05');
@@ -1057,12 +1067,14 @@ function investments() {
     app.at('2026-07-10'); app.toggle(id);
     app.at('2026-07-20'); app.saveInvestment('iA', 'ISA', 5600);
     let s = app.snap();
-    target('I.val.display', 'Display at valuation equals the entered £5,600', s.inv.iA, 5600, 5800, 'D10');
+    invariant('I.val.display', 'Display at valuation equals the entered £5,600 (D10 closed by FA-7B: June and July are held by the observation)', s.inv.iA, 5600);
     app.advance('2026-08-02', 'reload'); s = app.snap();
-    invariant('I.val.aug.rollover', 'August rollover: £5,600 (today only coincidentally right: lost July row offsets D10)', s.inv.iA, 5600);
+    invariant('I.val.aug.rollover', 'August rollover: £5,600 — the 20 July valuation (FA-7B; before it, only the lost July row offset D10)', s.inv.iA, 5600);
     app.at('2026-08-10'); app.toggle(id); s = app.snap();
-    invariant('I.val.aug', 'August £200 after the valuation: estimated £5,800 (today coincidentally right)', s.inv.iA, 5800);
-    spec('I.val.capital', 'Contributed capital since tracking = £600; estimated value = last entered value + contributions recorded after it', 'no valuation or occurrence record exists');
+    invariant('I.val.aug', 'August £200 after the valuation: estimated £5,800 = valuation + August (FA-7B; before it, only the lost July row offset D10)', s.inv.iA, 5800);
+    const pos = JSON.parse(app.run('JSON.stringify([geodeInvestmentCapitalSinceTracking(S, S.investments[0]), geodeInvestmentPosition(S, S.investments[0])])'));
+    invariant('I.val.capital', 'Contributed capital since tracking = £600 (June + July + August completions); estimated value £5,800 = last entered value £5,600 (manual, 20 July) + £200 recorded after it',
+      [pos[0], pos[1].value, pos[1].anchor.value, pos[1].anchor.source, pos[1].anchor.date, pos[1].flowsSince, pos[1].estimated], [600, 5800, 5600, 'manual', '2026-07-20', 200, true]);
   });
 }
 
@@ -1616,7 +1628,7 @@ function fa4cOccurrenceAmount() {
     invariant('FA4C.invest.occurrence', 'The investment completion stays £100 (no reversal or replacement), row £150 with lastPaidAmount £100, June Monthly Left £2,900; baseBalance untouched (£5,000)',
       [evRows(app), app.pointer(id), amounts(app, id), s.left, app.state().investments[0].baseBalance],
       [[['completion', id, 'investment:iA', '2026-06', 100, 'monthly', 'mark_completed']], event.id, [150, 100], 2900, 5000]);
-    current('FA4C.invest.legacy-balance', 'ISA balance £5,150: investments keep legacy authority (base + paid rows at the row amount), as before FA-4C - the template edit moves it at once (FA-7)', s.inv.iA, 5150);
+    invariant('FA4C.invest.legacy-balance', 'ISA £5,100: since FA-7B the position reads the June completion (£100), not the edited template (£150) — the template edit no longer moves it', s.inv.iA, 5100);
   });
 }
 
@@ -2278,7 +2290,7 @@ function fa2Investments() {
   const isaMonthly = app => completeOn10June(app, { name: 'ISA monthly', amount: 200, rec: 'yes', investId: 'iA' });
   scenario('FA-2 INVESTMENT — base £5,000 + completed one-off £200 (shown £5,200)', () => {
     const never = crossMonth(freshApp(isaOneOff), 'invest', 'iA');
-    invariant('FA2.I.never', 'Never edited: £5,200 throughout', never, steady(5200));
+    invariant('FA2.I.never', 'Never edited: £5,200 throughout (FA-7B: the opening anchor £5,000 + the June completion; before it, the one-off row that never resets)', never, steady(5200));
     let app = freshApp(isaOneOff);
     app.saveInvestment('iA', 'ISA renamed');
     invariant('FA2.I.rename', 'Rename: baseBalance stays £5,000; no investment activity', [invOf(app).baseBalance, investActivity(app)], [5000, []]);
@@ -2297,11 +2309,11 @@ function fa2Investments() {
     invariant('FA2.I.blank', 'Blank Balance on an existing investment is unchanged: saved without a prompt; baseBalance £5,000', [blank, invOf(app).baseBalance, app.snap().inv.iA], [[], 5000, 5200]);
     app = freshApp(isaOneOff);
     app.editInvestment('iA', { xb: '5600' });
-    target('FA2.I.explicit-up', 'Balance entered as £5,600 shows £5,600 (explicit Balance semantics deferred to FA-7)', app.snap().inv.iA, 5600, 5800, 'D10');
+    invariant('FA2.I.explicit-up', 'Balance entered as £5,600 shows £5,600 (D10 closed by FA-7B: the earlier £200 is held by the observation)', app.snap().inv.iA, 5600);
     app = freshApp(isaOneOff);
     app.editInvestment('iA', { xb: '4800' });
-    target('FA2.I.explicit-down', 'Balance entered as £4,800 shows £4,800 (explicit Balance semantics deferred to FA-7)', app.snap().inv.iA, 4800, 5000, 'D10');
-    current('FA2.I.explicit.activity', 'An explicit Balance change still logs its balance_update investment entry (existing behaviour)', investActivity(app), [{ type: 'invest', delta: -200 }]);
+    invariant('FA2.I.explicit-down', 'Balance entered as £4,800 shows £4,800 (D10 closed by FA-7B)', app.snap().inv.iA, 4800);
+    invariant('FA2.I.explicit.activity', 'An explicit Balance change logs its balance_update entry as the observation against the position just before it: £4,800 − £5,200 = −£400 (FA-7B; before it, −£200 against the D10 recompute)', investActivity(app), [{ type: 'invest', delta: -400 }]);
   });
   scenario('FA-2 INVESTMENT — monthly recurring £200 completed in June', () => {
     const never = crossMonth(freshApp(isaMonthly), 'invest', 'iA');
@@ -2309,7 +2321,7 @@ function fa2Investments() {
     app.saveInvestment('iA', 'ISA renamed');
     const edited = crossMonth(app, 'invest', 'iA');
     invariant('FA2.I.recurring-rollover', 'Rename: same timeline as never editing (no FA-2 base change)', edited, never);
-    target('FA2.I.recurring-rollover.d1', 'Rename with a recurring completion: £5,200 should hold through July and August', edited, steady(5200), never, 'D1');
+    invariant('FA2.I.recurring-rollover.d1', 'Rename with a recurring completion: £5,200 holds through July and August (D1 closed by FA-7B; before it, both timelines lost June alike)', edited, steady(5200));
   });
   scenario('FA-2 INVESTMENT — creating an investment', () => {
     const app = freshApp();
@@ -2629,11 +2641,11 @@ function fa3aProtection() {
     app.setPlan(STEPS);
     setup(app);
     const checks = [];
-    /** Monthly Left (all and confirmed), Home overdue count, rows and investment balances — before and after a reload; a variant's integrity report is consumed. */
+    /** Monthly Left (all and confirmed), Home overdue count and rows — before and after a reload; a variant's integrity report is consumed. Investment balances follow the ledger since FA-7B (FA7B checks). */
     const execution = (state, clock, variant) => {
       const a = new App(state, clock, PROGRAM.plan);
       a.setPlan(STEPS);
-      const look = () => { const s = a.snap(); return [s.left, s.leftConfirmed, s.homeOverduePayments, s.rows, s.inv]; };
+      const look = () => { const s = a.snap(); return [s.left, s.leftConfirmed, s.homeOverduePayments, s.rows]; };
       const out = [look(), (a.reload(), look())];
       if (variant) a.warnings.splice(0).filter(w => w.indexOf(INTEGRITY) !== 0).forEach(w => a.warnings.push(w));
       return out;
@@ -2649,7 +2661,7 @@ function fa3aProtection() {
     app.advance('2026-07-02', 'session'); check('July', '2026-07-02');
     app.reload(); check('July reload', '2026-07-02');
     const labels = ['June', 'June render', 'June reload', 'July', 'July reload'];
-    invariant('FA3A.protect.' + key, 'Monthly Left, Home overdue, rows and investment balances identical with the ledger removed or replaced by £5,000 completions (in schema 2 the ledger is goal authority, so goal-derived Plan, Home and Suggested Actions may follow it; investments stay legacy); Monthly Left ' +
+    invariant('FA3A.protect.' + key, 'Monthly Left, Home overdue and rows identical with the ledger removed or replaced by £5,000 completions (in schema 2 the ledger is goal authority and, since FA-7B, investment cash-flow evidence, so goal- and investment-derived figures may follow it); Monthly Left ' +
       left.map(v => '£' + v.toLocaleString('en-GB')).join(' / '), checks, labels.map((l, i) => [l, left[i], true]));
   }));
 
@@ -2906,7 +2918,7 @@ const FA3B_GOALS = [
     '2026-08-10', [], [], 1000, 1000]
 ];
 
-/** Investments stay capture-only: Balance keeps its legacy authority (D10 open). */
+/** Investment completions are captured as for goals; since FA-7B the position is the opening anchor (the legacy figure, M) plus completions after it, so a D1 loss is restored and ambiguous rows stay held by the anchor. */
 const FA3B_INVESTMENTS = [
   ['base-only', 'I0 ISA balance £5,000 only', legacyInvState({}), '2026-08-10', [], [], 5000, 5000],
   ['one-off', 'I1 ISA + paid one-off £500', legacyInvState({ balance: 5500 }, { payments: [legacyInvPay('i1', { amount: 500, date: '2026-06-05' })] }), '2026-08-10',
@@ -2931,12 +2943,12 @@ function fa3bMatrix() {
     scenario('FA-3B MIGRATION — ' + name, () => {
       const r = fa3bMigrate(state, clock, kind, entityId);
       const entity = kind === 'goal' ? 'goal:' + entityId : 'investment:' + entityId;
-      /** Schema 2 shows the event position for a goal whose legacy load lost a dated completion (D1); everything else shows what the legacy load showed. */
-      const restored = kind === 'goal' && /^D1:/.test(why || '');
+      /** Schema 2 shows the event position for a goal or (since FA-7B) an investment whose legacy load lost a dated completion (D1); everything else shows what the legacy load showed. */
+      const restored = /^D1:/.test(why || '');
       const m = restored ? hypothetical : shown;
       invariant(prefix + key, 'Seeds ' + (seeded.length ? seeded.map(s => s[0] + ' ' + s[1] + ' £' + s[2]).join(', ') : 'nothing') +
         '; shown ' + show(shown) + ' by the legacy load and ' + show(m) + ' after the transition and two reloads (stored ' + show(r.stored) + '); every surface ' +
-        (restored ? 'follows the restored goal' : 'identical to the legacy load') + '; rows unchanged except the pointer; idempotent',
+        (restored ? 'follows the restored ' + kind : 'identical to the legacy load') + '; rows unchanged except the pointer; idempotent',
         { seeded: r.seeded, pointers: r.pointers, shown: r.shown, surfaces: r.surfaces, rows: r.rows, idempotent: r.idempotent },
         { seeded: seeded.map(s => [s[0], entity].concat(s.slice(1), ['migration'])), pointers, shown: [shown, m, m, m], surfaces: !restored, rows: true, idempotent: true });
       const text = 'L legacy ' + show(shown) + ' / M after the transition ' + show(r.shown[1]) + ' / E event authority ' + show(r.E);
@@ -2944,7 +2956,8 @@ function fa3bMatrix() {
       const goalWhy = restored ? ' — ' + why + ' (CORRECTNESS RESTORATION: M = E)' : ' — ' + why + '; schema 2 keeps the legacy figure as a carry (E leaves carries out)';
       if (shown === hypothetical) invariant(prefixA + key, text + ' — identical', [r.shown[0], r.shown[1], r.E], [shown, m, hypothetical]);
       else if (kind === 'goal') invariant(prefixA + key, text + goalWhy, [r.shown[0], r.shown[1], r.E], [shown, m, hypothetical]);
-      else current(prefixA + key, text + ' — ' + why, [r.shown[0], r.shown[1], r.E], [shown, shown, hypothetical]);
+      else if (restored) invariant(prefixA + key, text + ' — ' + why + ' (CORRECTNESS RESTORATION, FA-7B: the opening anchor holds the legacy base, the dated completion counts after it, M = E)', [r.shown[0], r.shown[1], r.E], [shown, m, hypothetical]);
+      else invariant(prefixA + key, text + ' — ' + why + '; FA-7B: the opening anchor holds the legacy figure, M = L (E, base + events, would drop the undated £200; ambiguous rows are FA-7C)', [r.shown[0], r.shown[1], r.E], [shown, m, hypothetical]);
     });
   }));
 }
@@ -3316,7 +3329,7 @@ function fa3caTransition() {
     const months = ['2026-09-02', '2026-10-02', '2026-11-02', '2026-12-02', '2027-01-02', '2027-02-02', '2027-03-02', '2027-04-02', '2027-05-02', '2027-06-02', '2027-07-02', '2027-08-02'];
     months.forEach(m => inv.advance(m, 'reload'));
     const im = inv.state().payments.filter(p => p.id === 'im')[0];
-    invariant('FA3CA.inv.deferred', 'Investments keep legacy authority: the transition creates no ISA carry; the ambiguous ISA row stays as evidence through twelve monthly reloads (paid £200, no lastPaidYM, no event, ISA £5,200), so FA-7 can derive the same +£200 carry later',
+    invariant('FA3CA.inv.deferred', 'No investment carry: the transition creates no ISA carry; the ambiguous ISA row stays as evidence through twelve monthly reloads (paid £200, no lastPaidYM, no event, ISA £5,200 — held by its FA-7B opening anchor), so FA-7C can still find the same +£200 candidate',
       [inv.state().contributionCarry.filter(c => c.entityType !== 'goal').length, before, [im.status, im.amount, im.lastPaidYM || '', inv.events().filter(e => e.paymentId === 'im').length],
         candidate(inv), inv.snap().inv.iA],
       [0, [{ paymentId: 'im', entityType: 'investment', entityId: 'iA', kind: 'undated_contribution', amount: 200, recurrence: 'monthly', dueDateSnapshot: '2026-06-05' }, 5200],
@@ -3902,14 +3915,16 @@ function fa3cb2Boundary() {
 
     const ii = b2Ambiguous(null, { investments: [Object.assign(ISA(), { balance: 5200 }), PENSION()] });
     const iiTry = attempt(ii, a => a.editPayment('im', { investId: 'iB' }));
-    invariant('FA3CB2.inv-inv.ambiguous', 'Within investments nothing new is refused: the ambiguous paid ISA row moves to the Pension (legacy ISA £5,000, Pension £3,200, no event; the undated investment evidence now names the Pension) — investment history stays legacy until FA-7',
-      [iiTry[0], [ii.snap().inv.iA, ii.snap().inv.iB], ii.events().length, (b2Candidate(ii, 'im') || {}).entityId], [[], [5000, 3200], 0, 'iB']);
+    invariant('FA3CB2.inv-inv.ambiguous', 'Within investments nothing new is refused: the ambiguous paid ISA row moves to the Pension (no event; the undated investment evidence now names the Pension). Since FA-7B rows are not investment authority: the £200 stays held by the ISA opening anchor (ISA £5,200, Pension £3,000) — re-attributing absorbed ambiguous rows is FA-7C',
+      [iiTry[0], [ii.snap().inv.iA, ii.snap().inv.iB], ii.events().length, (b2Candidate(ii, 'im') || {}).entityId], [[], [5200, 3000], 0, 'iB']);
     const id2 = b2Dated(legacyInvPay('id', { rec: 'yes', status: 'upcoming', date: '2026-08-05' }), { investments: [ISA(), PENSION()] });
     const id2Try = attempt(id2, a => a.editPayment('id', { investId: 'iB' }));
     invariant('FA3CB2.inv-inv.dated', 'A dated ISA completion it represents moves to the Pension as the same occurrence: ISA completion reversed, Pension completion 2026-08; ISA £5,000, Pension £3,200',
       [id2Try[0], b2Events(id2), [id2.snap().inv.iA, id2.snap().inv.iB]], [[], B2_MOVED('investment:iA', 'investment:iB', '2026-08'), [5000, 3200]]);
 
     const oo = b2Ambiguous(legacyInvPay('io', { rec: 'no', date: '2026-06-10' }));
+    /** The relink comes a minute after the load that seeded the completion: the simulated clock is frozen within a step, and an action in the transition's millisecond is indistinguishable from evidence the FA-7B opening anchor holds. */
+    oo.run('__nowMs += 60000;');
     const ooTry = attempt(oo, b2ToGoal('io'));
     const od = b2Ambiguous(legacyInvPay('ix', { rec: 'no', date: '' }));
     const odTry = attempt(od, b2ToGoal('ix'));
@@ -3944,7 +3959,7 @@ function fa3cb2Boundary() {
     const total = a => authority(a).goals.gH.shown + a.snap().inv.iA;
     const gdiTotal = total(gdi);
     const gdiTry = attempt(gdi, b2ToIsa('gd'));
-    invariant('FA3CB2.no-double-count', 'No goal ↔ investment relink counts one £200 under both simulated goal and legacy investment: the reset (unpaid) annual Holiday row moved to the ISA brings nothing (£6,200 before and after); a represented Holiday completion moved to the ISA (Holiday completion reversed, ISA completion 2026-08) keeps £6,200 (simulated Holiday £1,000 + ISA £5,200)',
+    invariant('FA3CB2.no-double-count', 'No goal ↔ investment relink counts one £200 under both simulated goal and investment: the reset (unpaid) annual Holiday row moved to the ISA brings nothing (£6,200 before and after); a represented Holiday completion moved to the ISA (Holiday completion reversed, ISA completion 2026-08) keeps £6,200 (simulated Holiday £1,000 + ISA £5,200)',
       [stgTotal, total(stg), gdiTotal, gdiTry[0], b2Active(gdi), total(gdi)], [6200, 6200, 6200, [], [['investment:iA', '2026-08', 200]], 6200]);
 
     invariant('FA3CB2.schema2-hole', 'After every goal ↔ investment relink above, allowed or refused, legacy Holiday equals simulated Holiday: ambiguous monthly, dated, unpaid then completed, stale ISA, stale Holiday, Holiday → ISA, one-off dated and dateless, annual ambiguous and dated, Smart Import',
@@ -3958,8 +3973,8 @@ function fa3cb2Boundary() {
     const card = { debts: [{ id: 'dC', name: 'Card', balance: 1000, minPayment: 50, apr: 25 }] };
     const bl = b2Ambiguous(null, card), bd = b2Ambiguous(null, card);
     const blTry = attempt(bl, a => a.editPayment('im', { investId: '' })), bdTry = attempt(bd, a => a.editPayment('im', { investId: '', debtId: 'dC' }));
-    invariant('FA3CB2.scope', 'Bill and debt destinations keep their FA-3C-B behaviour (for investment rows an FA-7 decision): the ambiguous paid ISA row can still become a bill or a debt payment (ISA £5,000 each)',
-      [blTry[0], bl.snap().inv.iA, bdTry[0], bd.snap().inv.iA], [[], 5000, [], 5000]);
+    invariant('FA3CB2.scope', 'Bill and debt destinations keep their FA-3C-B behaviour (for investment rows an FA-7C decision): the ambiguous paid ISA row can still become a bill or a debt payment; since FA-7B the row is not investment authority, so the ISA keeps the £200 its opening anchor holds (ISA £5,200 each)',
+      [blTry[0], bl.snap().inv.iA, bdTry[0], bd.snap().inv.iA], [[], 5200, [], 5200]);
 
     const dl = b2Ambiguous(legacyInvPay('iz', { rec: 'yes', date: '2026-06-05', investId: 'iZ' }));
     const dlTry = attempt(dl, b2ToGoal('iz'));
@@ -4307,7 +4322,7 @@ function fa3cb3bTemporal() {
 
     const fi = b3aLoad([legacyInvPay('i1', { date: '2026-12-10' }), legacyInvPay('i2', { rec: 'yes', lastPaidYM: '2027-03', date: '2026-06-05' }), legacyInvPay('i3', { rec: 'yes', lastPaidYM: '2026-13', date: '2026-06-05' })]);
     const cand = id => { const c = b2Candidate(fi, id); return c && [c.entityType + ':' + c.entityId, c.kind, c.amount, c.recurrence]; };
-    invariant('FA3CB3B.fa7.future-preserved', 'ISA rows whose evidence was rejected stay FA-7 evidence: each still gives an undated ISA £200 candidate, no investment carry is created, and legacy ISA keeps £5,600',
+    invariant('FA3CB3B.fa7.future-preserved', 'ISA rows whose evidence was rejected stay FA-7 evidence: each still gives an undated ISA £200 candidate, no investment carry is created, and ISA keeps £5,600 (the legacy figure, held by its FA-7B opening anchor)',
       [['i1', 'i2', 'i3'].map(cand), b3bTransition(fi), fi.snap().inv.iA],
       [[['investment:iA', 'undated_contribution', 200, 'one_off'], ['investment:iA', 'undated_contribution', 200, 'monthly'], ['investment:iA', 'undated_contribution', 200, 'monthly']], [], 5600]);
   });
@@ -4511,9 +4526,10 @@ function fa3ccAuthority() {
       [{ base: 1000, dated: 250, carry: 300, released: 200 }, { base: 500, dated: 0, carry: 40, released: 0 }, [1350, 1350, 1350], [540, 540, 540]]);
 
     const recompute = extractFunction(PROGRAM.src, 'geodeRecomputeBalancesFromPayments').text;
-    invariant('FA3CC.c1.single-writer', 'One schema-2 formula: geodeSchema2GoalEffectiveSaved is gone, and the sole cache writer stores geodeSchema2GoalPosition for goals in schema 2 while investments keep the row rebuild',
+    invariant('FA3CC.c1.single-writer', 'One schema-2 formula: geodeSchema2GoalEffectiveSaved is gone, and the sole cache writer stores geodeSchema2GoalPosition for goals in schema 2 and (FA-7B) the investment display balance — position authority, or the legacy rebuild only where no valid valuation exists — with no row adding to an investment',
       [PROGRAM.src.indexOf('geodeSchema2GoalEffectiveSaved') < 0, recompute.indexOf('g.saved = geodeSchema2GoalPosition(S, g);') >= 0,
-        recompute.indexOf('if (!schema2) eff.goal.saved += eff.amount;') >= 0, recompute.indexOf('else eff.investment.balance += eff.amount;') >= 0], [true, true, true, true]);
+        recompute.indexOf('if (!schema2) eff.goal.saved += eff.amount;') >= 0, recompute.indexOf('inv.balance = geodeInvestmentDisplayBalance(S, inv);') >= 0,
+        recompute.indexOf('eff.investment') < 0], [true, true, true, true, true]);
 
     const agree = () => { const x = authority(app); return ['gH', 'gB'].every(g => saved(g) === x.goals[g].position); };
     const steps = [];
@@ -4529,7 +4545,7 @@ function fa3ccAuthority() {
     const rows = new App(CARRY_MIX, '2026-08-20');
     rows.run('S.payments.forEach(function (p) { if (p.id === "px" || p.id === "p1") p.amount = 5000; }); S.payments.push(' + JSON.stringify(legacyPay('pz', { amount: 999, date: '2026-08-01' })) + '); save();');
     rows.reload();
-    invariant('FA3CC.authority.rows-add-nothing', 'Payment rows prove no history in schema 2: a dated and a carried row raised to £5,000 in storage and an extra paid £999 row with no completion leave Holiday at £1,350 (the unowned row is flagged); investments still rebuild from rows (ISA £5,200)',
+    invariant('FA3CC.authority.rows-add-nothing', 'Payment rows prove no history in schema 2: a dated and a carried row raised to £5,000 in storage and an extra paid £999 row with no completion leave Holiday at £1,350 (the unowned row is flagged); the ISA shows its FA-7B opening anchor (£5,200, the legacy figure), not its rows',
       [rows.snap().goal, rows.snap().inv.iA, flagged(rows)], [{ gH: 1350, gB: 540 }, 5200, true]);
 
     const inv = new App(CARRY_MIX, '2026-08-20');
@@ -4539,8 +4555,8 @@ function fa3ccAuthority() {
     const ghost = [inv.snap().inv.iA, inv.activeEvents().filter(e => e.paymentId === 'ghost').length];
     const isa = inv.contribute({ name: 'ISA top-up', amount: 300, date: '2026-08-20', status: 'paid', investId: 'iA' });
     inv.reload();
-    invariant('FA3CC.authority.investment-legacy', 'Investment Balance keeps the legacy row rebuild: an active £1,000 investment completion with no row adds nothing (ISA £5,200); a native ISA completion records its event but counts once, through its row (ISA £5,500); Holiday unaffected',
-      [ghost, inv.snap().inv.iA, inv.activeEvents().filter(e => e.paymentId === isa).length, inv.snap().goal.gH], [[5200, 1], 5500, 1, 1350]);
+    invariant('FA3CC.authority.investment-ledger', 'Since FA-7B the ledger, not rows, is investment cash-flow evidence (formerly FA3CC.authority.investment-legacy: "an active completion with no row adds nothing"): an active £1,000 ISA completion recorded after the opening anchor counts with no row (ISA £6,200); a native ISA completion counts once, through its event (ISA £6,500); Holiday unaffected',
+      [ghost, inv.snap().inv.iA, inv.activeEvents().filter(e => e.paymentId === isa).length, inv.snap().goal.gH], [[6200, 1], 6500, 1, 1350]);
 
     const del = new App(CARRY_MIX, '2026-08-20');
     del.run(extractFunction(PROGRAM.src, 'geodeShouldCascadeDeleteLinkedPayment').text + '\n' + extractFunction(PROGRAM.src, 'delGoal').text);
@@ -4578,8 +4594,8 @@ function fa3ccLifecycle() {
     const invSeen = [invLook()];
     inv.advance('2026-09-10', 'reload'); invSeen.push(invLook());
     inv.advance('2026-10-10', 'reload'); invSeen.push(invLook());
-    invariant('FA3CC.c3.investment', 'Schema-2 paid ISA monthly rows stamped August with no completion — one native-looking, one relinked from a removed investment (the recorder\'s row-evidence path) — are never dated: not by that edit, not by the safety net, not at rollover; with no completion owning their month both stay completed and keep counting (ISA £5,350), preserved for FA-7',
-      invSeen, [[0, ['paid', 'paid'], 5350], [0, ['paid', 'paid'], 5350], [0, ['paid', 'paid'], 5350]]);
+    invariant('FA3CC.c3.investment', 'Schema-2 paid ISA monthly rows stamped August with no completion — one native-looking, one relinked from a removed investment (the recorder\'s row-evidence path) — are never dated: not by that edit, not by the safety net, not at rollover; with no completion owning their month both stay completed, preserved for FA-7C; since FA-7B a paid row without a completion is no cash flow, so the ISA stays at its opening anchor (£5,000; before FA-7B the rows counted, £5,350)',
+      invSeen, [[0, ['paid', 'paid'], 5000], [0, ['paid', 'paid'], 5000], [0, ['paid', 'paid'], 5000]]);
   });
 
   scenario('FA-3C-C C4b — a carried monthly row resets once its carry\'s month has passed; the carry stays', () => {
@@ -5057,7 +5073,364 @@ function migrationFixtures() {
     invariant('MIG.' + f.id + '.identity', 'Displayed immediately after migration and after two reloads equals ' + show(f.displayBeforeMigration) +
       '; idempotent; only completions the stored rows prove are seeded (' + f.history.split('.')[0] + ')',
       [shown, shownNow(), same(app.events(), events), seededRows(app)], [f.displayBeforeMigration, f.displayBeforeMigration, true, MIG_SEEDED[f.id] || []]);
+    if (f.entity.kind !== 'goal') {
+      const vals = () => app.state().investments.filter(i => i.id === f.entity.id)[0].valuations.map(v => [v.id, v.value, v.source]);
+      const first = vals(); app.reload();
+      invariant('MIG.' + f.id + '.anchor', 'FA-7B: the identity holds through one legacy_transition anchor at the legacy figure (it holds the base and the migrated completion, which is not counted again), not through the row rebuild; reloads add no second anchor',
+        [first, vals(), shownNow()], [[['val_legacy_' + f.entity.id, f.displayBeforeMigration, 'legacy_transition']], [['val_legacy_' + f.entity.id, f.displayBeforeMigration, 'legacy_transition']], f.displayBeforeMigration]);
+    }
   }));
+}
+
+// ───────────────────────────── FA-7B investment position authority ─────────────────────────────
+
+const fa7bInv = (app, id) => app.state().investments.filter(i => i.id === id)[0];
+const fa7bPos = (app, id) => JSON.parse(app.run('JSON.stringify(geodeInvestmentPosition(S, S.investments.filter(function (i) { return i.id === ' + JSON.stringify(id) + '; })[0]))'));
+/** [shown, position value, raw, anchor value, anchor source, flows since, releases since, estimated] — null fields: no valid valuation. */
+const fa7bLook = (app, id) => {
+  id = id || 'iA';
+  const p = fa7bPos(app, id);
+  return [app.snap().inv[id], p && p.value, p && p.rawValue, p && p.anchor.value, p && p.anchor.source, p && p.flowsSince, p && p.releasesSince, p && p.estimated];
+};
+/** Stored valuations as [value, date, source]. */
+const fa7bVals = (app, id) => ((fa7bInv(app, id || 'iA') || {}).valuations || []).map(v => v && typeof v === 'object' ? [v.value, v.date, v.source] : v);
+const fa7bRelease = (app, amount, id) => JSON.parse(app.run('JSON.stringify(geodeApplySavingsRelease(' + JSON.stringify({ sourceType: 'investment', sourceId: id || 'iA', amount, reason: 'emergency' }) + '))'));
+const fa7bRecompute = app => app.run('geodeRecomputeBalancesFromPayments();');
+/** A new investment "Fund" created through the form on 5 June; returns the app and its id. */
+const fa7bFund = balance => {
+  const app = new App(baseState({ investments: [] }), '2026-06-05');
+  app.createInvestment('Fund', balance);
+  return [app, app.state().investments.filter(i => i.name === 'Fund')[0].id];
+};
+const INV_EVENT_RELEASE = { id: 'r_inv', sourceType: 'investment', sourceId: 'iA', amount: 300, reason: 'emergency', date: '2026-07-01', ym: '2026-07', relatedYm: '2026-07',
+  remainingBalance: 5100, createdAt: 1782900000000, confirmedByUser: true, note: '', balanceMutationMode: 'event_derived' };
+const INV_LEGACY_RELEASE = { id: 'r_inv_legacy', sourceType: 'investment', sourceId: 'iA', amount: 100, reason: 'manual', date: '2026-05-20', ym: '2026-05', createdAt: 1779271200000, confirmedByUser: true };
+/** The legacy figure computed here, independently of production: base + paid ISA rows − event-derived releases. */
+const fa7bLegacyFigure = state => {
+  const inv = state.investments[0];
+  let v = Number(inv.baseBalance);
+  state.payments.forEach(p => { if (p.status === 'paid' && p.investId === inv.id) v += Number(p.amount); });
+  (state.savingsReleases || []).forEach(r => { if (r.sourceId === inv.id && r.balanceMutationMode === 'event_derived') v -= Number(r.amount); });
+  return v;
+};
+
+/** [key, description, stored legacy state, clock, L_pre, what the schema-1 legacy load shows after its lifecycle (default L_pre)] */
+const FA7B_TRANSITION = [
+  ['I0', 'no contribution: ISA £5,000', legacyInvState({}), '2026-08-10', 5000],
+  ['I1', 'paid monthly £200 completed this month (lastPaidYM 2026-08)', legacyInvState({ balance: 5200 },
+    { payments: [legacyInvPay('im', { rec: 'yes', lastPaidYM: '2026-08', date: '2026-09-05' })] }), '2026-08-20', 5200],
+  ['I1-prior', 'paid monthly £200 completed in June, Beynd next opened on 2 July', legacyInvState({ balance: 5200 },
+    { payments: [legacyInvPay('im', { rec: 'yes', lastPaidYM: '2026-06', date: '2026-07-05' })] }), '2026-07-02', 5200, 5000],
+  ['I2', 'paid one-off £500', legacyInvState({ balance: 5500 }, { payments: [legacyInvPay('i1', { amount: 500, date: '2026-06-05' })] }), '2026-08-10', 5500],
+  ['I3', 'multiple paid: one-off £500 (June), one-off £300 (July), monthly £200 (this month)', legacyInvState({ balance: 6000 }, { payments: [
+    legacyInvPay('i1', { amount: 500, date: '2026-06-05' }), legacyInvPay('i2', { amount: 300, date: '2026-07-20' }),
+    legacyInvPay('im', { rec: 'yes', lastPaidYM: '2026-08', date: '2026-09-05' })] }), '2026-08-20', 6000],
+  ['I4', 'releases: base £4,900 (a legacy base-delta release £100 already inside it) + paid one-off £500 − event-derived release £300',
+    legacyInvState({ balance: 5100, baseBalance: 4900 }, { payments: [legacyInvPay('i1', { amount: 500, date: '2026-06-05' })], savingsReleases: [INV_EVENT_RELEASE, INV_LEGACY_RELEASE] }),
+    '2026-08-10', 5100],
+  ['I5', 'ambiguous paid monthly £200 (no lastPaidYM)', legacyInvState({ balance: 5200 }, { payments: [legacyInvPay('im', { rec: 'yes', date: '2026-06-05' })] }), '2026-08-10', 5200],
+  ['I6', 'D10 residue: value entered as £5,600 under the old model while a paid one-off £200 remained (shown £5,800)',
+    legacyInvState({ balance: 5800, baseBalance: 5600 }, { payments: [legacyInvPay('i1', { date: '2026-06-05' })] }), '2026-08-10', 5800],
+  ['I7', 'value already lost: monthly £200 reset by an earlier rollover (no row proves June any more)',
+    legacyInvState({}, { payments: [legacyInvPay('im', { rec: 'yes', status: 'upcoming', date: '2026-08-05' })] }), '2026-08-03', 5000]
+];
+
+function fa7bTransition() {
+  FA7B_TRANSITION.forEach(([key, name, state, clock, lpre, legacyShown]) => scenario('FA-7B TRANSITION — ' + key + ' ' + name, () => {
+    const legacy = legacyLoad(state, clock).snap().inv.iA;
+    const app = new App(state, clock);
+    const look = () => [fa7bLook(app), fa7bVals(app)];
+    const first = look();
+    app.reload(); const r1 = look();
+    app.reload(); const r2 = look();
+    const opened = [[lpre, lpre, lpre, lpre, 'legacy_transition', 0, 0, false], [[lpre, clock, 'legacy_transition']]];
+    invariant('FA7B.transition.' + key, 'Migrated initial position = L_pre ' + show(lpre) + ' (computed independently as base + paid rows − event-derived releases' +
+      (legacyShown !== undefined ? '; the schema-1 load would show ' + show(legacyShown) + ' after resetting the row — D1, restored' : '') +
+      '): one legacy_transition anchor at L_pre dated the transition day, nothing estimated; reload → same position, one anchor; reload → same',
+      [fa7bLegacyFigure(state), legacy, first, r1, r2], [lpre, legacyShown !== undefined ? legacyShown : lpre, opened, opened, opened]);
+  }));
+}
+
+function fa7bSafety() {
+  scenario('FA-7B TRANSITION SAFETY — malformed valuations never become authority', () => {
+    const V = o => Object.assign({ id: 'v1', value: 5600, date: '2026-06-20', recordedAt: 1, source: 'manual' }, o);
+    const cases = [['not an array', 'x'], ['empty array', []], ['null entry', [null]], ['array entry', [[5600]]], ['string value', [V({ value: '5600' })]],
+      ['null value', [V({ value: null })]], ['impossible date', [V({ date: '2026-02-30' })]], ['month 13', [V({ date: '2026-13-01' })]], ['date with time', [V({ date: '2026-06-20T10:00' })]],
+      ['string recordedAt', [V({ recordedAt: '1' })]], ['unknown source', [V({ source: 'provider' })]], ['missing source', [V({ source: undefined })]], ['empty id', [V({ id: '' })]]];
+    const app = freshApp();
+    app.ctx.__argsJson = JSON.stringify(cases.map(c => c[1]));
+    const verdicts = JSON.parse(app.run('JSON.stringify(JSON.parse(__argsJson).map(function (v) { var inv = { id: "iA", baseBalance: 5000, valuations: v };' +
+      ' return [geodeInvestmentLatestValuation(inv), geodeInvestmentPosition(S, inv), geodeInvestmentDisplayBalance(S, inv)]; }))'));
+    const control = JSON.parse(app.run('JSON.stringify(geodeInvestmentPosition(S, { id: "iA", valuations: [' + JSON.stringify(V()) + '] }).value)'));
+    invariant('FA7B.safety.malformed', 'No valid anchor, no authority: ' + cases.map(c => c[0]).join(', ') + ' — each leaves the latest valuation and position null and the display on the legacy figure (£5,000); a valid entry anchors (£5,600)',
+      [verdicts, control], [cases.map(() => [null, null, 5000]), 5600]);
+
+    const kept = new App(legacyInvState({ balance: 5500, valuations: [V({ source: 'provider' }), V({ id: 'v2', date: '2026-13-01' })] },
+      { payments: [legacyInvPay('i1', { amount: 500, date: '2026-06-05' })] }), '2026-08-10');
+    const junk = new App(legacyInvState({ balance: 5500, valuations: 'x' }, { payments: [legacyInvPay('i1', { amount: 500, date: '2026-06-05' })] }), '2026-08-10');
+    invariant('FA7B.safety.malformed-load', 'A present but invalid valuations property does not stop or replace the transition: invalid entries are kept untouched and one legacy_transition anchor at the legacy £5,500 is added; a non-array value gives way to the anchor',
+      [fa7bVals(kept), kept.snap().inv.iA, fa7bVals(junk), junk.snap().inv.iA],
+      [[[5600, '2026-06-20', 'provider'], [5600, '2026-13-01', 'manual'], [5500, '2026-08-10', 'legacy_transition']], 5500, [[5500, '2026-08-10', 'legacy_transition']], 5500]);
+  });
+
+  scenario('FA-7B TRANSITION SAFETY — idempotent, deterministic, all-or-safe, reload-safe', () => {
+    const state = FA7B_TRANSITION.filter(f => f[0] === 'I2')[0][2];
+    const app = new App(state, '2026-08-10');
+    const anchor = () => fa7bInv(app, 'iA').valuations;
+    const once = anchor();
+    const again = app.run('JSON.stringify([geodeInvestmentLegacyOpeningValues(S), geodeInvestmentAuthorityTransition(S, geodeInvestmentLegacyOpeningValues(S)), geodeInvestmentAuthorityTransition(S, [9999])])');
+    app.reload(); app.reload();
+    invariant('FA7B.safety.idempotent', 'Once anchored, an investment offers no opening value, and running the transition again (even with a forged opening value) adds no second anchor; two reloads keep the same single anchor (id val_legacy_iA) and £5,500',
+      [JSON.parse(again), same(anchor(), once), once.map(v => v.id), app.snap().inv.iA], [[[], true, true], true, ['val_legacy_iA'], 5500]);
+
+    const later = new App(state, '2026-09-14');
+    const latestEvidence = a => Math.max.apply(null, a.events().map(e => e.recordedAt));
+    invariant('FA7B.safety.deterministic', 'The same stored data transitioned on another day opens at the same value with the same anchor id; each anchor\'s recordedAt is the latest evidence it holds (the completion that load\'s migration seeded), so it holds exactly that evidence',
+      [fa7bInv(later, 'iA').valuations.map(v => [v.id, v.value, v.source, v.recordedAt === latestEvidence(later)]), later.snap().inv.iA, once[0].recordedAt === latestEvidence(app)],
+      [once.map(v => [v.id, v.value, v.source, true]), 5500, true]);
+
+    const aborted = new App(state, '2026-08-10', undefined, { boot: false });
+    aborted.run('var __realPosition = geodeInvestmentPosition; geodeInvestmentPosition = function (s, inv) { var p = __realPosition(s, inv); if (p) p.rawValue += 1; return p; };');
+    aborted.run('__reload()');
+    const abortWarnings = aborted.warnings.filter(w => w.indexOf('investment valuation transition not completed') >= 0);
+    aborted.warnings.splice(0).filter(w => abortWarnings.indexOf(w) < 0).forEach(w => aborted.warnings.push(w));
+    const abortedLook = [abortWarnings.length,
+      Object.prototype.hasOwnProperty.call(fa7bInv(aborted, 'iA'), 'valuations'), aborted.snap().inv.iA, aborted.state()._schemaVersion];
+    aborted.run('geodeInvestmentPosition = __realPosition;');
+    aborted.reload();
+    invariant('FA7B.safety.all-or-safe', 'A transition whose position would not equal the legacy figure is undone completely (warning; no valuations property; legacy authority £5,500 on schema 2); the next load anchors it at £5,500',
+      [abortedLook, fa7bVals(aborted), aborted.snap().inv.iA], [[1, false, 5500, 2], [[5500, '2026-08-10', 'legacy_transition']], 5500]);
+
+    const d1 = FA7B_TRANSITION.filter(f => f[0] === 'I1-prior')[0][2];
+    const opened = new App(d1, '2026-07-02', undefined, { boot: false });
+    opened.run('var __commits = [], __setItemRaw = localStorage.setItem; localStorage.setItem = function (k, v) { if (k === KEY) __commits.push(String(v)); return __setItemRaw.call(localStorage, k, v); };');
+    opened.run('__reload()');
+    const commits = JSON.parse(opened.run('JSON.stringify(__commits)')).map(c => JSON.parse(c));
+    const commit = [commits.length, commits[0]._schemaVersion, commits[0].investments[0].valuations === undefined, commits[0].payments[0].status,
+      opened.state().payments[0].status, opened.snap().inv.iA, stored(opened).investments[0].valuations.length, stored(opened).payments[0].status];
+    const reopened = new App(d1, '2026-07-03', undefined, { boot: false });
+    reopened.run('__store = ' + JSON.stringify(JSON.stringify(commits[0])) + '; __reload()');
+    opened.reload(); opened.advance('2026-08-02', 'reload');
+    invariant('FA7B.safety.write-model', 'D1 fixture: the transitioning load commits schema 2 once through storage before the lifecycle runs (rows as stored — June paid — and no anchor), then memory holds the anchor and the reset row (£5,200) and the whole-state save stores them together. Browser closed right after the commit: reopening from it the next day opens at the same £5,200 with one anchor. Later reloads and the August rollover add no second anchor',
+      [commit, reopened.snap().inv.iA, fa7bVals(reopened).length, fa7bVals(opened).length, opened.snap().inv.iA],
+      [[1, 2, true, 'paid', 'upcoming', 5200, 1, 'upcoming'], 5200, 1, 1, 5200]);
+  });
+}
+
+function fa7bJourneys() {
+  scenario('FA-7B J1 — create £5,000, no contributions, next month', () => {
+    const [app, id] = fa7bFund(5000);
+    const first = fa7bLook(app, id);
+    app.advance('2026-07-02', 'session'); const session = fa7bLook(app, id);
+    app.reload(); const reload = fa7bLook(app, id);
+    const at = [5000, 5000, 5000, 5000, 'manual_create', 0, 0, false];
+    invariant('FA7B.J1', 'A new investment opens on a manual_create valuation of £5,000 (also mirrored to baseBalance and balance); July rollover and reload: £5,000, nothing estimated',
+      [first, fa7bVals(app, id), [fa7bInv(app, id).baseBalance, fa7bInv(app, id).balance], session, reload], [at, [[5000, '2026-06-05', 'manual_create']], [5000, 5000], at, at]);
+  });
+
+  MODES.forEach(mode => scenario('FA-7B J2/J3/J4/J8 — create £5,000, contribute £200, observe £5,600, contribute £200, undo [' + mode + ']', () => {
+    const [app, id] = fa7bFund(5000);
+    completeOn10June(app, { name: 'Fund monthly', amount: 200, rec: 'yes', investId: id });
+    const june = fa7bLook(app, id);
+    app.advance('2026-07-02', mode); const july = fa7bLook(app, id);
+    app.reload(); const julyReload = fa7bLook(app, id);
+    app.advance('2026-08-02', mode); const august = fa7bLook(app, id);
+    const est = [5200, 5200, 5200, 5000, 'manual_create', 200, 0, true];
+    invariant('FA7B.J2', 'J2: £5,000 + the June £200 completion = estimated £5,200, through the July rollover, a reload and the August rollover (the reset row is not the cash flow; the completion is)',
+      [june, july, julyReload, august], [est, est, est, est]);
+
+    const [app3, id3] = fa7bFund(5000);
+    const pm3 = completeOn10June(app3, { name: 'Fund monthly', amount: 200, rec: 'yes', investId: id3 });
+    app3.at('2026-06-20');
+    app3.saveInvestment(id3, 'Fund', 5600);
+    const observed = fa7bLook(app3, id3);
+    const activity = investActivity(app3);
+    app3.advance('2026-07-02', mode); const j3July = fa7bLook(app3, id3);
+    const obs = [5600, 5600, 5600, 5600, 'manual', 0, 0, false];
+    invariant('FA7B.J3', 'J3: the £5,600 entered on 20 June shows £5,600 — it holds June\'s £200; one manual valuation; activity logs the change against the position just before it (+£400, after the existing +£5,000 creation entry); July rollover £5,600',
+      [observed, fa7bVals(app3, id3), activity, [fa7bInv(app3, id3).baseBalance, fa7bInv(app3, id3).balance], j3July],
+      [obs, [[5000, '2026-06-05', 'manual_create'], [5600, '2026-06-20', 'manual']], [{ type: 'invest', delta: 5000 }, { type: 'invest', delta: 400 }], [5600, 5600], obs]);
+
+    app3.at('2026-07-10'); app3.toggle(pm3);
+    const j4 = fa7bLook(app3, id3);
+    app3.reload(); const j4Reload = fa7bLook(app3, id3);
+    const plus = [5800, 5800, 5800, 5600, 'manual', 200, 0, true];
+    invariant('FA7B.J4', 'J4: £200 completed on 10 July after the observation: estimated £5,800 = £5,600 + £200, also after reload', [j4, j4Reload], [plus, plus]);
+
+    app3.at('2026-07-12'); app3.toggle(pm3);
+    const j8 = fa7bLook(app3, id3);
+    app3.reload(); const j8Reload = fa7bLook(app3, id3);
+    invariant('FA7B.J8', 'J8: undoing the July contribution after the observation reverses it: £5,800 → £5,600 (the observation again, nothing estimated), also after reload', [j8, j8Reload], [obs, obs]);
+  }));
+
+  scenario('FA-7B J5 — enter £5,600, market falls, later enter £5,450', () => {
+    const [app, id] = fa7bFund(5600);
+    app.at('2026-07-15');
+    app.saveInvestment(id, 'Fund', 5450);
+    const look = fa7bLook(app, id);
+    app.reload();
+    const at = [5450, 5450, 5450, 5450, 'manual', 0, 0, false];
+    invariant('FA7B.J5', 'J5: the later observation £5,450 shows £5,450 — no contribution or withdrawal is invented for the fall; activity −£150 against the position before it (after the +£5,600 creation entry); reload £5,450',
+      [look, fa7bVals(app, id), investActivity(app), fa7bLook(app, id), app.events().length, app.state().savingsReleases.length],
+      [at, [[5600, '2026-06-05', 'manual_create'], [5450, '2026-07-15', 'manual']], [{ type: 'invest', delta: 5600 }, { type: 'invest', delta: -150 }], at, 0, 0]);
+  });
+
+  MODES.forEach(mode => scenario('FA-7B J6 — FA-4 canonical: anchor £5,000, June £100, template £150, July rollover, July £150 [' + mode + ']', () => {
+    const app = freshApp();
+    const id = completeOn10June(app, { name: 'ISA monthly', amount: 100, rec: 'yes', investId: 'iA' });
+    const seq = [app.snap().inv.iA];
+    app.editPayment(id, { amount: 150 }); seq.push(app.snap().inv.iA);
+    app.advance('2026-07-02', mode); seq.push(app.snap().inv.iA);
+    app.at('2026-07-10'); app.toggle(id); seq.push(app.snap().inv.iA);
+    app.reload(); seq.push(app.snap().inv.iA);
+    invariant('FA7B.J6', 'J6: opening anchor £5,000 → June £100 completed £5,100 → template edited to £150: £5,100 (the June completion keeps £100) → July rollover £5,100 → July £150 completed £5,250 → reload £5,250',
+      [seq, fa7bVals(app)], [[5100, 5100, 5100, 5250, 5250], [[5000, '2026-06-05', 'legacy_transition']]]);
+  }));
+
+  scenario('FA-7B J9 — a contribution before a newer observation is undone or edited', () => {
+    const [app, id] = fa7bFund(5000);
+    const pm = completeOn10June(app, { name: 'Fund monthly', amount: 200, rec: 'yes', investId: id });
+    app.at('2026-06-12');
+    const po = app.contribute({ name: 'Fund top-up', amount: 300, date: '2026-06-12', status: 'paid', rec: 'no', investId: id });
+    const before = app.snap().inv[id];
+    app.at('2026-06-20'); app.saveInvestment(id, 'Fund', 5600);
+    const obs = [5600, 5600, 5600, 5600, 'manual', 0, 0, false];
+    app.at('2026-06-25'); app.toggle(pm); const undone = fa7bLook(app, id);
+    app.editPayment(po, { amount: 400 }); const edited = fa7bLook(app, id);
+    app.reload(); const reload = fa7bLook(app, id);
+    app.del(po); const deleted = fa7bLook(app, id);
+    invariant('FA7B.J9', 'J9: £5,500 (£5,000 + £200 + £300), observed £5,600 on 20 June; then undoing June\'s £200, editing the 12 June £300 to £400 (its replacement keeps 12 June), reloading and deleting it all leave the observation £5,600',
+      [before, undone, edited, reload, deleted, app.events().filter(e => e.eventType === 'reversal').length], [5500, obs, obs, obs, obs, 3]);
+  });
+}
+
+function fa7bEvidence() {
+  scenario('FA-7B EFFECTIVE DATE — early, late, same day, Smart Import', () => {
+    const early = freshApp(a => a.contribute({ name: 'ISA July', amount: 200, date: '2026-07-01', status: 'upcoming', rec: 'yes', investId: 'iA' }));
+    early.at('2026-06-28'); early.toggle(early.state().payments[0].id);
+    const eff = early.run('geodeContributionEffectiveDate(geodeContributionActiveCompletions(S)[0])');
+    const beforeObs = early.snap().inv.iA;
+    early.at('2026-06-30'); early.saveInvestment('iA', 'ISA', 5250);
+    const atObs = early.snap().inv.iA;
+    early.advance('2026-07-02', 'reload');
+    invariant('FA7B.effective.early', 'Scheduled 1 July, marked paid 28 June: effective 28 June (the day marked), so the £5,250 observed on 30 June holds it — £5,250, not £5,450, also after the July rollover and reload',
+      [eff, beforeObs, atObs, early.snap().inv.iA], ['2026-06-28', 5200, 5250, 5250]);
+
+    const late = freshApp(a => {
+      a.contribute({ name: 'ISA 10th', amount: 200, date: '2026-06-10', status: 'upcoming', rec: 'no', investId: 'iA' });
+      a.contribute({ name: 'ISA 22nd', amount: 100, date: '2026-06-22', status: 'upcoming', rec: 'no', investId: 'iA' });
+    });
+    late.at('2026-06-20'); late.saveInvestment('iA', 'ISA', 5100);
+    late.at('2026-06-25');
+    late.state().payments.forEach(p => late.toggle(p.id));
+    const dates = JSON.parse(late.run('JSON.stringify(geodeContributionActiveCompletions(S).map(geodeContributionEffectiveDate))'));
+    invariant('FA7B.effective.late', 'Marked paid on 25 June after a 20 June observation: due 10 June → effective 10 June, held by the observation; due 22 June → effective 22 June, after it: £5,100 + £100 = £5,200',
+      [dates, late.snap().inv.iA], [['2026-06-10', '2026-06-22'], 5200]);
+
+    const day = freshApp();
+    clockAt(day, '2026-06-20', 9, 0);
+    day.contribute({ name: 'Morning', amount: 100, date: '2026-06-20', status: 'paid', rec: 'no', investId: 'iA' });
+    clockAt(day, '2026-06-20', 12, 0); day.saveInvestment('iA', 'ISA', 5150);
+    const noon = fa7bLook(day);
+    clockAt(day, '2026-06-20', 15, 0);
+    day.contribute({ name: 'Afternoon', amount: 50, date: '2026-06-20', status: 'paid', rec: 'no', investId: 'iA' });
+    const afternoon = fa7bLook(day);
+    day.saveInvestment('iA', 'ISA', 5300);
+    const sameMs = fa7bLook(day);
+    invariant('FA7B.effective.same-day', 'Same day, ordered by recordedAt: £100 at 09:00 is held by the 12:00 observation £5,150; £50 at 15:00 follows it (£5,200 estimated); an observation saved in the same millisecond as that £50 still holds it (£5,300)',
+      [noon, afternoon, sameMs], [[5150, 5150, 5150, 5150, 'manual', 0, 0, false], [5200, 5200, 5200, 5150, 'manual', 50, 0, true], [5300, 5300, 5300, 5300, 'manual', 0, 0, false]]);
+
+    const si = freshApp();
+    si.at('2026-06-20'); si.saveInvestment('iA', 'ISA', 5600);
+    si.at('2026-06-25');
+    si.smartImport([{ name: 'ISA early June', amount: 200, date: '2026-06-05', link: 'invest:iA' }, { name: 'ISA 22 June', amount: 150, date: '2026-06-22', link: 'invest:iA' }]);
+    const imported = si.activeEvents().map(e => [e.amount, e.source, e.dueDateSnapshot]);
+    const noRecompute = si.snap().inv.iA;
+    fa7bRecompute(si);
+    const recomputed = si.snap().inv.iA;
+    si.reload();
+    invariant('FA7B.effective.smart-import', 'Back-dated import: on 25 June Smart Import records a 5 June £200 and a 22 June £150 transaction. A recompute (Smart Import itself does not recompute: FA-7C) gives £5,750 — the 5 June £200 is held by the 20 June observation, the 22 June £150 follows it; reload agrees',
+      [imported, noRecompute, recomputed, si.snap().inv.iA], [[[200, 'smart_import', '2026-06-05'], [150, 'smart_import', '2026-06-22']], 5600, 5750, 5750]);
+
+    const merge = freshApp(a => a.contribute({ name: 'ISA monthly', amount: 200, date: '2026-06-10', status: 'upcoming', rec: 'yes', investId: 'iA' }));
+    const row = merge.state().payments[0].id;
+    merge.at('2026-06-20'); merge.saveInvestment('iA', 'ISA', 5100);
+    merge.at('2026-06-25');
+    merge.smartImport([{ name: 'ISA monthly', amount: 200, date: '2026-06-23', link: 'invest:iA', mergeId: row }]);
+    fa7bRecompute(merge);
+    invariant('FA7B.effective.smart-import-merge', 'A Smart Import merge into the ISA row due 10 June keeps the transaction date (23 June), not the row\'s due date: it follows the 20 June observation, £5,100 + £200 = £5,300',
+      [merge.activeEvents().map(e => [e.amount, e.source, e.dueDateSnapshot]), merge.snap().inv.iA], [[[200, 'smart_import', '2026-06-23']], 5300]);
+  });
+
+  scenario('FA-7B RELEASES — ordered against the anchor; eligibility and capping unchanged', () => {
+    const app = freshApp();
+    app.at('2026-06-10'); const r1 = fa7bRelease(app, 300); const afterFirst = fa7bLook(app);
+    app.at('2026-06-15'); app.saveInvestment('iA', 'ISA', 5000); const observed = fa7bLook(app);
+    app.at('2026-06-20'); fa7bRelease(app, 200); const afterSecond = fa7bLook(app);
+    app.reload(); const reload = fa7bLook(app);
+    const capital = JSON.parse(app.run('geodeInvestmentCapitalSinceTracking(S, S.investments[0])'));
+    invariant('FA7B.release.order', 'Opening anchor £5,000; release £300 on 10 June → £4,700; observed £5,000 on 15 June → £5,000 (the release is held by the observation); release £200 on 20 June → £4,800, also after reload; capital since tracking −£500 (releases, no completions)',
+      [[r1.ok, afterFirst], observed, afterSecond, reload, capital],
+      [[true, [4700, 4700, 4700, 5000, 'legacy_transition', 0, 300, true]], [5000, 5000, 5000, 5000, 'manual', 0, 0, false], [4800, 4800, 4800, 5000, 'manual', 0, 200, true], [4800, 4800, 4800, 5000, 'manual', 0, 200, true], -500]);
+    app.at('2026-06-25');
+    const big = fa7bRelease(app, 99999);
+    invariant('FA7B.release.cap', 'A release is still capped at the available balance (the position): £99,999 asked, £4,800 released, ISA £0',
+      [big.ok, app.state().savingsReleases.slice(-1)[0].amount, app.snap().inv.iA], [true, 4800, 0]);
+    const pension = new App(baseState({ investments: [ISA(), PENSION()] }), '2026-06-05');
+    invariant('FA7B.release.eligibility', 'Eligibility unchanged: a pension is locked capital, nothing released; its opening anchor £3,000 stands',
+      [fa7bRelease(pension, 100, 'iB').ok, pension.snap().inv.iB, pension.state().savingsReleases.length], [false, 3000, 0]);
+  });
+
+  scenario('FA-7B EVIDENCE — reversal, deleted template, negative raw position', () => {
+    const del = freshApp();
+    completeOn10June(del, { name: 'ISA monthly', amount: 200, rec: 'yes', investId: 'iA' });
+    del.advance('2026-07-02', 'reload');
+    del.at('2026-07-05'); del.del(del.state().payments[0].id);
+    const deletedLater = del.snap().inv.iA; del.reload();
+    const paidDel = freshApp();
+    const one = completeOn10June(paidDel, { name: 'ISA top-up', amount: 200, rec: 'no', investId: 'iA' });
+    paidDel.at('2026-06-15'); paidDel.del(one);
+    invariant('FA7B.evidence.deleted-template', 'Deleting the recurring template in July (row reset, June completed) leaves the surviving June completion: £5,200, also after reload; deleting a paid one-off it still represents reverses it: £5,000',
+      [deletedLater, del.snap().inv.iA, del.events().length, paidDel.snap().inv.iA], [5200, 5200, 1, 5000]);
+
+    const neg = new App(legacyInvState({ balance: 200, baseBalance: 0 }, { payments: [legacyInvPay('i1', { date: '2026-06-05' })] }), '2026-06-20');
+    const opened = neg.snap().inv.iA;
+    neg.at('2026-06-21'); fa7bRelease(neg, 150);
+    neg.at('2026-06-22'); neg.toggle('i1');
+    const look = fa7bLook(neg);
+    neg.reload();
+    invariant('FA7B.evidence.negative-raw', 'Opening anchor £200 holds the migrated £200 one-off; release £150 → £50; undoing that one-off reverses evidence the anchor held: raw −£150, shown £0 (only the display is clamped), also after reload',
+      [opened, look, fa7bLook(neg)], [200, [0, 0, -150, 200, 'legacy_transition', -200, 150, true], [0, 0, -150, 200, 'legacy_transition', -200, 150, true]]);
+  });
+
+  scenario('FA-7B SAVES — unchanged, metadata-only, future-dated, compatibility fields', () => {
+    const [app, id] = fa7bFund(5000);
+    completeOn10June(app, { name: 'Fund monthly', amount: 200, rec: 'yes', investId: id });
+    app.at('2026-06-20');
+    app.saveInvestment(id, 'Fund');
+    const unchanged = [fa7bVals(app, id).length, fa7bLook(app, id), investActivity(app).length];
+    app.editInvestment(id, { xn: 'Fund renamed', xr: '4', xp: 'Broker', xo: 'note' });
+    const meta = [fa7bVals(app, id).length, fa7bLook(app, id), investActivity(app).length, fa7bInv(app, id).name];
+    const est = [5200, 5200, 5200, 5000, 'manual_create', 200, 0, true];
+    invariant('FA7B.save.unchanged', 'Saving the form with the shown £5,200 unchanged, then a name/returns/platform/notes edit: no valuation appended, no activity beyond the creation entry, the position stays estimated £5,200',
+      [unchanged, meta], [[1, est, 1], [1, est, 1, 'Fund renamed']]);
+
+    const fut = freshApp();
+    fut.run('S.investments[0].valuations.push({ id: "v_future", value: 6000, date: "2026-07-01", recordedAt: 1, source: "manual" }); geodeRecomputeBalancesFromPayments(); save();');
+    const before = fut.state();
+    const toastsShown = fut.editInvestment('iA', { xb: '6100' });
+    invariant('FA7B.save.future', 'A device date earlier than the latest valuation (1 July, today 5 June): saving a new value is refused with a message and nothing changes; no valuation is ever dated in the future',
+      [toastsShown, same(fut.state(), before), fut.snap().inv.iA],
+      [['This value can\u2019t be saved yet: your device date is earlier than the last value you entered. Check the date and try again.'], true, 6000]);
+
+    const compat = freshApp(), twin = freshApp();
+    compat.at('2026-06-20'); compat.saveInvestment('iA', 'ISA', 5600);
+    twin.at('2026-06-20'); twin.saveInvestment('iA', 'ISA');
+    const s = stored(compat).investments[0];
+    invariant('FA7B.save.compat', 'Old-runtime fields stay meaningful: the observation is mirrored to baseBalance and balance (£5,600), valuations hold the opening anchor and the observation; the stored investment has the same fields as after a save that changes no value',
+      [s.baseBalance, s.balance, s.valuations.map(v => [v.value, v.source]), Object.keys(s).sort()],
+      [5600, 5600, [[5000, 'legacy_transition'], [5600, 'manual']], Object.keys(stored(twin).investments[0]).sort()]);
+  });
 }
 
 // ───────────────────────────── run ─────────────────────────────
@@ -5079,6 +5452,7 @@ function main() {
   fa3caNormalise(); fa3caMatrix(); fa3caTransition(); fa3caResolutions(); fa3caLinkedAndCorrection(); fa3caLifecycle();
   fa3cbActions(); fa3cbValidation(); fa3cbTimelines(); fa3cbIntegration(); fa3cb2Boundary(); fa3cb3aForm(); fa3cb3bTemporal();
   fa3ccTransition(); fa3ccCrash(); fa3ccAuthority(); fa3ccLifecycle(); fa3ccRefusal(); fa3ccPositions();
+  fa7bTransition(); fa7bSafety(); fa7bJourneys(); fa7bEvidence();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
   migrationFixtures();
 
