@@ -4806,6 +4806,15 @@ function geodePaymentIsLapsedVoluntaryOneOff(p) {
 }
 
 /**
+ * FA-4B: whether a paid monthly or annual row records its completion in month ym (lastPaidYM). Completing either
+ * advances its due date to the next occurrence, so the date no longer names the month the money moved.
+ */
+function geodePaymentPaidOccurrenceInMonth(p, ym) {
+  if (!p || p.status !== 'paid' || (p.rec !== 'yes' && p.rec !== 'annual')) return false;
+  return !!p.lastPaidYM && String(p.lastPaidYM) === ym;
+}
+
+/**
  * FLOW: scheduled payments that affect “left this month”.
  * — Recurring (repeat monthly): counts as this month’s outflow until marked paid; once paid, counts if paid this month.
  * — One-time: counts if due this calendar month (or overdue / no date, same as before).
@@ -4817,9 +4826,10 @@ function paymentCountsForMonthlyOutflow(p) {
   if (geodePaymentEffectiveStatus(p) === 'overdue') return true;
   if (p.status === 'overdue') return true;
   if (p.rec === 'yes') {
-    if (p.status === 'paid') return p.lastPaidYM === currentYM();
+    if (p.status === 'paid') return geodePaymentPaidOccurrenceInMonth(p, currentYM());
     return true;
   }
+  if (geodePaymentPaidOccurrenceInMonth(p, currentYM())) return true;
   if (!p.date) return true;
   try {
     var d = new Date(p.date + 'T12:00:00');
@@ -5156,9 +5166,10 @@ function paymentCountsForMonthlyOutflowDisplay(p) {
   var st = geodePaymentEffectiveStatus(p);
   if (st === 'overdue') return true;
   if (p.rec === 'yes') {
-    if (p.status === 'paid') return p.lastPaidYM === currentYM();
+    if (p.status === 'paid') return geodePaymentPaidOccurrenceInMonth(p, currentYM());
     return true;
   }
+  if (geodePaymentPaidOccurrenceInMonth(p, currentYM())) return true;
   if (!p.date) return true;
   try {
     var d = new Date(String(p.date).slice(0, 10) + 'T12:00:00');
@@ -5288,7 +5299,8 @@ function sumPaymentsMonthlyOutflow(payments) {
 function paymentCountsForMonthlyOutflowConfirmedOnly(p) {
   if (!p) return false;
   if (String(p.status || '') !== 'paid') return false;
-  if (p.rec === 'yes') return p.lastPaidYM === currentYM();
+  if (p.rec === 'yes') return geodePaymentPaidOccurrenceInMonth(p, currentYM());
+  if (geodePaymentPaidOccurrenceInMonth(p, currentYM())) return true;
   if (!p.date) return true;
   try {
     var d = new Date(String(p.date).slice(0, 10) + 'T12:00:00');
@@ -6432,34 +6444,65 @@ function geodeLeftThisMonthTileHintHtml() {
   );
 }
 
+/**
+ * FA-4B: a YYYY-MM-DD date moved by whole calendar months. The day is kept, or clamped to the target month's last
+ * day (31 Jan + 1 → 28 Feb, or 29 Feb in a leap year). Pure string arithmetic, so no timezone can shift the day.
+ * '' when the input is not a real calendar date.
+ */
+function geodeIsoDateAddMonths(iso, months) {
+  var s = String(iso || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
+  function lastDay(yr, mo) {
+    return mo === 2 ? (yr % 4 === 0 && (yr % 100 !== 0 || yr % 400 === 0) ? 29 : 28) : mo === 4 || mo === 6 || mo === 9 || mo === 11 ? 30 : 31;
+  }
+  var y = Number(s.slice(0, 4));
+  var m = Number(s.slice(5, 7));
+  var d = Number(s.slice(8, 10));
+  if (m < 1 || m > 12 || d < 1 || d > lastDay(y, m)) return '';
+  var t = m - 1 + months;
+  var ty = y + Math.floor(t / 12);
+  var tm = ((t % 12) + 12) % 12 + 1;
+  var td = Math.min(d, lastDay(ty, tm));
+  return String(ty) + '-' + ('0' + tm).slice(-2) + '-' + ('0' + td).slice(-2);
+}
+/** Whole months from the month of a YYYY-MM-DD date to the current month (0 when it is not earlier). */
+function geodeIsoDateMonthsBehind(iso) {
+  var ym = currentYM();
+  var k = (Number(ym.slice(0, 4)) - Number(String(iso).slice(0, 4))) * 12 + Number(ym.slice(5, 7)) - Number(String(iso).slice(5, 7));
+  return k > 0 ? k : 0;
+}
 function advancePaymentDueDateOneMonth(p) {
   if (!p || !p.date) return;
-  try {
-    var d = new Date(p.date + 'T12:00:00');
-    if (isNaN(d.getTime())) return;
-    d.setMonth(d.getMonth() + 1);
-    p.date = geodeDateToLocalISO(d);
-  } catch (e) {}
+  var next = geodeIsoDateAddMonths(p.date, 1);
+  if (next) p.date = next;
 }
-/** Roll recurring upcoming due dates forward so they are not stuck in a past month. */
+/**
+ * FA-4B: the due date an undo may put back — the one completion advanced from (lastPaidDueDate) — or ''. Only while
+ * the row is still that completion: paid, with a trusted completion month, its date exactly one recurrence step after
+ * the recorded date, and that next due month not yet reached. Another tab's write, a later occurrence or a malformed
+ * value fails a check and leaves the date as it is.
+ */
+function geodePaymentUndoDueDate(p) {
+  if (!p || p.status !== 'paid' || (p.rec !== 'yes' && p.rec !== 'annual')) return '';
+  var prev = String(p.lastPaidDueDate || '');
+  if (!geodeIsoDateAddMonths(prev, 0) || !geodeContributionYmTrusted(String(p.lastPaidYM || ''))) return '';
+  if (String(p.date || '') !== geodeIsoDateAddMonths(prev, p.rec === 'yes' ? 1 : 12)) return '';
+  if (currentYM() >= String(p.date).slice(0, 7)) return '';
+  return prev;
+}
+/** Roll recurring upcoming due dates forward so they are not stuck in a past month (from the stored day, clamped per month). */
 function rollupRecurringPaymentDueDates() {
   if (!S || !S.payments || !S.payments.length) return false;
-  var n = new Date();
-  var startOfMonth = new Date(n.getFullYear(), n.getMonth(), 1);
   var changed = false;
   for (var i = 0; i < S.payments.length; i++) {
     var p = S.payments[i];
     if (!p || p.rec !== 'yes' || p.status === 'paid' || !p.date) continue;
     try {
-      var d = new Date(p.date + 'T12:00:00');
-      if (isNaN(d.getTime())) continue;
-      var rolledIntoNewMonth = false;
-      while (d < startOfMonth) {
-        d.setMonth(d.getMonth() + 1);
-        changed = true;
-        rolledIntoNewMonth = true;
-      }
-      var nd = geodeDateToLocalISO(d);
+      if (!geodeIsoDateAddMonths(p.date, 0)) continue;
+      var behind = geodeIsoDateMonthsBehind(p.date);
+      var rolledIntoNewMonth = behind > 0;
+      if (rolledIntoNewMonth) changed = true;
+      var nd = geodeIsoDateAddMonths(p.date, behind);
       if (nd !== p.date) p.date = nd;
       // If a recurring item was overdue only because it belonged to a prior month,
       // reset it to the normal current-month state (it can become overdue again later).
@@ -6486,8 +6529,9 @@ function rollupRecurringExpenseDueDates() {
       var d = new Date(e.date + 'T12:00:00');
       if (isNaN(d.getTime())) continue;
       if (e.rec === 'yes') {
-        while (d < startOfMonth) {
-          d.setMonth(d.getMonth() + 1);
+        var behindExp = geodeIsoDateAddMonths(e.date, 0) ? geodeIsoDateMonthsBehind(e.date) : 0;
+        if (behindExp > 0) {
+          d = new Date(geodeIsoDateAddMonths(e.date, behindExp) + 'T12:00:00');
           changed = true;
         }
       } else if (e.rec === 'annual') {
@@ -9374,11 +9418,24 @@ function geodeRealityStatus() {
 }
 
 /**
+ * FA-4B: a completed annual row becomes its next occurrence once the month of its advanced due date arrives — not
+ * sooner, so the completion stays represented (and undoable) for its whole year. Investment rows keep their
+ * lifecycle until FA-7.
+ */
+function geodeAnnualPaymentNextOccurrenceDue(p, ym) {
+  if (!p || p.rec !== 'annual' || p.status !== 'paid' || p.investId) return false;
+  var paidYm = String(p.lastPaidYM || '');
+  var dueYm = String(p.date || '').slice(0, 7);
+  if (!geodeContributionYmValid(paidYm) || !geodeContributionYmValid(dueYm)) return false;
+  return dueYm > paidYm && ym >= dueYm;
+}
+/**
  * Recurring payments marked paid reset to upcoming when the calendar month changes (no scheduler).
  * FA-3C-B.3b: a row whose goal/investment effect counts resets only from a trusted lastPaidYM — the reset erases the
  * row's evidence, so a future or malformed stamp leaves it paid as undated legacy evidence instead.
  * FA-3C-C: schema 2 resets by geodeSchema2RecurringResetDue and records nothing — the history is already the
  * completion or carry the row held.
+ * FA-4B: annual rows too, once geodeAnnualPaymentNextOccurrenceDue.
  */
 function syncRecurringPayments() {
   if (!S) return;
@@ -9393,12 +9450,13 @@ function syncRecurringPayments() {
   if (S.payments && S.payments.length) {
     for (var i = 0; i < S.payments.length; i++) {
       var p = S.payments[i];
-      if (p.rec !== 'yes' || p.status !== 'paid') continue;
+      if (p.status !== 'paid' || (p.rec !== 'yes' && !geodeAnnualPaymentNextOccurrenceDue(p, ym))) continue;
       if (schema2 ? geodeSchema2RecurringResetDue(S, p, ym, carried) : p.lastPaidYM && p.lastPaidYM !== ym &&
           (geodeContributionYmTrusted(p.lastPaidYM) || !geodePaymentBalanceEffect(S, p))) {
         if (!schema2) geodeEnsureContributionCompletion(p, 'rollover_safety_net');
         p.status = 'upcoming';
         p.lastPaidYM = '';
+        delete p.lastPaidDueDate;
         delete p.debtPaymentCompletionEventId;
         delete p.contributionEventId;
         changed = true;
@@ -25101,7 +25159,8 @@ function geodeIrregularIncomeHintLine(mainKind) {
 function geodePaymentCountsAsPaidInCurrentMonth(p) {
   if (!p || p.status !== 'paid') return false;
   var ym = currentYM();
-  if (p.rec === 'yes') return String(p.lastPaidYM || '') === ym;
+  if (p.rec === 'yes') return geodePaymentPaidOccurrenceInMonth(p, ym);
+  if (geodePaymentPaidOccurrenceInMonth(p, ym)) return true;
   var ds = String(p.date || '').slice(0, 7);
   return ds === ym.slice(0, 7);
 }
@@ -39188,7 +39247,7 @@ function rPayments(el) {
       pillText +
       '</span>';
     var ctxLine =
-      (p.rec === 'yes' ? 'Monthly' : 'One-off') +
+      (p.rec === 'yes' ? 'Monthly' : p.rec === 'annual' ? 'Annual' : 'One-off') +
       (p.date ? ' \u2022 Due ' + fd(p.date) : '');
     var confirmHelp = '';
     var editLinkHtml =
@@ -40032,16 +40091,23 @@ function togglePay(id){
   var _dpeBefore = geodeDebtPaymentEventSnapshot(p);
   var _cevBefore = geodeContributionEventSnapshot(p);
   if(p.status==='paid'){
+    var _undoDue = geodePaymentUndoDueDate(p);
+    if (_undoDue) p.date = _undoDue;
+    delete p.lastPaidDueDate;
     p.status='upcoming';
     p.lastPaidYM='';
   }else{
     p.status='paid';
+    delete p.lastPaidDueDate;
     if(p.rec==='yes'){
       p.lastPaidYM=currentYM();
+      var _dueBefore = p.date;
       advancePaymentDueDateOneMonth(p);
+      if (p.date !== _dueBefore) p.lastPaidDueDate = _dueBefore;
     } else if(p.rec==='annual'){
       p.lastPaidYM=currentYM();
-      try{var _ad=new Date(p.date);_ad.setFullYear(_ad.getFullYear()+1);p.date=geodeDateToLocalISO(_ad);}catch(_ae){}
+      var _annualNext = geodeIsoDateAddMonths(p.date, 12);
+      if (_annualNext) { p.lastPaidDueDate = p.date; p.date = _annualNext; }
     }
     if (!p.createdAt) p.createdAt = Date.now();
     evaluatePaymentFollowthrough(p);

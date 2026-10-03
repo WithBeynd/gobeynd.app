@@ -42,6 +42,9 @@ const PRODUCTION_FUNCTIONS = [
   'geodeSavePayApply', 'togglePay', 'delPay', 'geodeFindExistingLinkedPaymentForYm', 'geodePayYmFromDateStr',
   'geodeNormalizePayLinkedIntent', 'geodeMergeDuplicateLinkedContributionsSameMonth', 'geodePaymentMonthYmFromDate',
   'geodePaymentEffectiveStatus', 'advancePaymentDueDateOneMonth', 'migratePaymentFlowFields',
+  // recurring occurrence lifecycle (FA-4B): calendar-safe advance, undo inverse, paid-occurrence month, annual reset
+  'geodeIsoDateAddMonths', 'geodeIsoDateMonthsBehind', 'geodePaymentUndoDueDate', 'geodePaymentPaidOccurrenceInMonth',
+  'geodeAnnualPaymentNextOccurrenceDue',
   // month rollover
   'syncRecurringPayments', 'rollupRecurringPaymentDueDates', 'rollupRecurringExpenseDueDates',
   'geodeArchiveExpiredOneOffExpenses', 'geodeNormalizeBeyndStatement', 'geodeUpsertBeyndStatementItem',
@@ -671,10 +674,10 @@ const DEFECTS = {
   D5: 'An unpaid voluntary one-off contribution keeps reducing every later month\'s Monthly Left (paymentCountsForMonthlyOutflow overdue rule). Repaired in FA-4A; guarded by the ML.vol and FA4A.lapse checks.',
   D6: 'Same-session rollover and reload disagree: the persisted g.saved / inv.balance cache stays stale until the next recompute.',
   D7: 'A savings release sized against a balance that rollover later shrinks hides later contributions (release deduction clamps at 0).',
-  D8: 'Undoing a recurring completion does not revert the due-date advance, so complete → undo cycles push the next due date into later months (togglePay).',
+  D8: 'Undoing a recurring completion does not revert the due-date advance, so complete → undo cycles push the next due date into later months (togglePay). Repaired in FA-4B; guarded by the H.date and FA4B.undo checks.',
   D9: 'Editing a recurring template while its current month is completed rewrites the recorded occurrence amount (single mutable row).',
   D10: 'Entering an investment value adds currently-paid contributions on top of the entered value (saveInv baseBalance + paid rows).',
-  D11: 'Annual recurrence lifecycle: completing an annual row moves its due date a year ahead at once and nothing resets it, so the completed occurrence drops out of Monthly Left and Plan, next year\'s row still shows paid, and tapping it undoes instead of completing (togglePay).'
+  D11: 'Annual recurrence lifecycle: completing an annual row moves its due date a year ahead at once and nothing resets it, so the completed occurrence drops out of Monthly Left and Plan, next year\'s row still shows paid, and tapping it undoes instead of completing (togglePay). Repaired in FA-4B; guarded by the FA3A.annual and FA4B.annual checks.'
 };
 
 const results = [];
@@ -985,15 +988,15 @@ function goalH() {
     const seen = [];
     app.toggle(id); seen.push(app.snap().goal.gH);
     app.toggle(id); seen.push(app.snap().goal.gH);
-    target('H.date.undo', 'Due date returns to 15 June after complete → undo', app.snap().rows[0].date, '2026-06-15', '2026-07-15', 'D8');
+    invariant('H.date.undo', 'Due date returns to 15 June after complete → undo (D8 closed by FA-4B)', app.snap().rows[0].date, '2026-06-15');
     app.toggle(id); seen.push(app.snap().goal.gH);
     app.toggle(id); seen.push(app.snap().goal.gH);
     invariant('H.sequence', 'Holiday through the sequence', seen, [1100, 1000, 1100, 1000]);
     invariant('H.final', 'Final Holiday', seen[3], 1000);
     invariant('H.bounds', 'Never below £1,000 or above £1,100', seen.every(v => v >= 1000 && v <= 1100), true);
-    target('H.date.final', 'Due date after the full sequence', app.snap().rows[0].date, '2026-06-15', '2026-08-15', 'D8');
+    invariant('H.date.final', 'Due date after the full sequence (D8 closed by FA-4B)', app.snap().rows[0].date, '2026-06-15');
     app.advance('2026-07-02', 'reload');
-    target('H.date.july', 'July shows the July occurrence as next due', app.snap().rows[0].date, '2026-07-15', '2026-08-15', 'D8');
+    invariant('H.date.july', 'July shows the July occurrence as next due (D8 closed by FA-4B)', app.snap().rows[0].date, '2026-07-15');
     spec('H.ledger', 'At most one active completion per payment and month; four events (completion, reversal, completion, reversal)', 'no occurrence record exists');
   });
 }
@@ -1233,6 +1236,196 @@ function fa4aLapse() {
       [['goal-dec-2026', true], ['goal-jan-2027', false], ['goal-bad-date', false]]);
     invariant('FA4A.lapse.review', 'rReview still counts a lapsed contribution among the overdue contributions to check',
       extractFunction(PROGRAM.src, 'rReview').text.indexOf('if (!paymentCountsForMonthlyOutflow(p) && !geodePaymentIsLapsedVoluntaryOneOff(p)) continue;') >= 0, true);
+  });
+}
+
+/** A payment row as the lifecycle sees it: [status, date, lastPaidYM, lastPaidDueDate]. */
+const lifecycle = (app, id) => { const p = app.state().payments.filter(x => x.id === id)[0]; return [p.status, p.date, p.lastPaidYM || '', p.lastPaidDueDate || '']; };
+
+/** FA-4B (month-end): one calendar month keeps the day or clamps to the month's last day; rollover counts months from the stored date. */
+function fa4bMonthEnd() {
+  scenario('FA-4B MONTH-END — calendar-safe month steps', () => {
+    const app = new App(baseState(), '2026-06-10');
+    const cases = [['2026-01-31', 1, '2026-02-28'], ['2028-01-31', 1, '2028-02-29'], ['2026-03-31', 1, '2026-04-30'], ['2026-04-30', 1, '2026-05-30'],
+      ['2028-02-29', 1, '2028-03-29'], ['2026-12-31', 1, '2027-01-31'], ['2026-06-15', 1, '2026-07-15'], ['2026-01-31', 3, '2026-04-30'],
+      ['2026-06-10', 12, '2027-06-10'], ['2028-02-29', 12, '2029-02-28'], ['2100-01-31', 1, '2100-02-28'], ['2000-01-31', 1, '2000-02-29'],
+      ['2026-02-30', 1, ''], ['2026-13-01', 1, ''], ['2026-6-5', 1, ''], ['soon', 1, ''], ['', 1, '']];
+    invariant('FA4B.month.add', 'geodeIsoDateAddMonths: day kept or clamped to the target month\'s last day (leap years included); not a real date → \'\'',
+      cases.map(c => [c[0], c[1], app.call('geodeIsoDateAddMonths', [c[0], c[1]])]), cases);
+  });
+  scenario('FA-4B MONTH-END — rollover of an unpaid monthly payment and a monthly expense due 31 January', () => {
+    const dates = clock => {
+      const app = new App(baseState({ payments: [{ id: 'r', name: 'Rent', amount: 500, status: 'upcoming', rec: 'yes', date: '2026-01-31' }],
+        expenses: [{ id: 'e', name: 'Phone', amount: 20, cat: 'subs', rec: 'yes', date: '2026-01-31' }] }), clock);
+      return [clock, app.state().payments[0].date, app.state().expenses[0].date];
+    };
+    invariant('FA4B.month.rollup', 'Opened in February → 28 Feb (setMonth made it 3 March, skipping February); March → 31 Mar; April → 30 Apr (setMonth: 3 April)',
+      ['2026-02-10', '2026-03-05', '2026-04-05'].map(dates),
+      [['2026-02-10', '2026-02-28', '2026-02-28'], ['2026-03-05', '2026-03-31', '2026-03-31'], ['2026-04-05', '2026-04-30', '2026-04-30']]);
+  });
+}
+
+/** FA-4B (D8): completing a recurring row records the due date it advanced from (lastPaidDueDate); undo restores exactly that date, only while it still applies. */
+function fa4bUndo() {
+  const timelines = {};
+  MODES.forEach(mode => scenario('FA-4B UNDO — monthly Holiday £100 due 15 June: complete / undo twice, then July [' + mode + ']', () => {
+    const app = new App(baseState(), '2026-06-05');
+    const id = monthlyHoliday(app);
+    app.at('2026-06-15');
+    const seen = [];
+    const step = label => { if (mode === 'reload') app.reload(); seen.push(lifecycle(app, id)); app.snap(label); };
+    app.toggle(id); step('complete 1');
+    app.toggle(id); step('undo 1');
+    app.toggle(id); step('complete 2');
+    app.toggle(id); step('undo 2');
+    invariant('FA4B.undo.cycle', 'Each completion records 15 June and advances to 15 July; each undo restores 15 June and drops the record (persisted across reloads)',
+      seen, [['paid', '2026-07-15', '2026-06', '2026-06-15'], ['upcoming', '2026-06-15', '', ''], ['paid', '2026-07-15', '2026-06', '2026-06-15'], ['upcoming', '2026-06-15', '', '']]);
+    invariant('FA4B.undo.ledger', 'Contribution events: completion, reversal, completion, reversal, all 2026-06; Holiday back to £1,000',
+      [evRows(app).map(r => r[0] + ' ' + r[3]), app.snap().goal.gH], [['completion 2026-06', 'reversal 2026-06', 'completion 2026-06', 'reversal 2026-06'], 1000]);
+    app.at('2026-06-20'); app.toggle(id);
+    app.advance('2026-07-02', mode); const rolled = lifecycle(app, id); app.snap('Jul 02 rollover');
+    app.at('2026-07-15'); app.toggle(id); const julyDone = lifecycle(app, id); app.snap('Jul 15 complete');
+    app.toggle(id); app.snap('Jul 15 undo');
+    invariant('FA4B.undo.july', 'Completed again in June, the July rollover makes it the July occurrence and drops the June record; completing July advances to 15 August and undo restores 15 July — never August',
+      [rolled, julyDone, lifecycle(app, id)], [['upcoming', '2026-07-15', '', ''], ['paid', '2026-08-15', '2026-07', '2026-07-15'], ['upcoming', '2026-07-15', '', '']]);
+    timelines[mode] = app.timeline;
+  }));
+  scenario('FA-4B UNDO — same-session vs reload', () => parity('FA4B.undo.parity', 'FA-4B UNDO', timelines, undefined, ''));
+
+  MODES.forEach(mode => scenario('FA-4B UNDO — month-end rent £500 due 31 January [' + mode + ']', () => {
+    const app = new App(baseState(), '2026-01-20');
+    const id = app.contribute({ name: 'Rent', amount: 500, date: '2026-01-31', status: 'upcoming', rec: 'yes' });
+    app.toggle(id); if (mode === 'reload') app.reload();
+    const done = lifecycle(app, id);
+    app.toggle(id); if (mode === 'reload') app.reload();
+    invariant('FA4B.undo.month-end', '31 Jan completed → 28 Feb (31 Jan recorded); undo → 31 Jan, the recorded date, not one month before 28 Feb',
+      [done, lifecycle(app, id)], [['paid', '2026-02-28', '2026-01', '2026-01-31'], ['upcoming', '2026-01-31', '', '']]);
+    app.toggle(id); app.advance('2026-02-03', mode);
+    const feb = lifecycle(app, id);
+    app.at('2026-02-20'); app.toggle(id);
+    invariant('FA4B.undo.month-end.next', 'February is the 28 Feb occurrence; completing it advances one month from the stored day (28 Mar)',
+      [feb, lifecycle(app, id)], [['upcoming', '2026-02-28', '', ''], ['paid', '2026-03-28', '2026-02', '2026-02-28']]);
+  }));
+
+  scenario('FA-4B UNDO — annual rows', () => {
+    let { app, id } = completedAnnual('2026-06-10', '2026-06-10');
+    const done = lifecycle(app, id);
+    app.toggle(id);
+    const same = lifecycle(app, id);
+    ({ app, id } = completedAnnual('2026-06-10', '2026-06-10'));
+    app.advance('2026-12-01', 'reload'); app.toggle(id);
+    const later = lifecycle(app, id);
+    const leap = new App(baseState(), '2028-02-10');
+    const lid = leap.contribute({ name: 'Licence', amount: 90, date: '2028-02-29', status: 'upcoming', rec: 'annual' });
+    leap.toggle(lid); const leapDone = lifecycle(leap, lid); leap.toggle(lid);
+    invariant('FA4B.undo.annual', 'Annual: completing 10 June 2026 records it and advances to 10 June 2027; undo the same day, or in December 2026 (same occurrence), restores 10 June 2026 instead of skipping a year; 29 Feb 2028 → 28 Feb 2029, undo → 29 Feb 2028',
+      [done, same, later, leapDone, lifecycle(leap, lid)],
+      [['paid', '2027-06-10', '2026-06', '2026-06-10'], ['upcoming', '2026-06-10', '', ''], ['upcoming', '2026-06-10', '', ''],
+        ['paid', '2029-02-28', '2028-02', '2028-02-29'], ['upcoming', '2028-02-29', '', '']]);
+  });
+
+  scenario('FA-4B UNDO — a stale or malformed lastPaidDueDate never rewinds a row', () => {
+    const app = new App(baseState(), '2026-06-20');
+    const row = o => Object.assign({ id: 'x', status: 'paid', rec: 'yes', lastPaidYM: '2026-06', date: '2026-07-15', lastPaidDueDate: '2026-06-15' }, o);
+    const cases = [
+      ['valid record', row({}), '2026-06-15'],
+      ['invalid string', row({ lastPaidDueDate: 'soon' }), ''],
+      ['impossible date', row({ lastPaidDueDate: '2026-02-30' }), ''],
+      ['unrelated old date', row({ lastPaidDueDate: '2025-01-15' }), ''],
+      ['earlier occurrence', row({ lastPaidDueDate: '2026-05-15' }), ''],
+      ['date edited after completion', row({ date: '2026-07-20' }), ''],
+      ['no completion month', row({ lastPaidYM: '' }), ''],
+      ['future completion month', row({ lastPaidYM: '2026-09' }), ''],
+      ['annual row, one-month step', row({ rec: 'annual' }), ''],
+      ['annual row, valid record', row({ rec: 'annual', date: '2027-06-15' }), '2026-06-15'],
+      ['one-off row', row({ rec: 'no' }), ''],
+      ['row not paid', row({ status: 'upcoming' }), ''],
+      ['no record', row({ lastPaidDueDate: undefined }), '']
+    ];
+    invariant('FA4B.stale.matrix', 'geodePaymentUndoDueDate restores only a valid record whose one-step advance is the current date, with a trusted completion month, on a paid monthly/annual row',
+      cases.map(c => [c[0], app.call('geodePaymentUndoDueDate', [c[1]])]), cases.map(c => [c[0], c[2]]));
+    app.at('2026-07-03');
+    invariant('FA4B.stale.progressed', 'In July 2026 (the next due month) the June record no longer applies, even on a row still marked paid', app.call('geodePaymentUndoDueDate', [row({})]), '');
+    const tapped = [['unrelated old date', '2025-01-15'], ['earlier occurrence', '2026-05-15'], ['invalid string', 'soon']].map(c => {
+      const a = new App(baseState({ payments: [{ id: 'b', name: 'Gym', amount: 40, status: 'paid', rec: 'yes', lastPaidYM: '2026-06', date: '2026-07-15', lastPaidDueDate: c[1] }] }), '2026-06-20');
+      a.toggle('b');
+      return [c[0], lifecycle(a, 'b')];
+    });
+    invariant('FA4B.stale.tap', 'Undo with a stale or malformed record keeps today\'s safe behaviour — the due date stays 15 July — and drops the record',
+      tapped, tapped.map(t => [t[0], ['upcoming', '2026-07-15', '', '']]));
+  });
+}
+
+/** FA-4B (D11): an annual completion counts in the month it was paid; the row becomes the next occurrence when its next due month arrives (not investment rows). */
+function fa4bAnnual() {
+  const timelines = {};
+  MODES.forEach(mode => scenario('FA-4B ANNUAL — annual insurance £250 due 10 June 2026, through June 2027 [' + mode + ']', () => {
+    const app = new App(baseState(), '2026-06-05');
+    const id = app.contribute({ name: 'Insurance', amount: 250, date: '2026-06-10', status: 'upcoming', rec: 'annual' });
+    app.at('2026-06-10'); app.toggle(id);
+    let s = app.snap('Jun 2026 completed');
+    invariant('FA4B.annual.bill.june', 'June 2026 completed: paid for 2026-06, next due 10 June 2027; it counts in June\'s Monthly Left and confirmed Left (£2,750)',
+      [lifecycle(app, id), s.left, s.leftConfirmed], [['paid', '2027-06-10', '2026-06', '2026-06-10'], 2750, 2750]);
+    const held = ['2026-07-02', '2026-12-01', '2027-01-04', '2027-05-31'].map(d => { app.advance(d, mode); const x = app.snap(d); return [d, lifecycle(app, id)[0], x.left]; });
+    invariant('FA4B.annual.bill.held', 'July 2026 to May 2027, the year change included: still the paid 2026 occurrence, costing nothing (£3,000)',
+      held, ['2026-07-02', '2026-12-01', '2027-01-04', '2027-05-31'].map(d => [d, 'paid', 3000]));
+    app.advance('2027-06-01', mode); s = app.snap('Jun 2027 next occurrence');
+    invariant('FA4B.annual.bill.reset', 'June 2027, the next due month: the upcoming 2027 occurrence (record dropped), counted in Monthly Left (£2,750)',
+      [lifecycle(app, id), s.left], [['upcoming', '2027-06-10', '', ''], 2750]);
+    app.at('2027-06-10'); app.toggle(id); s = app.snap('Jun 2027 completed');
+    invariant('FA4B.annual.bill.tap', 'A tap in June 2027 completes 2027 (next due 10 June 2028), still £2,750; a bill records no contribution or debt events',
+      [lifecycle(app, id), s.left, (app.events() || []).length, (app.state().debtPaymentEvents || []).length], [['paid', '2028-06-10', '2027-06', '2027-06-10'], 2750, 0, 0]);
+    timelines[mode] = app.timeline;
+  }));
+  scenario('FA-4B ANNUAL — same-session vs reload', () => parity('FA4B.annual.parity', 'FA-4B ANNUAL', timelines, undefined, ''));
+
+  MODES.forEach(mode => scenario('FA-4B ANNUAL — annual Holiday £250: the 2026 completion survives the 2027 occurrence [' + mode + ']', () => {
+    const { app, id, event } = completedAnnual('2026-06-10', '2026-06-10');
+    app.advance('2027-05-31', mode);
+    const may = [lifecycle(app, id)[0], app.snap().goal.gH];
+    app.advance('2027-06-01', mode);
+    invariant('FA4B.annual.goal.reset', 'May 2027: still paid for 2026 (Holiday £1,250). June 2027: the upcoming 2027 occurrence; the 2026 completion is the only event, active and unreversed; Holiday £1,250',
+      [may, lifecycle(app, id), app.events(), app.activeEvents().map(e => e.id), app.snap().goal.gH],
+      [['paid', 1250], ['upcoming', '2027-06-10', '', ''], [event], [event.id], 1250]);
+    app.at('2027-06-10'); app.toggle(id); app.toggle(id);
+    invariant('FA4B.annual.goal.undo-2027', 'Completing then undoing 2027 reverses only the 2027 completion and restores 10 June 2027; 2026 stays active; Holiday £1,250',
+      [lifecycle(app, id), evRows(app).slice(1).map(r => r[0] + ' ' + r[3]), app.activeEvents().map(e => e.occurrenceYm), app.snap().goal.gH],
+      [['upcoming', '2027-06-10', '', ''], ['completion 2027-06', 'reversal 2027-06'], ['2026-06'], 1250]);
+  }));
+
+  scenario('FA-4B ANNUAL — annual card fee £250 linked to a debt: occurrence lifecycle only', () => {
+    const app = new App(baseState({ debts: [{ id: 'dC', name: 'Card', balance: 2000, apr: 20, minp: 50 }] }), '2026-06-05');
+    const id = app.contribute({ name: 'Card annual fee', amount: 250, date: '2026-06-10', status: 'upcoming', rec: 'annual', debtId: 'dC' });
+    app.at('2026-06-10'); app.toggle(id);
+    const june = [lifecycle(app, id), app.snap().left, app.state().debts[0].balance, (app.state().debtPaymentEvents || []).length];
+    app.advance('2027-06-01', 'reload');
+    invariant('FA4B.annual.debt', 'June 2026: counts (£2,750); Card stays £2,000 and no debt payment event is recorded for an annual row. June 2027: the upcoming 2027 occurrence; Card £2,000; still no debt events',
+      [june, [lifecycle(app, id), app.state().debts[0].balance, (app.state().debtPaymentEvents || []).length]],
+      [[['paid', '2027-06-10', '2026-06', '2026-06-10'], 2750, 2000, 0], [['upcoming', '2027-06-10', '', ''], 2000, 0]]);
+  });
+
+  MODES.forEach(mode => scenario('FA-4B ANNUAL — annual ISA £250 keeps today\'s lifecycle (FA-7) [' + mode + ']', () => {
+    const app = new App(baseState(), '2026-06-05');
+    const id = app.contribute({ name: 'ISA annual', amount: 250, date: '2026-06-10', status: 'upcoming', rec: 'annual', investId: 'iA' });
+    app.at('2026-06-10'); app.toggle(id);
+    let s = app.snap();
+    const june = [lifecycle(app, id), s.left, s.inv.iA];
+    app.advance('2027-06-01', mode); s = app.snap();
+    invariant('FA4B.annual.invest', 'June 2026: counts in Monthly Left (£2,750), ISA £5,250. June 2027: NOT reset — still paid for 2026-06, ISA £5,250, and counted by its due date as before (£2,750)',
+      [june, [lifecycle(app, id), s.left, s.inv.iA]],
+      [[['paid', '2027-06-10', '2026-06', '2026-06-10'], 2750, 5250], [['paid', '2027-06-10', '2026-06', '2026-06-10'], 2750, 5250]]);
+  }));
+
+  scenario('FA-4B ANNUAL — the next occurrence begins in the next due month, no sooner', () => {
+    const { app, id } = completedAnnual('2026-03-10', '2026-06-10');
+    const seen = ['2026-07-01', '2026-12-01', '2027-01-04', '2027-02-27', '2027-03-01'].map(d => { app.advance(d, 'reload'); return [d, lifecycle(app, id)[0]]; });
+    invariant('FA4B.annual.timing', 'Completed late (June 2026, due March, next due 10 March 2027): paid through July, December, the year change and February; upcoming from March 2027',
+      seen, [['2026-07-01', 'paid'], ['2026-12-01', 'paid'], ['2027-01-04', 'paid'], ['2027-02-27', 'paid'], ['2027-03-01', 'upcoming']]);
+  });
+
+  scenario('FA-4B LABEL — payment rows name their recurrence', () => {
+    invariant('FA4B.label', 'rPayments: rec yes → Monthly, annual → Annual, anything else → One-off',
+      extractFunction(PROGRAM.src, 'rPayments').text.indexOf("(p.rec === 'yes' ? 'Monthly' : p.rec === 'annual' ? 'Annual' : 'One-off')") >= 0, true);
   });
 }
 
@@ -2290,7 +2483,7 @@ const completedAnnual = (due, completedOn, program) => {
   return { app, id, event: app.events()[0] };
 };
 
-/** Annual recurrence lifecycle (D11): characterised, not repaired. Whatever the row does, each year's completion stays recorded. */
+/** Annual recurrence lifecycle (D11, repaired in FA-4B). Whatever the row does, each year's completion stays recorded. */
 function fa3aAnnual() {
   scenario('FA-3A ANNUAL — annual Holiday contribution £250 due 10 June (D11)', () => {
     const STEP = { label: 'Catch up on Holiday', amount: 250 };
@@ -2307,17 +2500,20 @@ function fa3aAnnual() {
       [evRow(c), c.dueDateSnapshot], [['completion', id, 'goal:gH', '2026-06', 250, 'annual', 'mark_completed'], '2026-06-10']);
     current('FA3A.annual.advance', 'Completing moves the due date to 10 June 2027 at once (lastPaidYM 2026-06); Holiday £1,250',
       [row().date, row().lastPaidYM, app.snap().goal.gH], ['2027-06-10', '2026-06', 1250]);
-    target('FA3A.annual.left', 'The June completion still counts in June\'s Monthly Left (£2,750)', app.snap().left, 2750, 3000, 'D11');
-    target('FA3A.annual.plan', 'Plan recognises the £250 just completed', plan(), { applied: 250, scheduled: 0, gap: 0 }, { applied: 0, scheduled: 0, gap: 250 }, 'D11');
+    invariant('FA3A.annual.left', 'The June completion still counts in June\'s Monthly Left (£2,750) (D11 closed by FA-4B)', app.snap().left, 2750);
+    invariant('FA3A.annual.plan', 'Plan recognises the £250 just completed (D11 closed by FA-4B)', plan(), { applied: 250, scheduled: 0, gap: 0 });
     app.advance('2027-06-05', 'reload');
-    target('FA3A.annual.next-year', 'June 2027: the row is the upcoming 2027 occurrence and Plan sees it scheduled', [row().status, plan()],
-      ['upcoming', { applied: 0, scheduled: 250, gap: 0 }], ['paid', { applied: 250, scheduled: 0, gap: 0 }], 'D11');
+    invariant('FA3A.annual.next-year', 'June 2027: the row is the upcoming 2027 occurrence and Plan sees it scheduled (D11 closed by FA-4B)', [row().status, plan()],
+      ['upcoming', { applied: 0, scheduled: 250, gap: 0 }]);
     invariant('FA3A.annual.ledger', 'A year of renders and reloads leaves the 2026 completion untouched', app.events(), [c]);
     app.at('2027-06-10'); app.toggle(id);
-    target('FA3A.annual.next-year-tap', 'Tapping the row in June 2027 completes the 2027 occurrence', [row().status, row().lastPaidYM], ['paid', '2027-06'], ['upcoming', ''], 'D11');
-    invariant('FA3A.annual.history-survives-next-year-tap', 'That tap leaves the 2026 completion active: no reversal, no 2027 completion, pointer removed',
-      [app.events(), app.activeEvents().map(e => e.id), app.pointer(id)], [[c], [c.id], null]);
-    invariant('FA3A.annual.tap.display', 'Holiday keeps £1,250 after the tap: the still-active 2026 completion is goal authority in schema 2 (the legacy row display fell to £1,000 before FA-3C-C; the row lifecycle itself stays D11)', app.snap().goal.gH, 1250);
+    invariant('FA3A.annual.next-year-tap', 'Tapping the row in June 2027 completes the 2027 occurrence; next due June 2028 (D11 closed by FA-4B)',
+      [row().status, row().lastPaidYM, row().date], ['paid', '2027-06', '2028-06-10']);
+    const c27 = app.events()[1];
+    invariant('FA3A.annual.history-survives-next-year-tap', 'That tap leaves the 2026 completion active and unreversed and records the 2027 completion beside it; the row points at the 2027 one',
+      [app.events().length, app.events()[0], evRow(c27), app.activeEvents().map(e => e.id), app.pointer(id)],
+      [2, c, ['completion', id, 'goal:gH', '2027-06', 250, 'annual', 'mark_completed'], [c.id, c27.id], c27.id]);
+    invariant('FA3A.annual.tap.display', 'Holiday £1,500 after the tap: the still-active 2026 completion plus the 2027 one are goal authority in schema 2', app.snap().goal.gH, 1500);
   });
 
   scenario('FA-3A ANNUAL — undo and edit within the same occurrence', () => {
@@ -2351,8 +2547,9 @@ function fa3aAnnual() {
     const nextDue = app.state().payments[0].date;
     app.advance('2027-04-10', 'reload');
     app.toggle(id);
-    invariant('FA3A.annual.history-survives-next-due', 'Completed late (June 2026, due March, next due ' + nextDue + '): a tap in April 2027, after the next due date, leaves it active',
-      [nextDue, app.events(), app.activeEvents().map(e => e.id)], ['2027-03-10', [event], [event.id]]);
+    invariant('FA3A.annual.history-survives-next-due', 'Completed late (June 2026, due March, next due ' + nextDue + '): the row became the 2027 occurrence in March 2027, so a tap in April 2027 completes it (2027-04, next due March 2028) and leaves the 2026 completion active and unreversed',
+      [nextDue, app.events()[0], evRows(app).slice(1), app.activeEvents().map(e => e.occurrenceYm), app.state().payments[0].date],
+      ['2027-03-10', event, [['completion', id, 'goal:gH', '2027-04', 250, 'annual', 'mark_completed']], ['2026-06', '2027-04'], '2028-03-10']);
   });
 }
 
@@ -2616,9 +2813,10 @@ function fa3bPointers() {
     app.advance('2027-06-05', 'reload');
     app.at('2027-06-10'); app.toggle('pa');
     const late = loaded(G2, '2027-07-01');
-    invariant('FA3B.pointer.annual', 'Annual: the migrated 2026 completion is pointed at in 2026; a tap in June 2027 leaves it active (no reversal, no 2027 event); the same row first opened in July 2027 is seeded for 2026 without a pointer',
-      [pointed, app.events(), app.activeEvents().map(e => e.id), seededRows(late.app), late.app.pointer('pa')],
-      [true, [seeded], [seeded.id], [['pa', 'goal:gH', '2026-06', 250, 'annual', '', 'migration']], null]);
+    invariant('FA3B.pointer.annual', 'Annual: the migrated 2026 completion is pointed at in 2026; a tap in June 2027 completes the 2027 occurrence and leaves the 2026 completion active and unreversed; the same row first opened in July 2027 is seeded for 2026 without a pointer',
+      [pointed, app.events()[0], seededRows(app).slice(1), app.activeEvents().map(e => e.occurrenceYm), seededRows(late.app), late.app.pointer('pa')],
+      [true, seeded, [['pa', 'goal:gH', '2027-06', 250, 'annual', '2027-06-10', 'mark_completed']], ['2026-06', '2027-06'],
+        [['pa', 'goal:gH', '2026-06', 250, 'annual', '', 'migration']], null]);
   });
 }
 
@@ -3428,7 +3626,10 @@ const b2Ambiguous = (row, extra) => new App(legacyState({}, Object.assign({ inve
   payments: [row || legacyInvPay('im', { rec: 'yes', date: '2026-06-05' })] }, extra || {})), B2_AT);
 /** A row completed natively this month: its paid state is a dated completion it represents. */
 const b2Dated = (row, extra) => { const app = new App(legacyState({}, Object.assign({ payments: [row] }, extra || {})), B2_AT); app.toggle(row.id); return app; };
-/** An annual row completed in August 2025 and seen in September 2026: still paid (nothing resets annual rows), its completion an earlier occurrence. */
+/**
+ * An annual row completed in August 2025 and seen in September 2026. An investment row is still paid (the annual reset
+ * leaves investment rows to FA-7), its completion an earlier occurrence; a goal row became its 2026 occurrence in August 2026.
+ */
 const b2Stale = (row, extra) => {
   const app = new App(legacyState({}, Object.assign({ payments: [row] }, extra || {})), '2025-08-04'); app.reload(); app.toggle(row.id);
   app.advance('2026-09-15', 'reload');
@@ -3491,8 +3692,9 @@ function fa3cb2Boundary() {
     const stg = b2Stale(legacyPay('ga', { rec: 'annual', status: 'upcoming', date: '2025-08-05', amount: 200 }));
     const stgTotal = authority(stg).goals.gH.shown + stg.snap().inv.iA;
     const stgTry = attempt(stg, b2ToIsa('ga'));
-    invariant('FA3CB2.goal-inv.stale', 'The mirror: a stale paid annual Holiday £200 relinked to the ISA: refused, nothing changed — the 2025-08 Holiday completion stays, the row stays on Holiday, the ISA does not gain the £200 (£5,000); Holiday £1,200, simulated £1,200',
-      [stgTry, b2Active(stg), stg.state().payments[0].goalId, b2View(stg)], [[[REFUSED_MOVE], true], [['goal:gH', '2025-08', 200]], 'gH', [1200, 1200, 5000]]);
+    const stgRow = stg.state().payments[0];
+    invariant('FA3CB2.goal-inv.stale', 'The mirror is no longer stale: the annual Holiday £200 row became its upcoming 2026 occurrence in August 2026 (FA-4B), so relinking it to the ISA is an ordinary unpaid move, allowed and moving no money — the 2025-08 Holiday completion stays Holiday history, the ISA does not gain the £200 (£5,000); Holiday £1,200, simulated £1,200',
+      [stgTry, b2Active(stg), [stgRow.status, stgRow.goalId, stgRow.investId], b2View(stg)], [[[], false], [['goal:gH', '2025-08', 200]], ['upcoming', '', 'iA'], [1200, 1200, 5000]]);
 
     const sgg = b2Stale(legacyPay('ga', { rec: 'annual', status: 'upcoming', date: '2025-08-05', amount: 200 }), { goals: [HOLIDAY(), CAR()] });
     const sggTry = attempt(sgg, a => a.editPayment('ga', { goalId: 'gB' }));
@@ -3544,7 +3746,7 @@ function fa3cb2Boundary() {
     const total = a => authority(a).goals.gH.shown + a.snap().inv.iA;
     const gdiTotal = total(gdi);
     const gdiTry = attempt(gdi, b2ToIsa('gd'));
-    invariant('FA3CB2.no-double-count', 'No goal ↔ investment relink counts one £200 under both simulated goal and legacy investment: the stale Holiday → ISA move is refused (£6,200 before and after); a represented Holiday completion moved to the ISA (Holiday completion reversed, ISA completion 2026-08) keeps £6,200 (simulated Holiday £1,000 + ISA £5,200)',
+    invariant('FA3CB2.no-double-count', 'No goal ↔ investment relink counts one £200 under both simulated goal and legacy investment: the reset (unpaid) annual Holiday row moved to the ISA brings nothing (£6,200 before and after); a represented Holiday completion moved to the ISA (Holiday completion reversed, ISA completion 2026-08) keeps £6,200 (simulated Holiday £1,000 + ISA £5,200)',
       [stgTotal, total(stg), gdiTotal, gdiTry[0], b2Active(gdi), total(gdi)], [6200, 6200, 6200, [], [['investment:iA', '2026-08', 200]], 6200]);
 
     invariant('FA3CB2.schema2-hole', 'After every goal ↔ investment relink above, allowed or refused, legacy Holiday equals simulated Holiday: ambiguous monthly, dated, unpaid then completed, stale ISA, stale Holiday, Holiday → ISA, one-off dated and dateless, annual ambiguous and dated, Smart Import',
@@ -3552,8 +3754,8 @@ function fa3cb2Boundary() {
       [[1000, 1000], [1200, 1200], [1200, 1200], [1000, 1000], [1200, 1200], [1000, 1000], [1200, 1200], [1000, 1000], [1000, 1000], [1200, 1200], [1000, 1000]]);
 
     const atm = b2Ambiguous(); attempt(atm, b2ToGoal('im'));
-    invariant('FA3CB2.atomic', 'Every refusal is atomic: the form refusals (ambiguous monthly and annual, dateless one-off, stale in both directions) and the Smart Import refusal left the whole stored state unchanged, and a refused form save keeps the edit\'s intent ("replace") for the retry',
-      [[ambTry, anTry, odTry, stiTry, stgTry].map(t => t[1]), siTry[1], atm.run('window._geodePayLinkedIntent')], [[true, true, true, true, true], true, 'replace']);
+    invariant('FA3CB2.atomic', 'Every refusal is atomic: the form refusals (ambiguous monthly and annual, dateless one-off, stale ISA) and the Smart Import refusal left the whole stored state unchanged, and a refused form save keeps the edit\'s intent ("replace") for the retry',
+      [[ambTry, anTry, odTry, stiTry].map(t => t[1]), siTry[1], atm.run('window._geodePayLinkedIntent')], [[true, true, true, true], true, 'replace']);
 
     const card = { debts: [{ id: 'dC', name: 'Card', balance: 1000, minPayment: 50, apr: 25 }] };
     const bl = b2Ambiguous(null, card), bd = b2Ambiguous(null, card);
@@ -4670,7 +4872,7 @@ function main() {
   }
   harnessFidelity();
   goalA(); goalB(); goalC(); goalD(); goalE(); goalF(); goalG(); goalH();
-  missedRecurring(); investments(); quickSetup(); monthlyLeft(); fa4aQuickSetup(); fa4aLapse(); identity(); identityMatrix(); planActions(); releases(); deposits();
+  missedRecurring(); investments(); quickSetup(); monthlyLeft(); fa4aQuickSetup(); fa4aLapse(); fa4bMonthEnd(); fa4bUndo(); fa4bAnnual(); identity(); identityMatrix(); planActions(); releases(); deposits();
   fa2Goals(); fa2Investments(); fa2Deposits();
   fa3aLedger(); fa3aGoals(); fa3aInvestments(); fa3aSmartImport(); fa3aDeletion(); fa3aIdentity(); fa3aRollover(); fa3aProtection(); fa3aAnnual(); fa3aOccurrence();
   fa3bOrder(); fa3bMatrix(); fa3bPointers(); fa3bParity(); fa3bLifecycle();
