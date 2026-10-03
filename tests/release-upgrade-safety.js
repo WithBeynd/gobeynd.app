@@ -406,6 +406,61 @@ async function activate() {
     [await worker.fetch('/', 'navigate') === INDEX, await worker.fetch('/index.html') === INDEX, stubborn.globalMatches], [true, true, 0]);
 }
 
+async function activationStall() {
+  group = 'ACTIVATION STALL — activation starts the window reloads but never waits for them (P1-REL.1)';
+  /** Activation's outcome, or 'still activating' if it has not settled within a bounded number of event-loop turns. */
+  const bounded = async p => Promise.race([p, (async () => { for (let i = 0; i < 100; i++) await tick(); return 'still activating'; })()]);
+  const setup = windows => {
+    log.length = 0;
+    const caches = new FakeCaches();
+    caches.seed('beynd-cache-' + PREVIOUS, OLD_FILES);
+    caches.seed('beynd-cache-v1.0.70', OLD_FILES);
+    caches.seed(CURRENT_CACHE, { '/index.html': INDEX });
+    caches.seed('pdfjs-cache', {});
+    return { caches, worker: loadWorker({ caches, net: fakeNetwork({}), windows }) };
+  };
+
+  let activated = false;
+  const waiting = [];
+  const specWindow = url => ({ url: ORIGIN + url, navigate(u) {
+    log.push('navigate:' + pathOf(u));
+    return new Promise(resolve => waiting.push(() => { log.push('navigated:' + pathOf(u)); resolve(this); }));
+  } });
+  const spec = setup([specWindow('/'), specWindow('/?tab=plan')]);
+  const outcome = await bounded(spec.worker.activate().then(r => { activated = true; log.push('activated'); waiting.forEach(f => f()); return r; }));
+  await settle();
+  check('act.stall.spec', 'As the Service Worker spec has it, a reload\'s request waits until activation finishes: activation still resolves at once, both reloads were started before it finished and complete after it',
+    [outcome, activated, log.filter(x => /^(navigate|navigated|activated)/.test(x))],
+    ['resolved', true, ['navigate:/', 'navigate:/?tab=plan', 'activated', 'navigated:/', 'navigated:/?tab=plan']]);
+
+  const unhandled = [];
+  const onUnhandled = e => unhandled.push(String(e && e.message || e));
+  process.on('unhandledRejection', onUnhandled);
+  const started = [];
+  const mixed = [
+    { url: ORIGIN + '/a', navigate(u) { started.push('A'); return Promise.resolve(this); } },
+    { url: ORIGIN + '/b', navigate(u) { started.push('B'); return new Promise(() => {}); } },
+    { url: ORIGIN + '/c', navigate(u) { started.push('C'); return Promise.reject(new Error('window closed')); } },
+    { url: ORIGIN + '/d', navigate(u) { started.push('D'); throw new TypeError('not controlled'); } },
+    { url: ORIGIN + '/e' },
+    { url: ORIGIN + '/f', navigate(u) { started.push('F'); return Promise.resolve(this); } }
+  ];
+  const run = setup(mixed);
+  const mixedOutcome = await bounded(run.worker.activate());
+  await settle(); await new Promise(r => setTimeout(r, 20));
+  process.removeListener('unhandledRejection', onUnhandled);
+  check('act.stall.mixed', 'Windows that reload normally, hang forever, reject, throw, lack navigate(), and reload normally again: activation resolves without waiting for the hanging one; every window with navigate() is asked to reload, in order; no unhandled rejection',
+    [mixedOutcome, started, unhandled], ['resolved', ['A', 'B', 'C', 'D', 'F'], []]);
+  const claim = log.indexOf('claim');
+  check('act.stall.cleanup', 'In that activation both older Beynd caches are deleted (this release\'s and non-Beynd caches stay) and clients.claim() runs after the deletions and before windows are listed',
+    [run.caches.names(), claim > log.indexOf('deleted:beynd-cache-' + PREVIOUS) && claim > log.indexOf('deleted:beynd-cache-v1.0.70'), before(log, 'claim', 'matchAll:window')],
+    [[CURRENT_CACHE, 'pdfjs-cache'], true, true]);
+
+  const hanging = setup([{ url: ORIGIN + '/', navigate() { log.push('navigate:/'); return new Promise(() => {}); } }]);
+  check('act.stall.hanging', 'A single window whose reload never completes: activation still resolves (the reload is not part of the waitUntil promise), after claiming and starting that reload',
+    [await bounded(hanging.worker.activate()), log.indexOf('claim') >= 0 && before(log, 'claim', 'navigate:/')], ['resolved', true]);
+}
+
 async function lookups() {
   group = 'LOOKUPS — this release\'s cache only';
   const setup = (current, opts) => {
@@ -633,7 +688,7 @@ async function gate() {
 async function main() {
   try {
     if (!RUNTIME) throw new Error('index.html has no BEYND_RUNTIME_VERSION line');
-    await versions(); await install(); await installFailure(); await activate(); await lookups(); await navigation();
+    await versions(); await install(); await installFailure(); await activate(); await activationStall(); await lookups(); await navigation();
     await shellReadiness(); await cleanupFailure(); await investmentGate(); await mixedVersions(); await gate();
   } catch (e) {
     results.push({ group, id: 'error', text: 'harness error', ok: false, detail: String(e && e.stack || e) });

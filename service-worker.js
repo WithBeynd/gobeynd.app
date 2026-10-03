@@ -72,10 +72,12 @@ self.addEventListener('activate', function (event) {
     }).then(function () {
       return self.clients.matchAll({ type: 'window' });
     }).then(function (windows) {
-      return Promise.all(windows.map(function (client) {
-        if (typeof client.navigate !== 'function') return null;
-        return Promise.resolve().then(function () { return client.navigate(client.url); }).catch(function () { return null; });
-      }));
+      // Started, never awaited: each reload's request waits for this activation to finish, so waiting for the reloads
+      // here would hold activation until the browser's event timeout.
+      windows.forEach(function (client) {
+        if (typeof client.navigate !== 'function') return;
+        Promise.resolve().then(function () { return client.navigate(client.url); }).catch(function () { return null; });
+      });
     })
   );
 });
