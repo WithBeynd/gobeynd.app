@@ -45,6 +45,9 @@ const PRODUCTION_FUNCTIONS = [
   // recurring occurrence lifecycle (FA-4B): calendar-safe advance, undo inverse, paid-occurrence month, annual reset
   'geodeIsoDateAddMonths', 'geodeIsoDateMonthsBehind', 'geodePaymentUndoDueDate', 'geodePaymentPaidOccurrenceInMonth',
   'geodeAnnualPaymentNextOccurrenceDue',
+  // completed occurrence amount (FA-4C), and the payment form's Monthly Left preview
+  'geodePaymentMonthAmount', 'geodePayModalImpactRefresh', 'geodeRenderModalImpactBlock', 'geodeCoachingLineForDelta', 'geodeCloneStateForUiCalc',
+  'escHtmlLite', 'geodeDetailsWhy',
   // month rollover
   'syncRecurringPayments', 'rollupRecurringPaymentDueDates', 'rollupRecurringExpenseDueDates',
   'geodeArchiveExpiredOneOffExpenses', 'geodeNormalizeBeyndStatement', 'geodeUpsertBeyndStatementItem',
@@ -675,7 +678,7 @@ const DEFECTS = {
   D6: 'Same-session rollover and reload disagree: the persisted g.saved / inv.balance cache stays stale until the next recompute.',
   D7: 'A savings release sized against a balance that rollover later shrinks hides later contributions (release deduction clamps at 0).',
   D8: 'Undoing a recurring completion does not revert the due-date advance, so complete → undo cycles push the next due date into later months (togglePay). Repaired in FA-4B; guarded by the H.date and FA4B.undo checks.',
-  D9: 'Editing a recurring template while its current month is completed rewrites the recorded occurrence amount (single mutable row).',
+  D9: 'Editing a recurring template while its current month is completed rewrites the recorded occurrence amount (single mutable row). Repaired in FA-4C; guarded by the F2 and FA4C checks.',
   D10: 'Entering an investment value adds currently-paid contributions on top of the entered value (saveInv baseBalance + paid rows).',
   D11: 'Annual recurrence lifecycle: completing an annual row moves its due date a year ahead at once and nothing resets it, so the completed occurrence drops out of Monthly Left and Plan, next year\'s row still shows paid, and tapping it undoes instead of completing (togglePay). Repaired in FA-4B; guarded by the FA3A.annual and FA4B.annual checks.'
 };
@@ -961,8 +964,8 @@ function goalF() {
     app.at('2026-06-15'); app.toggle(id);
     app.editPayment(id, { amount: 150 });
     const s = app.snap();
-    target('F2.goal', 'Editing the template does not rewrite June\'s recorded £100', s.goal.gH, 1100, 1150, 'D9');
-    target('F2.left', 'June Monthly Left reflects the £100 actually recorded', s.left, 2900, 2850, 'D9');
+    invariant('F2.goal', 'Editing the template does not rewrite June\'s recorded £100 (D9 closed by FA-4C)', s.goal.gH, 1100);
+    invariant('F2.left', 'June Monthly Left reflects the £100 actually recorded (D9 closed by FA-4C)', s.left, 2900);
   });
 }
 
@@ -1426,6 +1429,194 @@ function fa4bAnnual() {
   scenario('FA-4B LABEL — payment rows name their recurrence', () => {
     invariant('FA4B.label', 'rPayments: rec yes → Monthly, annual → Annual, anything else → One-off',
       extractFunction(PROGRAM.src, 'rPayments').text.indexOf("(p.rec === 'yes' ? 'Monthly' : p.rec === 'annual' ? 'Annual' : 'One-off')") >= 0, true);
+  });
+}
+
+/**
+ * FA-4C (D9, Option B): a completed occurrence keeps the amount it was completed at (lastPaidAmount). Editing a recurring
+ * row while it is paid changes its template - later occurrences - only; undo, edit, complete again corrects the amount.
+ */
+function fa4cOccurrenceAmount() {
+  const row = (app, id) => app.state().payments.filter(p => p.id === id)[0];
+  const amounts = (app, id) => { const p = row(app, id); return [p.amount, 'lastPaidAmount' in p ? p.lastPaidAmount : 'absent']; };
+  const timelines = {};
+  MODES.forEach(mode => scenario('FA-4C TEMPLATE — monthly Holiday £100 completed 15 June, edited to £150 while paid, through July [' + mode + ']', () => {
+    const STEP = { label: 'Catch up on Holiday', amount: 100 };
+    const app = new App(baseState({ incomeExplicitlySet: true }), '2026-06-05', PROGRAM.plan);
+    app.setPlan([STEP]);
+    const plan = () => { const v = app.planView(STEP); return { applied: v.applied, scheduled: v.scheduled }; };
+    const id = monthlyHoliday(app);
+    app.at('2026-06-15'); app.toggle(id);
+    const event = app.events()[0], completed = [lifecycle(app, id), amounts(app, id)];
+    app.editPayment(id, { amount: 150 });
+    if (mode === 'reload') app.reload();
+    let s = app.snap('Jun edited');
+    invariant('FA4C.template.row', 'Completing records lastPaidAmount £100; the paid edit makes the row (template) £150 and keeps lastPaidAmount £100, status, due date, lastPaidYM and lastPaidDueDate',
+      [completed, [lifecycle(app, id), amounts(app, id)]],
+      [[['paid', '2026-07-15', '2026-06', '2026-06-15'], [100, 100]], [['paid', '2026-07-15', '2026-06', '2026-06-15'], [150, 100]]]);
+    invariant('FA4C.template.event', 'The June completion stays active at £100 and pointed to; the edit appends no reversal and no replacement',
+      [evRows(app), app.activeEvents().map(e => e.amount), app.pointer(id)], [[['completion', id, 'goal:gH', '2026-06', 100, 'monthly', 'mark_completed']], [100], event.id]);
+    invariant('FA4C.template.june', 'June: Holiday £1,100; Monthly Left and confirmed Left £2,900; Plan applied £100 - the amount actually completed',
+      [s.goal.gH, s.left, s.leftConfirmed, plan()], [1100, 2900, 2900, { applied: 100, scheduled: 0 }]);
+    app.advance('2026-07-02', mode); s = app.snap('Jul 02');
+    invariant('FA4C.template.july', 'July: the upcoming July occurrence is £150 and lastPaidAmount is cleared by the monthly reset; Monthly Left £2,850, Plan sees £150 scheduled; June stays £100 (Holiday £1,100)',
+      [lifecycle(app, id), amounts(app, id), s.left, plan(), s.goal.gH, evRows(app).length],
+      [['upcoming', '2026-07-15', '', ''], [150, 'absent'], 2850, { applied: 0, scheduled: 150 }, 1100, 1]);
+    app.at('2026-07-15'); app.toggle(id); s = app.snap('Jul 15 completed');
+    invariant('FA4C.template.july-complete', 'Completing July records £150 for 2026-07 beside June\'s £100: Holiday £1,250, Monthly Left £2,850, lastPaidAmount £150',
+      [evRows(app).map(r => [r[0], r[3], r[4]]), s.goal.gH, s.left, amounts(app, id)],
+      [[['completion', '2026-06', 100], ['completion', '2026-07', 150]], 1250, 2850, [150, 150]]);
+    timelines[mode] = app.timeline;
+  }));
+  scenario('FA-4C TEMPLATE — same-session vs reload', () => parity('FA4C.template.parity', 'FA-4C TEMPLATE', timelines, undefined, ''));
+
+  scenario('FA-4C PREVIEW — the payment form previews what saving does to this month', () => {
+    const app = new App(baseState(), '2026-06-05');
+    const id = monthlyHoliday(app);
+    const preview = (p, amount) => {
+      app.run('__fields = ' + JSON.stringify({ 'geode-pay-impact-host': '', pn: p.name, pa: String(amount), pd: p.date, ps: p.status, prec: p.rec, pglid: 'gH', geode_pay_edit_id: p.id }) +
+        '; __impact = null; geodeRenderModalImpactBlock = function (line1, sentence) { __impact = [line1, sentence]; return ""; };');
+      app.call('geodePayModalImpactRefresh');
+      return JSON.parse(app.run('JSON.stringify(__impact)'));
+    };
+    const upcoming = preview(row(app, id), 150);
+    app.at('2026-06-15'); app.toggle(id);
+    invariant('FA4C.preview', 'Scheduled £100 → £150 previews Monthly Left £2,900 → £2,850; once June is completed, the same edit is a template change and previews no change to this month',
+      [upcoming, preview(row(app, id), 150)],
+      [['Left this month: £2900 → £2850', 'This lowers left this month on your plan.'], ['', 'Won\u2019t change left this month as entered.']]);
+  });
+
+  scenario('FA-4C CORRECTION — undo, edit, complete again', () => {
+    const app = new App(baseState(), '2026-06-05');
+    const id = monthlyHoliday(app);
+    app.at('2026-06-15'); app.toggle(id);
+    const first = app.events()[0];
+    app.toggle(id);
+    const undone = [lifecycle(app, id), amounts(app, id), evRows(app).slice(1)];
+    app.editPayment(id, { amount: 120 }); app.toggle(id);
+    const s = app.snap();
+    invariant('FA4C.correction', 'Undo reverses the £100 completion and clears lastPaidAmount; edited to £120 and completed again, June is a new £120 completion (lastPaidAmount £120): Holiday £1,120, Monthly Left £2,880',
+      [undone, evRows(app).slice(2), app.activeEvents().map(e => [e.occurrenceYm, e.amount]), amounts(app, id), s.goal.gH, s.left],
+      [[['upcoming', '2026-06-15', '', ''], [100, 'absent'], [['reversal', id, 'goal:gH', '2026-06', first.id, 'mark_completed']]],
+        [['completion', id, 'goal:gH', '2026-06', 120, 'monthly', 'mark_completed']], [['2026-06', 120]], [120, 120], 1120, 2880]);
+  });
+
+  scenario('FA-4C TEMPLATE — a relink while paid moves the completed amount, not the template', () => {
+    const app = new App(baseState({ goals: [HOLIDAY(), CAR()] }), '2026-06-05');
+    const id = monthlyHoliday(app);
+    app.at('2026-06-15'); app.toggle(id);
+    const first = app.events()[0];
+    app.editPayment(id, { goalId: 'gB', amount: 150 });
+    const s = app.snap();
+    invariant('FA4C.template.relink', 'Holiday → Car with £150 while paid: the June completion moves at its £100 (reversal, then Car completion 2026-06 £100); row £150, lastPaidAmount £100; Holiday £1,000, Car £600',
+      [evRows(app).slice(1), amounts(app, id), s.goal.gH, s.goal.gB],
+      [[['reversal', id, 'goal:gH', '2026-06', first.id, 'payment_form'], ['completion', id, 'goal:gB', '2026-06', 100, 'monthly', 'payment_form']], [150, 100], 1000, 600]);
+  });
+
+  scenario('FA-4C BILL — monthly phone bill £100 completed in June, edited to £150 while paid', () => {
+    const app = new App(baseState(), '2026-06-05');
+    const id = app.contribute({ name: 'Phone', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes' });
+    app.at('2026-06-15'); app.toggle(id); app.editPayment(id, { amount: 150 });
+    const june = [app.snap().left, amounts(app, id)];
+    app.advance('2026-07-02', 'reload');
+    const july = [lifecycle(app, id), amounts(app, id), app.snap().left];
+    app.at('2026-07-15'); app.toggle(id);
+    invariant('FA4C.bill', 'June stays £100 (Monthly Left £2,900; row £150, lastPaidAmount £100); July\'s occurrence is £150 (£2,850) and completing it keeps £2,850; no contribution or debt events',
+      [june, july, [app.snap().left, amounts(app, id)], app.events().length, app.state().debtPaymentEvents.length],
+      [[2900, [150, 100]], [['upcoming', '2026-07-15', '', ''], [150, 'absent'], 2850], [2850, [150, 150]], 0, 0]);
+  });
+
+  scenario('FA-4C DEBT — monthly card payment £100 completed in June, edited to £150 while paid', () => {
+    const app = new App(baseState({ debts: [{ id: 'dC', name: 'Card', balance: 2000, apr: 20, minp: 50 }] }), '2026-06-05', PROGRAM.plan);
+    const id = app.contribute({ name: 'Card payment', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes', debtId: 'dC' });
+    const debtEvents = () => app.state().debtPaymentEvents.map(e => [e.eventType, e.occurrenceYm, e.amount]);
+    app.at('2026-06-15'); app.toggle(id); app.editPayment(id, { amount: 150, debtId: 'dC' });
+    const june = [debtEvents(), app.state().debts[0].balance, app.snap().left, amounts(app, id), app.call('geodeSumPaymentsForDebtThisMonth', [app.state(), 'dC'])];
+    app.advance('2026-07-02', 'reload');
+    const july = [amounts(app, id), app.snap().left];
+    app.at('2026-07-15'); app.toggle(id);
+    invariant('FA4C.debt', 'June: the debt payment event stays £100, Card stays £2,000 (user/provider authority), Monthly Left £2,900, Plan extra above the £50 minimum £50 (from the £100 paid). July: £150 occurrence (£2,850); completing it records a £150 July event; Card still £2,000',
+      [june, july, debtEvents(), app.state().debts[0].balance],
+      [[[['completion', '2026-06', 100]], 2000, 2900, [150, 100], 50], [[150, 'absent'], 2850], [['completion', '2026-06', 100], ['completion', '2026-07', 150]], 2000]);
+  });
+
+  scenario('FA-4C ANNUAL — annual insurance £250 completed 10 June 2026, edited to £300 the same month', () => {
+    const app = new App(baseState(), '2026-06-05');
+    const id = app.contribute({ name: 'Insurance', amount: 250, date: '2026-06-10', status: 'upcoming', rec: 'annual' });
+    app.at('2026-06-10'); app.toggle(id); app.editPayment(id, { amount: 300 });
+    const june = [lifecycle(app, id), amounts(app, id), app.snap().left];
+    app.advance('2026-07-02', 'reload');
+    const july = [lifecycle(app, id)[0], app.snap().left];
+    app.advance('2027-06-01', 'reload');
+    const next = [lifecycle(app, id), amounts(app, id), app.snap().left];
+    app.at('2027-06-10'); app.toggle(id);
+    invariant('FA4C.annual.bill', 'June 2026 stays £250 (Monthly Left £2,750; row £300, lastPaidAmount £250, due date and lastPaidDueDate unchanged); July £3,000; June 2027: the annual reset clears lastPaidAmount and the upcoming 2027 occurrence is £300 (£2,700); completing it records lastPaidAmount £300, next due June 2028',
+      [june, july, next, [lifecycle(app, id), amounts(app, id), app.snap().left]],
+      [[['paid', '2027-06-10', '2026-06', '2026-06-10'], [300, 250], 2750], ['paid', 3000], [['upcoming', '2027-06-10', '', ''], [300, 'absent'], 2700],
+        [['paid', '2028-06-10', '2027-06', '2027-06-10'], [300, 300], 2700]]);
+  });
+
+  scenario('FA-4C ANNUAL — annual Holiday £250 completed June 2026, edited to £300 in June', () => {
+    const { app, id, event } = completedAnnual('2026-06-10', '2026-06-10');
+    app.editPayment(id, { amount: 300 });
+    const june = [evRows(app), amounts(app, id), app.snap().goal.gH, app.snap().left];
+    app.advance('2027-06-05', 'reload');
+    app.at('2027-06-10'); app.toggle(id);
+    invariant('FA4C.annual.goal', 'June 2026: the completion stays £250 (no event), Holiday £1,250, Monthly Left £2,750; June 2027 completes at £300 beside it - Holiday £1,550',
+      [june, app.activeEvents().map(e => [e.occurrenceYm, e.amount]), app.snap().goal.gH],
+      [[[evRow(event)], [300, 250], 1250, 2750], [['2026-06', 250], ['2027-06', 300]], 1550]);
+  });
+
+  scenario('FA-4C LEGACY — rows completed before lastPaidAmount existed', () => {
+    const legacy = () => new App(baseState({
+      debts: [{ id: 'dC', name: 'Card', balance: 2000, apr: 20, minp: 50 }],
+      payments: [{ id: 'b', name: 'Gym', amount: 40, status: 'paid', rec: 'yes', lastPaidYM: '2026-06', date: '2026-07-15' },
+        { id: 'd', name: 'Card payment', amount: 100, status: 'paid', rec: 'yes', lastPaidYM: '2026-06', date: '2026-07-15', debtId: 'dC', payKind: 'debt' }]
+    }), '2026-06-20');
+    const app = legacy();
+    const read = [app.snap().left, amounts(app, 'b'), amounts(app, 'd')];
+    app.editPayment('b', {}); app.editPayment('d', { debtId: 'dC' });
+    const unchanged = [amounts(app, 'b'), amounts(app, 'd'), app.snap().left];
+    app.editPayment('b', { amount: 60 }); app.editPayment('d', { amount: 150, debtId: 'dC' });
+    const edited = [amounts(app, 'b'), amounts(app, 'd'), app.snap().left, app.state().debts[0].balance];
+    app.advance('2026-07-02', 'reload');
+    invariant('FA4C.legacy', 'Without lastPaidAmount the row amount is used (Monthly Left £2,860, no £0 or NaN); a save with nothing changed writes nothing; the first paid amount edit keeps the amount the row was completed at as lastPaidAmount (Gym £40, card £100: still £2,860, Card £2,000); July uses the new amounts (£2,790)',
+      [read, unchanged, edited, [amounts(app, 'b'), amounts(app, 'd'), app.snap().left]],
+      [[2860, [40, 'absent'], [100, 'absent']], [[40, 'absent'], [100, 'absent'], 2860], [[60, 40], [150, 100], 2860, 2000], [[60, 'absent'], [150, 'absent'], 2790]]);
+  });
+
+  scenario('FA-4C AMOUNT — geodePaymentMonthAmount reads lastPaidAmount only for this month\'s paid recurring occurrence', () => {
+    const app = new App(baseState(), '2026-07-10');
+    const paid = o => Object.assign({ status: 'paid', rec: 'yes', lastPaidYM: '2026-07', date: '2026-08-15', amount: 150, lastPaidAmount: 100 }, o);
+    const cases = [
+      ['monthly, completed this month', paid({}), 100],
+      ['annual, completed this month', paid({ rec: 'annual', date: '2027-07-15' }), 100],
+      ['completed last month (stale)', paid({ lastPaidYM: '2026-06' }), 150],
+      ['no completion month', paid({ lastPaidYM: '' }), 150],
+      ['upcoming', paid({ status: 'upcoming', lastPaidYM: '' }), 150],
+      ['one-off', paid({ rec: 'no' }), 150],
+      ['no lastPaidAmount', paid({ lastPaidAmount: undefined }), 150],
+      ['lastPaidAmount 0', paid({ lastPaidAmount: 0 }), 150],
+      ['lastPaidAmount negative', paid({ lastPaidAmount: -5 }), 150],
+      ['lastPaidAmount text', paid({ lastPaidAmount: '100' }), 150],
+      ['lastPaidAmount null', paid({ lastPaidAmount: null }), 150],
+      ['row amount not a number', paid({ amount: 'abc', lastPaidAmount: undefined }), 0]
+    ];
+    invariant('FA4C.amount.matrix', 'Only a positive numeric lastPaidAmount on a paid monthly/annual row completed this month replaces the row amount; anything else falls back to the row amount (never NaN)',
+      cases.map(c => [c[0], app.call('geodePaymentMonthAmount', [c[1]])]), cases.map(c => [c[0], c[2]]));
+  });
+
+  scenario('FA-4C INVESTMENT — monthly ISA £100 completed in June, edited to £150 while paid', () => {
+    const app = new App(baseState(), '2026-06-05');
+    const id = app.contribute({ name: 'ISA monthly', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes', investId: 'iA' });
+    app.at('2026-06-15'); app.toggle(id);
+    const event = app.events()[0];
+    app.editPayment(id, { amount: 150 });
+    const s = app.snap();
+    invariant('FA4C.invest.occurrence', 'The investment completion stays £100 (no reversal or replacement), row £150 with lastPaidAmount £100, June Monthly Left £2,900; baseBalance untouched (£5,000)',
+      [evRows(app), app.pointer(id), amounts(app, id), s.left, app.state().investments[0].baseBalance],
+      [[['completion', id, 'investment:iA', '2026-06', 100, 'monthly', 'mark_completed']], event.id, [150, 100], 2900, 5000]);
+    current('FA4C.invest.legacy-balance', 'ISA balance £5,150: investments keep legacy authority (base + paid rows at the row amount), as before FA-4C - the template edit moves it at once (FA-7)', s.inv.iA, 5150);
   });
 }
 
@@ -2529,8 +2720,15 @@ function fa3aAnnual() {
     ({ app, id, event } = completedAnnual('2026-06-10', '2026-06-10'));
     app.at('2026-07-01');
     app.editPayment(id, { amount: 300 });
-    invariant('FA3A.annual.edit.same-occurrence', 'Changing it to £300 in July 2026 reverses the completion and records £300 for the 2026 occurrence',
-      evRows(app).slice(1), [['reversal', id, 'goal:gH', '2026-06', event.id, 'payment_form'], ['completion', id, 'goal:gH', '2026-06', 300, 'annual', 'payment_form']]);
+    const edited = [evRows(app), app.pointer(id), lifecycle(app, id), [app.state().payments[0].amount, app.state().payments[0].lastPaidAmount], app.snap().goal.gH];
+    app.advance('2027-06-05', 'reload');
+    const upcoming27 = [lifecycle(app, id), app.state().payments[0].amount, 'lastPaidAmount' in app.state().payments[0], app.snap().left];
+    app.at('2027-06-10'); app.toggle(id);
+    invariant('FA3A.annual.edit.same-occurrence', 'Changing it to £300 in July 2026 changes the template only (FA-4C, D9 Option B; before FA-4C it reversed the completion and recorded £300 for the 2026 occurrence): the 2026 completion stays active at £250 and pointed to, no event, lastPaidYM / due date / lastPaidDueDate unchanged, lastPaidAmount £250, Holiday £1,250. June 2027: the upcoming 2027 occurrence is £300 (Monthly Left £2,700); completing it records £300 for 2027-06 beside the 2026 £250 - Holiday £1,550',
+      [edited, upcoming27, evRows(app), app.snap().goal.gH],
+      [[[evRow(event)], event.id, ['paid', '2027-06-10', '2026-06', '2026-06-10'], [300, 250], 1250],
+        [['upcoming', '2027-06-10', '', ''], 300, false, 2700],
+        [evRow(event), ['completion', id, 'goal:gH', '2027-06', 300, 'annual', 'mark_completed']], 1550]);
   });
 
   scenario('FA-3A ANNUAL — a later occurrence never rewrites the 2026 completion', () => {
@@ -2783,13 +2981,13 @@ function fa3bPointers() {
       [[[['reversal', 'p1', 'goal:gH', '2026-06', oneOff[1][0], 'mark_completed']], [oneOff[1][0], 0, null, 1000]],
         [[['reversal', 'pm', 'goal:gH', '2026-08', seeded.id, 'mark_completed']], [seeded.id, 0, null, 1000]]]);
 
+    const editedRow = (app, seeded, id) => { const p = app.state().payments[0]; return [app.events().length, app.pointer(id) === seeded.id, [p.amount, p.lastPaidAmount], app.snap().goal.gH]; };
     ({ app, seeded } = after(G3, a => a.editPayment('pm', { amount: 150 })));
-    const monthly = [tail(app, 1), app.pointer('pm') === app.events()[2].id, seeded.id];
+    const monthly = editedRow(app, seeded, 'pm');
     ({ app, seeded } = after(G2, a => { a.at('2026-09-01'); a.editPayment('pa', { amount: 300 }); }));
-    invariant('FA3B.pointer.edit', 'A paid edit reverses the migrated completion and records the new amount for the same occurrence: monthly £150 (August), annual £300 in September (2026-06)',
-      [monthly, tail(app, 1)],
-      [[[['reversal', 'pm', 'goal:gH', '2026-08', monthly[2], 'payment_form'], ['completion', 'pm', 'goal:gH', '2026-08', 150, 'monthly', 'payment_form']], true, monthly[2]],
-        [['reversal', 'pa', 'goal:gH', '2026-06', seeded.id, 'payment_form'], ['completion', 'pa', 'goal:gH', '2026-06', 300, 'annual', 'payment_form']]]);
+    invariant('FA3B.pointer.edit', 'A paid amount edit of a migrated recurring row changes the template only (FA-4C, D9 Option B; before FA-4C it reversed the migrated completion and recorded the new amount for the same occurrence): monthly £100 → £150 in August and annual £250 → £300 in September keep the migrated completion active and pointed to, record no event, and the row (no lastPaidAmount before) keeps its completed amount as lastPaidAmount; Holiday £1,100 / £1,250',
+      [monthly, editedRow(app, seeded, 'pa')],
+      [[1, true, [150, 100], 1100], [1, true, [300, 250], 1250]]);
 
     ({ app, seeded } = after(G1, a => a.del('p1')));
     const deleted = [tail(app, 1), app.activeEvents().length, seeded.id];
@@ -3848,9 +4046,10 @@ function fa3cb3aForm() {
 
     const am = edit('pm', { amount: '250' });
     const nat = b3aLoad([b3aUpcoming('nm', 'yes')]); nat.toggle('nm'); nat.modalEdit('nm', { amount: '250' });
-    invariant('FA3CB3A.monthly.amount', 'Amount £200 → £250 while paid. Provenance: the ambiguous row keeps lastPaidYM empty and gains no event (also after reload); its transition carry is amended to £250 (two carry records). Amount: Holiday £1,250 (£1,000 + the amended carry); a row completed natively this month keeps lastPaidYM 2026-08 and its completion is replaced for the same occurrence at £250 (FA-3A) — £1,250',
-      [am[1], am[2], am[3].snap().goal.gH, b3aRow(nat, 'nm').lastPaidYM, b3aActive(nat), nat.events().map(e => e.eventType), b3aView(nat)],
-      [['', 0, 2], ['', 0, 2], 1250, '2026-08', [['goal:gH', '2026-08', 250]], ['completion', 'reversal', 'completion'], [1250, 1250]]);
+    invariant('FA3CB3A.monthly.amount', 'Amount £200 → £250 while paid. Provenance: the ambiguous row keeps lastPaidYM empty and gains no event (also after reload); its transition carry is amended to £250 (two carry records). Amount: Holiday £1,250 (£1,000 + the amended carry); a row completed natively this month keeps lastPaidYM 2026-08 and, a template edit (FA-4C, D9 Option B; before FA-4C its completion was replaced at £250), keeps its £200 completion and records nothing - row £250, lastPaidAmount £200, £1,200',
+      [am[1], am[2], am[3].snap().goal.gH, b3aRow(nat, 'nm').lastPaidYM, b3aActive(nat), nat.events().map(e => e.eventType), b3aView(nat),
+        [b3aRow(nat, 'nm').amount, b3aRow(nat, 'nm').lastPaidAmount]],
+      [['', 0, 2], ['', 0, 2], 1250, '2026-08', [['goal:gH', '2026-08', 200]], ['completion'], [1200, 1200], [250, 200]]);
 
     const lk = edit('pm', { goalId: 'gB' });
     invariant('FA3CB3A.monthly.link', 'Relinked Holiday → Car (a move FA-3C-B.2 permits): lastPaidYM stays empty, no event — the transition carry moves with it (two carry records), reload seeds nothing on Car either (Holiday £1,000, Car £700)',
@@ -3915,8 +4114,9 @@ function fa3cb3aForm() {
     invariant('FA3CB3A.annual.rename-delete', 'Completed natively → renamed → deleted: the occurrence the row still represents is reversed (FA-3A delete policy), legacy and simulated agree at £1,000',
       [b3aActive(dl), dl.events().map(e => e.eventType), b3aView(dl)], [[], ['completion', 'reversal'], [1000, 1000]]);
     const ar = native(); ar.modalEdit('na', { name: 'renamed' }); ar.modalEdit('na', { amount: '300' });
-    invariant('FA3CB3A.annual.rename-amount', 'Completed natively → renamed → amount £300: the same 2026-08 occurrence is replaced at £300 (FA-3A amount edit), no new occurrence; legacy and simulated agree at £1,300',
-      [b3aActive(ar), ar.events().map(e => e.eventType), b3aView(ar)], [[['goal:gH', '2026-08', 300]], ['completion', 'reversal', 'completion'], [1300, 1300]]);
+    invariant('FA3CB3A.annual.rename-amount', 'Completed natively → renamed → amount £300: a template edit (FA-4C, D9 Option B; before FA-4C the 2026-08 occurrence was replaced at £300) - the 2026-08 completion stays active at £200, no new event or occurrence, row £300 with lastPaidAmount £200; legacy and simulated agree at £1,200',
+      [b3aActive(ar), ar.events().map(e => e.eventType), b3aView(ar), [b3aRow(ar, 'na').amount, b3aRow(ar, 'na').lastPaidAmount]],
+      [[['goal:gH', '2026-08', 200]], ['completion'], [1200, 1200], [300, 200]]);
 
     const ma = b3aLoad([b3aUpcoming('mt', 'yes')]); ma.toggle('mt'); ma.modalEdit('mt', { rec: 'annual' });
     const maMid = [b3aRow(ma, 'mt').rec, b3aRow(ma, 'mt').lastPaidYM, b3aActive(ma)];
@@ -4872,7 +5072,7 @@ function main() {
   }
   harnessFidelity();
   goalA(); goalB(); goalC(); goalD(); goalE(); goalF(); goalG(); goalH();
-  missedRecurring(); investments(); quickSetup(); monthlyLeft(); fa4aQuickSetup(); fa4aLapse(); fa4bMonthEnd(); fa4bUndo(); fa4bAnnual(); identity(); identityMatrix(); planActions(); releases(); deposits();
+  missedRecurring(); investments(); quickSetup(); monthlyLeft(); fa4aQuickSetup(); fa4aLapse(); fa4bMonthEnd(); fa4bUndo(); fa4bAnnual(); fa4cOccurrenceAmount(); identity(); identityMatrix(); planActions(); releases(); deposits();
   fa2Goals(); fa2Investments(); fa2Deposits();
   fa3aLedger(); fa3aGoals(); fa3aInvestments(); fa3aSmartImport(); fa3aDeletion(); fa3aIdentity(); fa3aRollover(); fa3aProtection(); fa3aAnnual(); fa3aOccurrence();
   fa3bOrder(); fa3bMatrix(); fa3bPointers(); fa3bParity(); fa3bLifecycle();

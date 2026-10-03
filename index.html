@@ -4815,6 +4815,18 @@ function geodePaymentPaidOccurrenceInMonth(p, ym) {
 }
 
 /**
+ * FA-4C: the amount a row stands for this month. This month's paid monthly or annual occurrence keeps the amount it was
+ * completed at (lastPaidAmount): editing the row while it is paid changes the template for later occurrences only.
+ * Otherwise (unpaid, one-off, or no usable lastPaidAmount on an older row) the row amount. Never read for balances.
+ */
+function geodePaymentMonthAmount(p) {
+  var amt = toNum(p && p.amount);
+  if (!geodePaymentPaidOccurrenceInMonth(p, currentYM())) return amt;
+  var paid = typeof p.lastPaidAmount === 'number' ? p.lastPaidAmount : NaN;
+  return isFinite(paid) && paid > 0 ? paid : amt;
+}
+
+/**
  * FLOW: scheduled payments that affect “left this month”.
  * — Recurring (repeat monthly): counts as this month’s outflow until marked paid; once paid, counts if paid this month.
  * — One-time: counts if due this calendar month (or overdue / no date, same as before).
@@ -5286,7 +5298,7 @@ function sumPaymentsMonthlyOutflow(payments) {
   var list = payments || [];
   var sum = 0;
   for (var i = 0; i < list.length; i++) {
-    if (paymentCountsForMonthlyOutflow(list[i])) sum += toNum(list[i].amount);
+    if (paymentCountsForMonthlyOutflow(list[i])) sum += geodePaymentMonthAmount(list[i]);
   }
   return sum;
 }
@@ -5315,7 +5327,7 @@ function sumPaymentsMonthlyOutflowConfirmedOnly(payments) {
   var list = payments || [];
   var sum = 0;
   for (var i = 0; i < list.length; i++) {
-    if (paymentCountsForMonthlyOutflowConfirmedOnly(list[i])) sum += toNum(list[i].amount);
+    if (paymentCountsForMonthlyOutflowConfirmedOnly(list[i])) sum += geodePaymentMonthAmount(list[i]);
   }
   return sum;
 }
@@ -5536,7 +5548,7 @@ function geodeDebtPaymentLooksLikeExtraAction(p) {
 function geodePaymentAmountTowardDebtMinimum(state, debt, p, minp) {
   if (!p || !debt || minp <= 0) return 0;
   if (!paymentCountsForMonthlyOutflow(p)) return 0;
-  var amt = toNum(p.amount);
+  var amt = geodePaymentMonthAmount(p);
   if (amt <= 0) return 0;
   if (geodeDebtPaymentLooksLikeExtraAction(p)) return 0;
   var threshold = minp * 0.85;
@@ -5733,7 +5745,7 @@ function geodeStage62ContributionCommitmentTotals(state) {
   for (var i = 0; i < pay.length; i++) {
     var p = pay[i];
     if (!p || !paymentCountsForMonthlyOutflowDisplay(p)) continue;
-    var amt = toNum(p.amount);
+    var amt = geodePaymentMonthAmount(p);
     if (amt <= 0) continue;
     var st = geodePaymentEffectiveStatus(p);
     if (st === 'paid') out.completed += amt;
@@ -7192,6 +7204,10 @@ function geodeAppendContributionReversal(completion, source) {
  * Stays paid: if the amount, goal/investment or recurrence changed, reverse the active completion and append its
  * replacement for the same occurrence. A paid row without a recorded completion gains one only when its effect did
  * not count before; completions from before the ledger existed are left to migration.
+ * FA-4C: in the payment form, a recurring row (monthly/annual before and after) that stays paid is a template edit:
+ * the completed occurrence keeps its recorded amount, so an amount-only edit records nothing and a relink replaces at
+ * that amount. The new amount applies from the next occurrence. Undo then complete again corrects a completed amount;
+ * a Smart Import merge records the imported transaction amount as before.
  * FA-3C-B.3b: the occurrence comes from evidence the action actually has. Becoming paid through the app (mark
  * completed, payment form) proves the money moved now: the current month, whatever the due date says. Smart Import
  * rows carry their transaction date. A row that was already paid and only now counts proves no completion now: it is
@@ -7217,6 +7233,10 @@ function geodeRecordContributionTransition(before, after, source) {
     if (carry) {
       geodeContributionCarryFollowRow(carry, after, source);
       return;
+    }
+    if (prior && next && source === 'payment_form' && (before.rec === 'yes' || before.rec === 'annual') &&
+        (after.rec === 'yes' || after.rec === 'annual')) {
+      next.amount = prior.amount;
     }
     if (prior && next && prior.entityType === next.entityType && prior.entityId === next.entityId &&
         prior.amount === next.amount && prior.recurrence === next.recurrence) {
@@ -9457,6 +9477,7 @@ function syncRecurringPayments() {
         p.status = 'upcoming';
         p.lastPaidYM = '';
         delete p.lastPaidDueDate;
+        delete p.lastPaidAmount;
         delete p.debtPaymentCompletionEventId;
         delete p.contributionEventId;
         changed = true;
@@ -13109,6 +13130,8 @@ function geodeSmartImportConfirm() {
           if (String(pex.status || '') !== String(st || '')) delete pex.debtPaymentCompletionEventId;
           pex.status = st;
           pex.rec = pex.rec || 'no';
+          if (st === 'paid' && (pex.rec === 'yes' || pex.rec === 'annual')) pex.lastPaidAmount = toNum(am);
+          else delete pex.lastPaidAmount;
           pex.goalId = gid;
           pex.investId = invid;
           pex.debtId = did;
@@ -25180,7 +25203,7 @@ function geodeSumPaymentsForDebtThisMonth(state, debtId) {
     var p = pay[i];
     if (!p || String(p.debtId || '') !== String(debtId)) continue;
     if (!geodePaymentCountsAsPaidInCurrentMonth(p)) continue;
-    var amt = toNum(p.amount);
+    var amt = geodePaymentMonthAmount(p);
     if (amt <= 0) continue;
     if (minp <= 0 || geodeDebtPaymentLooksLikeExtraAction(p)) {
       sum += amt;
@@ -25235,7 +25258,7 @@ function geodeSumPaymentsForGoalThisMonth(state, goalId) {
     var p = pay[i];
     if (!p || String(p.goalId || '') !== String(goalId)) continue;
     if (!geodePaymentCountsAsPaidInCurrentMonth(p)) continue;
-    sum += toNum(p.amount);
+    sum += geodePaymentMonthAmount(p);
   }
   return sum;
 }
@@ -25248,7 +25271,7 @@ function geodeSumPaymentsForInvestThisMonth(state, investId) {
     var p = pay[i];
     if (!p || String(p.investId || '') !== String(investId)) continue;
     if (!geodePaymentCountsAsPaidInCurrentMonth(p)) continue;
-    sum += toNum(p.amount);
+    sum += geodePaymentMonthAmount(p);
   }
   return sum;
 }
@@ -25433,8 +25456,8 @@ function geodeSumBufferContributionsThisMonth(state) {
   for (var i = 0; i < pay.length; i++) {
     var p = pay[i];
     if (!p || !geodePaymentCountsAsPaidInCurrentMonth(p)) continue;
-    if (eg && p.goalId && String(p.goalId) === String(eg.id)) sum += toNum(p.amount);
-    else if (geodePaymentNameLooksLikeBuffer(p.name)) sum += toNum(p.amount);
+    if (eg && p.goalId && String(p.goalId) === String(eg.id)) sum += geodePaymentMonthAmount(p);
+    else if (geodePaymentNameLooksLikeBuffer(p.name)) sum += geodePaymentMonthAmount(p);
   }
   return sum;
 }
@@ -39920,9 +39943,13 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
       var newD = String(dt || '').slice(0, 10);
       existing.date = exD && newD && exD < newD ? existing.date : dt;
       if (debtid) existing.rec = existing.rec === 'yes' || rec === 'yes' ? 'yes' : 'no';
+      delete existing.lastPaidAmount;
       if (st === 'paid') {
         existing.status = 'paid';
-        if (existing.rec === 'yes' || existing.rec === 'annual') existing.lastPaidYM = currentYM();
+        if (existing.rec === 'yes' || existing.rec === 'annual') {
+          existing.lastPaidYM = currentYM();
+          existing.lastPaidAmount = toNum(existing.amount);
+        }
         else existing.lastPaidYM = '';
       } else {
         existing.status =
@@ -39968,6 +39995,8 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     savedPayBefore = geodeDebtPaymentEventSnapshot(ex);
     savedPayContributionBefore = geodeContributionEventSnapshot(ex);
     var exWasPaid = String(ex.status || '') === 'paid';
+    var exWasPaidRecurring = exWasPaid && (ex.rec === 'yes' || ex.rec === 'annual');
+    var exAmountBefore = toNum(ex.amount);
     ex.name=nm;
     ex.amount=Number(am);
     ex.date=dt;
@@ -39980,6 +40009,11 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     // FA-3C-B.3a: lastPaidYM is occurrence evidence; a row that stays completed keeps it whatever else the form changed.
     if(st!=='paid')ex.lastPaidYM='';
     else if(!exWasPaid)ex.lastPaidYM=rec==='yes'||rec==='annual'?currentYM():'';
+    // FA-4C: a recurring row that stays completed keeps the amount its occurrence was completed at; the form amount is
+    // the template for later occurrences. A row from before lastPaidAmount was completed at the amount it held until now.
+    if(st!=='paid'||(rec!=='yes'&&rec!=='annual'))delete ex.lastPaidAmount;
+    else if(!exWasPaidRecurring)ex.lastPaidAmount=toNum(ex.amount);
+    else if(!(typeof ex.lastPaidAmount==='number'&&isFinite(ex.lastPaidAmount)&&ex.lastPaidAmount>0)&&toNum(ex.amount)!==exAmountBefore)ex.lastPaidAmount=exAmountBefore;
     if (!ex.createdAt) ex.createdAt = Date.now();
     savedPayRow = ex;
     savedPayRowId = ex.id;
@@ -39990,7 +40024,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     if (debtid || gid || invid) didUpsert = geodeUpsertLinkedPaymentForThisMonth();
     if (!didUpsert) {
       var row={id:uid(),name:nm,amount:Number(am),date:dt,status:st,rec:rec,lastPaidYM:'',goalId:gid,investId:invid,debtId:debtid,payKind:payKind,createdAt:Date.now()};
-      if((rec==='yes'||rec==='annual')&&st==='paid')row.lastPaidYM=currentYM();
+      if((rec==='yes'||rec==='annual')&&st==='paid'){row.lastPaidYM=currentYM();row.lastPaidAmount=toNum(row.amount);}
       if (payLinkedIntent === 'new' && (gid || invid)) row.directContribution = true;
       S.payments.push(row);
       savedPayRow = row;
@@ -40094,11 +40128,14 @@ function togglePay(id){
     var _undoDue = geodePaymentUndoDueDate(p);
     if (_undoDue) p.date = _undoDue;
     delete p.lastPaidDueDate;
+    delete p.lastPaidAmount;
     p.status='upcoming';
     p.lastPaidYM='';
   }else{
     p.status='paid';
     delete p.lastPaidDueDate;
+    delete p.lastPaidAmount;
+    if(p.rec==='yes'||p.rec==='annual')p.lastPaidAmount=toNum(p.amount);
     if(p.rec==='yes'){
       p.lastPaidYM=currentYM();
       var _dueBefore = p.date;
@@ -40264,6 +40301,13 @@ function geodePayModalImpactRefresh() {
     var replaced = false;
     for (var i = 0; i < temp.payments.length; i++) {
       if (temp.payments[i] && temp.payments[i].id === editId) {
+        var prevRow = temp.payments[i];
+        if (st === 'paid' && (rec === 'yes' || rec === 'annual') && prevRow.status === 'paid' &&
+            (prevRow.rec === 'yes' || prevRow.rec === 'annual')) {
+          row.lastPaidYM = String(prevRow.lastPaidYM || '');
+          row.lastPaidAmount = typeof prevRow.lastPaidAmount === 'number' && isFinite(prevRow.lastPaidAmount) &&
+            prevRow.lastPaidAmount > 0 ? prevRow.lastPaidAmount : toNum(prevRow.amount);
+        }
         temp.payments[i] = row;
         replaced = true;
         break;
