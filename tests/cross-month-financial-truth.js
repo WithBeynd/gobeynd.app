@@ -55,7 +55,9 @@ const PRODUCTION_FUNCTIONS = [
   // balances
   'geodeRecomputeBalancesFromPayments', 'geodePaymentBalanceEffect', 'geodeGoalCountedContributions',
   'geodeNormalizeGoalInvestBaseFields', 'geodeSavingsReleaseDeductionSumForSource',
-  'geodeGoalEffectiveSavedFromState', 'geodeGoalHasPositiveLinkedInvestmentForState', 'geodeGoalLinkedInvBalanceForState',
+  'geodeGoalEffectiveSavedFromState', 'geodeGoalHasLinkedInvestmentAuthorityForState', 'geodeGoalLinkedInvBalanceForState',
+  // linked-goal investment authority (FA-7D): the linked position, zero included, and one destination for contributions
+  'geodeGoalLinkedInvestmentAuthorityForState', 'geodeLinkedGoalContributionRefusal', 'geodeInvestmentValueEstimated',
   // investment position authority (FA-7B): valuation anchors, contribution / release ordering, the load-time transition
   'geodeInvestmentIsoDateValid', 'geodeInvestmentValuationValid', 'geodeInvestmentValuations', 'geodeInvestmentOrderedAfter',
   'geodeInvestmentLatestValuation', 'geodeContributionEffectiveDate', 'geodeInvestmentContributionFlows', 'geodeInvestmentReleaseFlows',
@@ -104,7 +106,7 @@ const PRODUCTION_FUNCTIONS = [
   'geodeContributionCarryFor', 'geodeContributionCarryForRow', 'geodeResolveContributionCarry', 'geodeContributionCarryFollowRow',
   'geodeContributionSaveRefusal',
   // Smart Import and backup export / restore extraction
-  'geodeSmartImportConfirm', 'geodeSmartImportRefusedMergeLine', 'exportJSONBackup', 'isPlainObject', 'validateBeyndBackupEnvelope',
+  'geodeSmartImportConfirm', 'geodeSmartImportRefusedMergeLine', 'geodeSmartImportRefusedLinkedGoalLine', 'exportJSONBackup', 'isPlainObject', 'validateBeyndBackupEnvelope',
   'geodeBeyndBackupRestorableKeyWhitelist', 'geodeBeyndBackupForbiddenDataKeys', 'extractRestorableData',
   // activity log
   'appendActivityLog', 'trimActivityLogForRetention'
@@ -302,7 +304,7 @@ function __authority() {
   (S.goals || []).forEach(function (g) {
     var position = geodeSchema2GoalPosition(S, g);
     goals[g.id] = { parts: geodeSchema2GoalParts(S, g), position: position,
-      shown: geodeGoalHasPositiveLinkedInvestmentForState(S, g) ? geodeGoalLinkedInvBalanceForState(S, g.id) : position };
+      shown: geodeGoalHasLinkedInvestmentAuthorityForState(S, g) ? geodeGoalLinkedInvBalanceForState(S, g.id) : position };
   });
   return JSON.stringify({ carry: S.contributionCarry || [], active: geodeContributionCarryActive(S), goals: goals });
 }
@@ -587,12 +589,12 @@ class App {
       status: f.status, rec: f.rec ? 'yes' : 'no', goalId: f.goalId, investId: f.investId, debtId: f.debtId });
     return intent;
   }
-  /** The edit form production openPayModal renders for a row: each input's value and each select's selected option (else its first). */
-  modalForm(id) {
+  /** The form production openPayModal renders for a row (or, with id null, a new one from prefill): each input's value and each select's selected option (else its first). */
+  modalForm(id, prefill) {
     const ctx = vm.createContext({ console: { log() {}, info() {}, warn() {}, error() {} } });
     PROGRAM.payModal.runInContext(ctx);
     ctx.__stateJson = JSON.stringify(this.state());
-    const html = vm.runInContext('S = JSON.parse(__stateJson); openPayModal(' + JSON.stringify(id) + '); __html', ctx);
+    const html = vm.runInContext('S = JSON.parse(__stateJson); openPayModal(' + JSON.stringify(id) + (prefill ? ', ' + JSON.stringify(prefill) : '') + '); __html', ctx);
     const text = v => v.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
     const input = f => { const m = html.match(new RegExp('id="' + f + '"[^>]*? value="([^"]*)"')); return m ? text(m[1]) : ''; };
     const select = f => {
@@ -2243,8 +2245,9 @@ function fa2Goals() {
   });
 
   scenario('FA-2 GOAL — Saved So Far disabled by a linked investment', () => {
-    const app = freshApp(holidayOneOff, { investments: [Object.assign(ISA(), { goalId: 'gH' })] });
-    invariant('FA2.G.linked.before', 'The linked ISA (£5,000) provides the goal position; the goal\'s own cache is £1,250', [app.snap().goal.gH, goalOf(app).saved], [5000, 1250]);
+    const app = freshApp(holidayOneOff);
+    app.editInvestment('iA', { xgoalid: 'gH' });
+    invariant('FA2.G.linked.before', 'The June £250 completed, then the ISA linked through its form (FA-7D: a new contribution to an already linked goal goes to the investment): the linked ISA (£5,000) provides the goal position; the goal\'s own cache is £1,250', [app.snap().goal.gH, goalOf(app).saved], [5000, 1250]);
     app.renameGoal('gH', 'Summer holiday');
     invariant('FA2.G.linked-investment', 'Rename submits the disabled field unchanged: goal baseSaved stays £1,000, own amount £1,250, shown £5,000',
       [goalOf(app).baseSaved, goalOf(app).saved, app.snap().goal.gH], [1000, 1250, 5000]);
@@ -3387,9 +3390,9 @@ function fa3caLinkedAndCorrection() {
       const a = authority(app);
       return [app.snap().goal.gH, a.goals.gH.position, a.goals.gH.shown, a.goals.gH.parts.dated, a.goals.gH.parts.carry, carryRows(app.state().contributionCarry).map(c => c[0]), app.snap().inv.iA];
     };
-    invariant('FA3CA.linked', '[shown, position, display rule, dated, carry, carried payments, ISA]: ISA £5,200 linked → Holiday shows the ISA (its own position £1,350 = £1,000 + dated £250 + carry £100; the ISA completion £200 never enters it); ISA at £0 → Holiday shows its position £1,350',
+    invariant('FA3CA.linked', '[shown, position, display rule, dated, carry, carried payments, ISA]: ISA £5,200 linked → Holiday shows the ISA (its own position £1,350 = £1,000 + dated £250 + carry £100; the ISA completion £200 never enters it); ISA at £0 → Holiday shows £0 (FA-7D: the ISA\'s valid £0 opening anchor is authority, not a reason to fall back), while its own position £1,350 stays intact',
       [look(linked({ balance: 5200 }, goalRows.concat([legacyInvPay('pi', { date: '2026-06-05' })]))), look(linked({ balance: 0, baseBalance: 0 }, goalRows))],
-      [[5200, 1350, 5200, 250, 100, ['px'], 5200], [1350, 1350, 1350, 250, 100, ['px'], 0]]);
+      [[5200, 1350, 5200, 250, 100, ['px'], 5200], [0, 1350, 0, 250, 100, ['px'], 0]]);
   });
 
   scenario('FA-3C-A SAVED SO FAR — schema-2 correction arithmetic through saveGoal', () => {
@@ -5587,6 +5590,147 @@ function fa7cSmartImport() {
   });
 }
 
+// ───────────────────────────── FA-7D linked-goal investment authority ─────────────────────────────
+
+/** Holiday (target £10,000, its own Saved £1,000) and the ISA (opening anchor £5,000) on 5 June. */
+const fa7dApp = (extra, program) => new App(baseState(Object.assign({ goals: [Object.assign(HOLIDAY(), { amount: 10000 })] }, extra || {})), '2026-06-05', program);
+/** [Holiday shown, Holiday's own cache, baseSaved, contribution events, releases, ISA valuations, ISA shown] */
+const fa7dLook = app => {
+  const g = app.state().goals.filter(x => x.id === 'gH')[0];
+  return [app.snap().goal.gH, g.saved, g.baseSaved, app.events().length, (app.state().savingsReleases || []).length, fa7bVals(app).length, app.snap().inv.iA];
+};
+/** Links (goalId) or unlinks ('') the ISA through its edit form. */
+const fa7dLink = (app, goalId) => app.editInvestment('iA', { xgoalid: goalId });
+const REFUSED_LINKED_GOAL = 'This goal is linked to an investment, so contributions to it are recorded against the investment. Link this contribution to the investment instead.';
+
+function fa7dLinkedGoals() {
+  MODES.forEach(mode => scenario('FA-7D J10 — the linked goal follows the investment, £0 included; unlink and relink [' + mode + ']', () => {
+    const app = fa7dApp();
+    const seq = [fa7dLook(app)];
+    app.at('2026-06-06'); fa7dLink(app, 'gH'); seq.push(fa7dLook(app));
+    app.advance('2026-06-10', mode); app.saveInvestment('iA', 'ISA', 4500); seq.push(fa7dLook(app));
+    app.advance('2026-07-01', mode); app.saveInvestment('iA', 'ISA', 0); seq.push(fa7dLook(app));
+    app.advance('2026-07-15', mode); app.saveInvestment('iA', 'ISA', 3000); seq.push(fa7dLook(app));
+    app.advance('2026-08-03', mode); fa7dLink(app, ''); seq.push(fa7dLook(app));
+    app.advance('2026-08-20', mode); fa7dLink(app, 'gH'); seq.push(fa7dLook(app));
+    app.reload(); seq.push(fa7dLook(app));
+    const own = [1000, 1000, 0, 0];
+    invariant('FA7D.J10', 'J10: Holiday (target £10,000, own Saved £1,000) → linked to the ISA £5,000: shows £5,000 → ISA observed £4,500: £4,500 → £0: £0 (a valid position, not a reason to fall back to £1,000) → £3,000: £3,000 → unlinked: its own schema-2 position £1,000 → relinked: £3,000 → reload £3,000. Linking and unlinking write nothing to the goal (Saved and baseSaved £1,000), record no contribution or release, and add no valuation (only the three observations do)',
+      seq, [[1000, ...own, 1, 5000], [5000, ...own, 1, 5000], [4500, ...own, 2, 4500], [0, ...own, 3, 0], [3000, ...own, 4, 3000],
+        [1000, ...own, 4, 3000], [3000, ...own, 4, 3000], [3000, ...own, 4, 3000]]);
+  }));
+
+  scenario('FA-7D VALIDITY — valid £0 and a negative raw position override goal Saved; no valid authority falls back', () => {
+    const zero = fa7dApp({ investments: [Object.assign(ISA(), { goalId: 'gH', balance: 0, baseBalance: 0 })] });
+    let reason = '';
+    const rel = attempt(zero, a => { reason = a.release('gH', 100).reason; });
+    invariant('FA7D.zero.anchor', 'A linked ISA whose opening anchor is £0: Holiday shows £0 (its own £1,000 kept in the cache, unused); a release from the goal is refused (use the investment), nothing changed',
+      [fa7dLook(zero), rel[1], reason], [[0, 1000, 1000, 0, 0, 1, 0], true, 'use_linked_investment_row']);
+
+    const neg = new App(legacyInvState({ balance: 200, baseBalance: 0, goalId: 'gH' }, { payments: [legacyInvPay('i1', { date: '2026-06-05' })] }), '2026-06-20');
+    neg.at('2026-06-21'); fa7bRelease(neg, 150);
+    neg.at('2026-06-22'); neg.toggle('i1');
+    const negSession = [neg.snap().goal.gH, fa7bLook(neg)[2], neg.state().goals[0].saved];
+    neg.reload();
+    invariant('FA7D.negative-raw', 'The FA-7B negative case linked to Holiday: raw ISA position −£150, shown £0 → Holiday shows £0 — never the negative raw value, never its own £1,000 — also after reload',
+      [negSession, [neg.snap().goal.gH, fa7bLook(neg)[2], neg.state().goals[0].saved]], [[0, -150, 1000], [0, -150, 1000]]);
+
+    const none = fa7dApp({ investments: [] });
+    const broken = fa7dApp({ investments: [{ name: 'Broken', type: 'isa', goalId: 'gH', balance: 5000, baseBalance: 5000 }] });
+    const legacyPositive = legacyLoad(baseState({ investments: [Object.assign(ISA(), { goalId: 'gH', balance: 300, baseBalance: 300 })] }), '2026-06-05');
+    const legacyZero = legacyLoad(baseState({ investments: [Object.assign(ISA(), { goalId: 'gH', balance: 0, baseBalance: 0 })] }), '2026-06-05');
+    invariant('FA7D.fallback', 'Not the same states: no investment carries the link (missing) → Holiday its own £1,000; a linked entry with no id (malformed: not an investment, no anchor) → £1,000, not £0 and not its £5,000; schema-1 fallback with no valuation keeps the legacy rule — linked £300 → £300, linked £0 → its own £1,000',
+      [none.snap().goal.gH, broken.snap().goal.gH, legacyPositive.snap().goal.gH, legacyZero.snap().goal.gH], [1000, 1000, 300, 1000]);
+  });
+
+  scenario('FA-7D ROUTING — a contribution toward a linked goal has one destination: the investment', () => {
+    const app = fa7dApp();
+    app.at('2026-06-06'); fa7dLink(app, 'gH');
+    const prefill = { name: 'Contribute to Holiday', date: '2026-06-10', status: 'upcoming', rec: true, goalId: 'gH', _geodePayIntent: 'new' };
+    const form = app.modalForm(null, prefill);
+    app.at('2026-06-10');
+    const id = app.contribute({ name: form.name, amount: 200, date: '2026-06-10', status: 'upcoming', rec: 'no', goalId: form.goalId, investId: form.investId });
+    app.toggle(id);
+    const done = [fa7dLook(app), app.activeEvents().map(e => [e.entityType + ':' + e.entityId, e.amount])];
+    const direct = attempt(app, a => a.contribute({ name: 'Holiday top-up', amount: 100, date: '2026-06-12', status: 'upcoming', rec: 'no', goalId: 'gH' }));
+    const bill = app.contribute({ name: 'Gift', amount: 50, date: '2026-06-14', status: 'upcoming', rec: 'no' });
+    const moved = attempt(app, a => a.editPayment(bill, { goalId: 'gH' }));
+    app.at('2026-06-20'); fa7dLink(app, '');
+    const unlinked = fa7dLook(app);
+    app.reload();
+    invariant('FA7D.routing', '"Contribute to this goal" on the linked Holiday opens the form on the ISA ([goal, investment] link); saved and completed it is one ISA completion of £200: ISA £5,200, Holiday shows £5,200, its own Saved stays £1,000. A payment saved straight to the linked goal, or a bill moved onto it, is refused with nothing changed. Unlinking shows Holiday £1,000 beside the ISA £5,200 — the £200 counted once, nowhere hidden — also after reload',
+      [[form.goalId, form.investId], done, direct, moved, unlinked, fa7dLook(app)],
+      [['', 'iA'], [[5200, 1000, 1000, 1, 0, 1, 5200], [['investment:iA', 200]]], [[REFUSED_LINKED_GOAL], true], [[REFUSED_LINKED_GOAL], true],
+        [1000, 1000, 1000, 1, 0, 1, 5200], [1000, 1000, 1000, 1, 0, 1, 5200]]);
+
+    const form2 = fa7dApp().modalForm(null, prefill);
+    const two = fa7dApp({ investments: [Object.assign(ISA(), { goalId: 'gH' }), Object.assign(PENSION(), { goalId: 'gH' })] });
+    invariant('FA7D.routing.form', 'Unlinked, the goal prefill stays on the goal; linked to two investments it stays on the goal too (no guess) and saving it there is refused',
+      [[form2.goalId, form2.investId], [two.modalForm(null, prefill).goalId, two.snap().goal.gH],
+        attempt(two, a => a.contribute({ name: 'Holiday top-up', amount: 100, date: '2026-06-12', status: 'upcoming', rec: 'no', goalId: 'gH' }))],
+      [['gH', ''], ['gH', 8000], [[REFUSED_LINKED_GOAL], true]]);
+
+    const kept = fa7dApp();
+    const row = kept.contribute({ name: 'Holiday monthly', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes', goalId: 'gH' });
+    kept.at('2026-06-06'); fa7dLink(kept, 'gH');
+    kept.at('2026-06-15'); kept.editPayment(row, { amount: 120 }); kept.toggle(row);
+    const keptLinked = [fa7dLook(kept), kept.activeEvents().map(e => [e.entityType + ':' + e.entityId, e.amount])];
+    kept.at('2026-06-20'); fa7dLink(kept, '');
+    invariant('FA7D.routing.existing-row', 'Boundary: a Holiday row from before the link keeps its link and can still be edited; completing it is one goal completion (£120) in Holiday\'s own Saved (£1,120) while Holiday shows the ISA £5,000; after unlinking Holiday shows £1,120 and the ISA £5,000 — counted once, never moved',
+      [keptLinked, fa7dLook(kept)], [[[5000, 1120, 1000, 1, 0, 1, 5000], [['goal:gH', 120]]], [1120, 1120, 1000, 1, 0, 1, 5000]]);
+  });
+
+  scenario('FA-7D SMART IMPORT — an import linked to a linked goal is left out; linked to the investment it counts once', () => {
+    const app = fa7dApp();
+    app.at('2026-06-06'); fa7dLink(app, 'gH');
+    app.at('2026-06-20');
+    const before = app.state();
+    const sum = app.smartImport([{ name: 'Holiday savings', amount: 80, date: '2026-06-18', link: 'goal:gH' }]);
+    const left = [sum.refusedLinkedGoal, sum.added, same([app.state().payments, app.events()], [before.payments, before.contributionEvents]), app.snap().goal.gH];
+    const ok = app.smartImport([{ name: 'ISA savings', amount: 80, date: '2026-06-18', link: 'invest:iA' }]);
+    const line = n => app.run('geodeSmartImportRefusedLinkedGoalLine(' + n + ')');
+    const modal = extractFunction(PROGRAM.src, 'geodeSmartImportShowHandoffModal').text;
+    invariant('FA7D.smart-import', 'Linked to the linked Holiday: refused and reported (1 left out, nothing added, no row or completion, Holiday £5,000); linked to the ISA: one completion, ISA and Holiday £5,080 at once; the summary renders the line, plain words for 0, 1 and 2',
+      [left, [ok.refusedLinkedGoal, ok.added, app.snap().inv.iA, app.snap().goal.gH, app.events().length],
+        modal.indexOf('geodeSmartImportRefusedLinkedGoalLine(sum.refusedLinkedGoal)') >= 0, [line(0), line(1), line(2)]],
+      [[1, 0, true, 5000], [0, 1, 5080, 5080, 1], true,
+        ['', '1 imported payment was linked to a goal that follows its linked investment, so it was left out. Import it linked to the investment instead.',
+          '2 imported payments were linked to goals that follow their linked investments, so they were left out. Import them linked to the investments instead.']]);
+  });
+
+  scenario('FA-7D READERS — decision and export readers use the effective goal value', () => {
+    const EMERGENCY = { id: 'gE', name: 'Emergency fund', amount: 3000, saved: 600, baseSaved: 600, monthly: 0, cat: 'emergency' };
+    const BUF = { label: 'Build your emergency fund', amount: 120 };
+    const suggest = inv => {
+      const app = new App(baseState({ incomeExplicitlySet: true, goals: [HOLIDAY(), EMERGENCY], investments: inv }), '2026-06-05', PROGRAM.plan);
+      app.setPlan([BUF]);
+      return [app.snap().goal.gE, app.suggestions().map(s => s.type)];
+    };
+    invariant('FA7D.readers.buffer', 'Suggested Actions sizes the buffer step from the effective buffer: unlinked, its own £600 (≥ £500) → no buffer action; linked to an ISA at £5,000 → none; linked to an ISA at £0 → shows £0 and offers the buffer action (it read the hidden £600 before)',
+      [suggest([ISA()]), suggest([Object.assign(ISA(), { goalId: 'gE' })]), suggest([Object.assign(ISA(), { goalId: 'gE', balance: 0, baseBalance: 0 })])],
+      [[600, []], [5000, []], [0, ['buffer_contribution']]]);
+    const csv = extractFunction(PROGRAM.src, 'exportCSV').text;
+    invariant('FA7D.readers.export', 'The CSV export lists each goal\'s effective Saved, as its Goals Saved summary already did (not the goal\'s own cache)',
+      [csv.indexOf("lines.push(g.name+','+g.amount+','+geodeGoalEffectiveSaved(g)+','") >= 0, csv.indexOf("g.saved+','") < 0], [true, true]);
+  });
+
+  scenario('FA-7D PRESENTATION — an estimated value is labelled; an observed one is not', () => {
+    const app = fa7dApp();
+    app.at('2026-06-06'); fa7dLink(app, 'gH');
+    const flags = () => JSON.parse(app.run('JSON.stringify([geodeInvestmentValueEstimated(S, S.investments[0]), geodeGoalLinkedInvestmentAuthorityForState(S, S.goals[0]).estimated])'));
+    const seen = [flags()];
+    app.at('2026-06-08'); app.saveInvestment('iA', 'ISA', 5100); seen.push(flags());
+    const id = app.contribute({ name: 'ISA top-up', amount: 200, date: '2026-06-10', status: 'upcoming', rec: 'no', investId: 'iA' });
+    app.at('2026-06-10'); app.toggle(id); seen.push(flags());
+    app.at('2026-06-12'); app.saveInvestment('iA', 'ISA', 5400); seen.push(flags());
+    const src = PROGRAM.src;
+    invariant('FA7D.presentation', '[investment estimated, linked goal estimated]: opening anchor → observed; £5,100 entered → observed; a £200 completion since → estimated (£5,300 is not a new observation); £5,400 entered → observed. The investment card labels only an estimated value "Estimated value", the linked goal line adds "(estimated)", and no copy still claims linked authority needs a balance above £0',
+      [seen, src.indexOf("(geodeInvestmentValueEstimated(S, e) ? '<div") >= 0 && src.indexOf('>Estimated value</div>') >= 0,
+        src.indexOf("(_linkedEstimated ? ' (estimated)' : '')") >= 0, src.indexOf('balance &gt; 0') < 0],
+      [[[false, false], [false, false], [true, true], [false, false]], true, true, true]);
+  });
+}
+
 // ───────────────────────────── run ─────────────────────────────
 
 let PROGRAM;
@@ -5608,6 +5752,7 @@ function main() {
   fa3ccTransition(); fa3ccCrash(); fa3ccAuthority(); fa3ccLifecycle(); fa3ccRefusal(); fa3ccPositions();
   fa7bTransition(); fa7bSafety(); fa7bJourneys(); fa7bEvidence();
   fa7cLifecycle(); fa7cAnnual(); fa7cSmartImport();
+  fa7dLinkedGoals();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
   migrationFixtures();
 

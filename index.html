@@ -4916,6 +4916,12 @@ function geodeInvestmentDisplayBalance(state, inv) {
   return pos ? pos.value : geodeInvestmentLegacyBalance(state, inv);
 }
 
+/** FA-7D: whether inv's shown value is estimated — its latest valuation moved by contributions or releases since — not observed. */
+function geodeInvestmentValueEstimated(state, inv) {
+  var pos = geodeInvestmentPosition(state, inv);
+  return !!(pos && pos.estimated);
+}
+
 /** FA-7B: capital contributed since tracking — every active completion minus qualifying releases, whatever the valuations. Not a value. */
 function geodeInvestmentCapitalSinceTracking(state, inv) {
   var id = String(inv.id);
@@ -7867,6 +7873,20 @@ function geodeContributionCarryFollowRow(carry, after, source) {
 }
 
 /**
+ * FA-7D: why payment row `row` (null: a new one) may not be saved with goal link `goalId`, or ''. A goal whose linked
+ * investments are its authority (geodeGoalHasLinkedInvestmentAuthorityForState) takes contributions through the
+ * investment, as releases do — one destination per contribution — so a new row, or a row moved onto that goal, is
+ * refused. A row already linked to the goal keeps its link and its history.
+ */
+function geodeLinkedGoalContributionRefusal(state, row, goalId) {
+  if (!goalId) return '';
+  if (row && String(row.goalId || '') === String(goalId)) return '';
+  var g = (state.goals || []).filter(function (x) { return x && String(x.id) === String(goalId); })[0];
+  if (!g || !geodeGoalHasLinkedInvestmentAuthorityForState(state, g)) return '';
+  return 'This goal is linked to an investment, so contributions to it are recorded against the investment. Link this contribution to the investment instead.';
+}
+
+/**
  * FA-3C-B: why a save that leaves `row` (null for a new row) as `next` — { kind: 'goal' | 'invest' | 'debt' | 'bill',
  * status, amount } — must be refused, or ''. Goal and investment contributions need an amount above £0; a row that
  * already holds a paid negative amount may keep a negative one (a legacy effect being corrected or undone, never a
@@ -8692,7 +8712,7 @@ function geodeSavingsReleaseSourceType(state, source) {
   if (!resolved) return 'unknown';
   if (resolved.kind === 'goal') {
     if (geodeIsEmergencyBufferGoal(resolved.entity)) return 'buffer';
-    if (geodeGoalHasPositiveLinkedInvestmentForState(state, resolved.entity)) return 'linked_investment';
+    if (geodeGoalHasLinkedInvestmentAuthorityForState(state, resolved.entity)) return 'linked_investment';
     return 'goal';
   }
   if (String(resolved.entity.goalId || '')) return 'linked_investment';
@@ -8908,7 +8928,7 @@ function geodeSavingsReleaseAvailableBalance(state, source) {
   var resolved = geodeSavingsReleaseResolveSource(state, source);
   if (!resolved) return 0;
   if (resolved.kind === 'goal') {
-    if (geodeGoalHasPositiveLinkedInvestmentForState(state, resolved.entity)) return 0;
+    if (geodeGoalHasLinkedInvestmentAuthorityForState(state, resolved.entity)) return 0;
     return geodeGoalEffectiveSavedFromState(state, resolved.entity);
   }
   return toNum(resolved.entity.balance);
@@ -8936,7 +8956,7 @@ function geodeSavingsReleaseEligibility(state, source, opts) {
   out.sourceType = geodeSavingsReleaseSourceType(state, resolved);
   out.sourceId = resolved.id;
   out.sourceName = resolved.name;
-  if (resolved.kind === 'goal' && geodeGoalHasPositiveLinkedInvestmentForState(state, resolved.entity)) {
+  if (resolved.kind === 'goal' && geodeGoalHasLinkedInvestmentAuthorityForState(state, resolved.entity)) {
     out.reasonCodes.push('use_linked_investment_row');
     return out;
   }
@@ -9041,7 +9061,7 @@ function geodeSavingsReleaseSourcesSnapshot(state, opts) {
   for (gi = 0; gi < goals.length; gi++) {
     var g = goals[gi];
     if (!g || !g.id) continue;
-    if (geodeGoalHasPositiveLinkedInvestmentForState(state, g)) continue;
+    if (geodeGoalHasLinkedInvestmentAuthorityForState(state, g)) continue;
     var gSrc = { kind: 'goal', id: g.id };
     var gElig = geodeSavingsReleaseEligibility(state, gSrc, opts);
     rows.push({
@@ -10199,40 +10219,57 @@ function geodeDebtHighlightId(debts) {
   return best && bestApr > 0 ? best.id : null;
 }
 
+/**
+ * FA-7D: the investment authority behind goal `goal` ({ value, estimated, investments }), or null when the goal's own
+ * Saved is its authority. Investments link to a goal by goalId. Once any linked investment has a valid valuation, the
+ * linked positions are authority, £0 included: each anchored one adds its position (geodeInvestmentPosition, clamped at
+ * 0), one still on legacy authority its cached balance. With no valid valuation among them (schema-1 fallback) the
+ * legacy rule stands: authority only while a linked balance is above 0. Linked entries without an id are not investments.
+ */
+function geodeGoalLinkedInvestmentAuthorityForState(state, goal) {
+  if (!goal || goal.id == null || goal.id === '') return null;
+  var gid = String(goal.id);
+  var linked = ((state && state.investments) || []).filter(function (inv) {
+    return inv && inv.id != null && String(inv.goalId || '') === gid;
+  });
+  var value = 0, anchored = false, positive = false, estimated = false;
+  linked.forEach(function (inv) {
+    var pos = geodeInvestmentPosition(state, inv);
+    var v = pos ? pos.value : toNum(inv.balance);
+    if (pos) {
+      anchored = true;
+      if (pos.estimated) estimated = true;
+    }
+    if (v > 0) positive = true;
+    value += v;
+  });
+  if (!anchored && !positive) return null;
+  return { value: Math.round(value * 100) / 100, estimated: estimated, investments: linked };
+}
+
 function geodeGoalLinkedInvBalanceForState(state, goalId) {
-  if (!goalId) return 0;
-  return (state.investments || []).reduce(function(s, inv) {
-    return s + (String(inv.goalId || '') === String(goalId) ? toNum(inv.balance) : 0);
-  }, 0);
+  var auth = geodeGoalLinkedInvestmentAuthorityForState(state, { id: goalId });
+  return auth ? auth.value : 0;
 }
 
 function geodeGoalLinkedInvBalance(goalId) {
   return geodeGoalLinkedInvBalanceForState(S, goalId);
 }
 
-/** True when at least one investment linked to this goal has balance > 0 (Fix 3: then goal.saved is ignored). */
-function geodeGoalHasPositiveLinkedInvestmentForState(state, goal) {
-  if (!goal || !goal.id) return false;
-  var gid = String(goal.id);
-  var inv = state.investments || [];
-  for (var i = 0; i < inv.length; i++) {
-    var row = inv[i];
-    if (!row) continue;
-    if (String(row.goalId || '') !== gid) continue;
-    if (toNum(row.balance) > 0) return true;
-  }
-  return false;
+/** True when linked investments are the goal's authority (geodeGoalLinkedInvestmentAuthorityForState): goal.saved is then not shown. */
+function geodeGoalHasLinkedInvestmentAuthorityForState(state, goal) {
+  return !!geodeGoalLinkedInvestmentAuthorityForState(state, goal);
 }
 
-function geodeGoalHasPositiveLinkedInvestment(goal) {
-  return geodeGoalHasPositiveLinkedInvestmentForState(S, goal);
+function geodeGoalHasLinkedInvestmentAuthority(goal) {
+  return geodeGoalHasLinkedInvestmentAuthorityForState(S, goal);
 }
 
-/** Single source of truth per goal: linked balances OR goal.saved, never both (when any linked balance > 0). */
+/** Single source of truth per goal: its linked investment authority (zero included) OR goal.saved, never both. */
 function geodeGoalEffectiveSavedFromState(state, goal) {
   if (!goal) return 0;
-  if (geodeGoalHasPositiveLinkedInvestmentForState(state, goal)) return geodeGoalLinkedInvBalanceForState(state, goal.id);
-  return toNum(goal.saved);
+  var auth = geodeGoalLinkedInvestmentAuthorityForState(state, goal);
+  return auth ? auth.value : toNum(goal.saved);
 }
 
 function geodeGoalEffectiveSaved(goal) {
@@ -10387,7 +10424,7 @@ function geodeGoalDraftFromModal() {
   var editGoalId = gidEl && gidEl.value ? String(gidEl.value).trim() : '';
   var goalRef = editGoalId ? S.goals.filter(function(x) { return String(x.id) === editGoalId; })[0] : null;
   var saved =
-    goalRef && geodeGoalHasPositiveLinkedInvestment(goalRef)
+    goalRef && geodeGoalHasLinkedInvestmentAuthority(goalRef)
       ? geodeGoalEffectiveSaved(goalRef)
       : parseFloat((document.getElementById('gs') || {}).value) || 0;
   var dvRaw = ((document.getElementById('gd') || {}).value || '').trim();
@@ -10574,7 +10611,7 @@ function geodeEnsureEmergencyBufferGoalForPayment(state, opts) {
 
   var existing = getFirstEmergencyGoal(state);
   if (existing && existing.id) {
-    if (geodeGoalHasPositiveLinkedInvestmentForState(state, existing)) {
+    if (geodeGoalHasLinkedInvestmentAuthorityForState(state, existing)) {
       out.reasonCodes.push('linked_investment_goal');
       return out;
     }
@@ -13357,6 +13394,7 @@ function geodeSmartImportConfirm() {
   var mergedContrib = 0;
   var linkedKinds = { debt: 0, goal: 0, invest: 0 };
   var refusedMerges = 0;
+  var refusedLinkedGoal = 0;
   setLastSnapshotBeforeChange();
   for (var i = 0; i < n; i++) {
     var incEl = document.getElementById('gim-inc-' + i);
@@ -13432,6 +13470,10 @@ function geodeSmartImportConfirm() {
       };
       if (mergeMode === 'merge' && r && r.existingDupKind === 'payment' && r.existingDupId) {
         var pex = (S.payments || []).filter(function (p) { return String(p.id || '') === String(r.existingDupId); })[0];
+        if (pex && geodeLinkedGoalContributionRefusal(S, pex, gid)) {
+          refusedLinkedGoal++;
+          continue;
+        }
         if (pex && geodeContributionSaveRefusal(S, pex, { kind: pk, status: st, amount: am })) {
           refusedMerges++;
           continue;
@@ -13462,6 +13504,10 @@ function geodeSmartImportConfirm() {
           added++;
           continue;
         }
+      }
+      if (geodeLinkedGoalContributionRefusal(S, null, gid)) {
+        refusedLinkedGoal++;
+        continue;
       }
       S.payments.push(row);
       geodeRecordContributionTransition(null, row, 'smart_import');
@@ -13494,7 +13540,8 @@ function geodeSmartImportConfirm() {
     leftBefore: leftBefore,
     leftAfter: calcMonthlyLeftover(S),
     linkedKinds: linkedKinds,
-    refusedMerges: refusedMerges
+    refusedMerges: refusedMerges,
+    refusedLinkedGoal: refusedLinkedGoal
   });
 }
 
@@ -13506,6 +13553,16 @@ function geodeSmartImportRefusedMergeLine(n) {
     return '1 imported payment couldn\u2019t be merged into the matching item, so it was left out. Nothing else changed. If it\u2019s a separate payment, import it again as a new item.';
   }
   return n + ' imported payments couldn\u2019t be merged into the matching items, so they were left out. Nothing else changed. If they\u2019re separate payments, import them again as new items.';
+}
+
+/** FA-7D: import summary line for payments geodeLinkedGoalContributionRefusal refused (those imports were left out), or ''. */
+function geodeSmartImportRefusedLinkedGoalLine(n) {
+  n = Number(n) || 0;
+  if (n <= 0) return '';
+  if (n === 1) {
+    return '1 imported payment was linked to a goal that follows its linked investment, so it was left out. Import it linked to the investment instead.';
+  }
+  return n + ' imported payments were linked to goals that follow their linked investments, so they were left out. Import them linked to the investments instead.';
 }
 
 function geodeSmartImportShowHandoffModal(sum) {
@@ -13532,7 +13589,7 @@ function geodeSmartImportShowHandoffModal(sum) {
     if (linked.invest) bits.push('investment');
     linkedLine = 'Linked contributions added: ' + bits.join(', ') + '.';
   }
-  var refusedLine = geodeSmartImportRefusedMergeLine(sum.refusedMerges);
+  var refusedLine = [geodeSmartImportRefusedMergeLine(sum.refusedMerges), geodeSmartImportRefusedLinkedGoalLine(sum.refusedLinkedGoal)].filter(Boolean).join(' ');
 
   // Pick one “next action” using existing suggested-action logic.
   var nextTitle = '';
@@ -22260,7 +22317,7 @@ function getSuggestedActions(state) {
       carryPlanSofteningMeta(debtA, stp);
     } else if (stp.label === 'Build your emergency fund') {
       var egBuf = getFirstEmergencyGoal(S);
-      var esvBuf = egBuf ? toNum(egBuf.saved) : 0;
+      var esvBuf = egBuf ? geodeGoalEffectiveSavedFromState(S, egBuf) : 0;
       if (egBuf && esvBuf >= 500) {
         bufA = null;
       } else if (egBuf && esvBuf > 0) {
@@ -24084,7 +24141,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     goalObj = geodePlanPageGoalFromStepLabel(step);
     if (goalObj) {
       goalIntel = calcGoalIntelligence(goalObj);
-      goalHasLinkedInv = geodeGoalHasPositiveLinkedInvestment(goalObj);
+      goalHasLinkedInv = geodeGoalHasLinkedInvestmentAuthority(goalObj);
     }
   }
   var detailInvest = lbStep === 'Invest what remains';
@@ -37924,7 +37981,7 @@ function rGoals(_target) {
   for (var i=0; i<S.goals.length; i++) {
     var g=S.goals[i];
     var _linkedInvBal = geodeGoalLinkedInvBalance(g.id);
-    var _posLinked = geodeGoalHasPositiveLinkedInvestment(g);
+    var _posLinked = geodeGoalHasLinkedInvestmentAuthority(g);
     var _effectiveSaved = geodeGoalEffectiveSaved(g);
     var p=g.amount>0?Math.min(100,_effectiveSaved/Number(g.amount)*100):0;
     var dLeft=dl(g.targetDate), mLeft=ml(g.targetDate), rem=Math.max(0,Number(g.amount)-_effectiveSaved), col=g.col||'#9b7fe8';
@@ -37942,7 +37999,8 @@ function rGoals(_target) {
     if (_posLinked) {
       var _linkedInv = (S.investments||[]).filter(function(inv){ return String(inv.goalId||'')===String(g.id); })[0];
       var _linkedName = _linkedInv ? escHtmlLite(_linkedInv.name||'Investment') : 'Linked investment';
-      ih += '<div data-geode-css="font-size:9px;color:rgba(155,127,232,0.85);margin-bottom:9px;line-height:1.35">↗ Progress from linked investments (' + _linkedName + '): ' + fm(_linkedInvBal) + '</div>';
+      var _linkedEstimated = (geodeGoalLinkedInvestmentAuthorityForState(S, g) || {}).estimated === true;
+      ih += '<div data-geode-css="font-size:9px;color:rgba(155,127,232,0.85);margin-bottom:9px;line-height:1.35">↗ Progress from linked investments (' + _linkedName + '): ' + fm(_linkedInvBal) + (_linkedEstimated ? ' (estimated)' : '') + '</div>';
     }
     var _paceMo = geodeGoalEffectiveMonthlyPace(S, g);
     if (_paceMo > 0) {
@@ -37969,7 +38027,7 @@ function rGoals(_target) {
       g.id +
       '">' +
       (_posLinked
-        ? '<div data-geode-css="font-size:9px;color:var(--tx-3);line-height:1.35;margin-top:4px">Saved So Far is not used while a linked investment has a balance &gt; 0. Update the investment balance or unlink to edit manual saved.</div>'
+        ? '<div data-geode-css="font-size:9px;color:var(--tx-3);line-height:1.35;margin-top:4px">Saved So Far is not used while this goal is linked to an investment. Update the investment balance or unlink to edit manual saved.</div>'
         : '<button type="button" class="btn-sm" onclick="showDep(\''+g.id+'\')" data-geode-css="width:100%;opacity:0.85">Update saved amount</button>') +
       '</div>';
     el.innerHTML=ih; list.appendChild(el);
@@ -38001,11 +38059,11 @@ function openGoalModal(id) {
     '<div class="field"><label>Saved So Far</label><input type="number" id="gs" class="fi" placeholder="0" value="' +
     (g ? g.saved : '0') +
     '"' +
-    (g && geodeGoalHasPositiveLinkedInvestment(g) ? ' disabled data-geode-css="opacity:0.55"' : '') +
+    (g && geodeGoalHasLinkedInvestmentAuthority(g) ? ' disabled data-geode-css="opacity:0.55"' : '') +
     ' oninput="try{liveGoalSug();geodeGoalModalImpactRefresh()}catch(e){}" /></div></div>';
-  if (g && geodeGoalHasPositiveLinkedInvestment(g)) {
+  if (g && geodeGoalHasLinkedInvestmentAuthority(g)) {
     h +=
-      '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.4;margin:-6px 0 10px">While a linked investment has a balance &gt; 0, progress uses those balances only. Unlink in Investments to edit Saved So Far.</div>';
+      '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.4;margin:-6px 0 10px">While this goal is linked to an investment, progress uses its balance only. Unlink in Investments to edit Saved So Far.</div>';
   }
   h += '<div class="field"><label>Category</label><select id="gc" class="fi" onchange="try{geodeGoalModalImpactRefresh()}catch(e){}">';
   var gkeys = Object.keys(GOAL_LABELS);
@@ -38932,6 +38990,16 @@ function geodePayFromDebt(debtId) {
 function geodePayFromGoal(goalId) {
   var g = S.goals.filter(function (x) { return x.id === goalId; })[0];
   if (!g) return;
+  // FA-7D: a goal backed by its linked investment takes contributions through that investment (one destination).
+  var linkedAuth = geodeGoalLinkedInvestmentAuthorityForState(S, g);
+  if (linkedAuth) {
+    if (linkedAuth.investments.length === 1) {
+      geodePayFromInvest(linkedAuth.investments[0].id);
+      return;
+    }
+    toast('This goal is linked to more than one investment. Contribute from the investment you\u2019re paying into, in Investments.', 'warn');
+    return;
+  }
   msub = 'payments';
   goTab('money');
   window._geodeDirectContribCtx = { kind: 'goal', id: g.id, name: g.name || '' };
@@ -39695,6 +39763,15 @@ function openPayModal(id, prefill) {
   var defGid = p ? (p.goalId || '') : prefill ? String(prefill.goalId || '') : '';
   var defInv = p ? (p.investId || '') : prefill ? String(prefill.investId || '') : '';
   var defDebt = p ? (p.debtId || '') : prefill ? String(prefill.debtId || '') : '';
+  // FA-7D: a new contribution toward a goal backed by its one linked investment opens on that investment.
+  if (!p && defGid) {
+    var defGoal = (S.goals || []).filter(function (x) { return x && String(x.id) === defGid; })[0];
+    var defAuth = defGoal ? geodeGoalLinkedInvestmentAuthorityForState(S, defGoal) : null;
+    if (defAuth && defAuth.investments.length === 1) {
+      defGid = '';
+      defInv = String(defAuth.investments[0].id);
+    }
+  }
   var payModalTitle = 'Schedule contribution';
   if (!p && prefill && prefill.bufferContribution) {
     try {
@@ -40177,8 +40254,9 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
       geodeEnsureEmergencyBufferGoalForPayment(Object.assign({}, S, { goals: (S.goals || []).slice() }), { paymentName: nm, bufferContribution: bufPrefill }).applied) {
     saveKind = 'goal';
   }
-  var saveRefusal = geodeContributionSaveRefusal(S, id ? (S.payments || []).filter(function (x) { return x.id === id; })[0] || null : null,
-    { kind: saveKind, status: st, amount: amtNum });
+  var saveRow = id ? (S.payments || []).filter(function (x) { return x.id === id; })[0] || null : null;
+  var saveRefusal = geodeLinkedGoalContributionRefusal(S, saveRow, gid) ||
+    geodeContributionSaveRefusal(S, saveRow, { kind: saveKind, status: st, amount: amtNum });
   if (saveRefusal) {
     toast(saveRefusal, 'warn');
     return;
@@ -41235,6 +41313,7 @@ function rInvest(_target) {
       '</div><div data-geode-css="text-align:right;flex-shrink:0"><div data-geode-css="font-size:17px;font-weight:700;color:#9b7fe8">' +
       fm(e.balance) +
       '</div>' +
+      (geodeInvestmentValueEstimated(S, e) ? '<div data-geode-css="font-size:9px;color:var(--tx-3);margin-top:2px">Estimated value</div>' : '') +
       (Number(e.returns) > 0
         ? '<div data-geode-css="font-size:10px;color:#34d5a0;margin-top:2px">+' + fm(e.returns) + '</div>'
         : '') +
@@ -41364,7 +41443,8 @@ function saveInv(id){
     if (!obj.contributionStyle) delete obj.contributionStyle;
     if (!obj.goalId) delete obj.goalId;
     var msg = '';
-    if(id){for(var i=0;i<S.investments.length;i++){if(S.investments[i].id===id){Object.assign(S.investments[i],obj);break;}}msg='Investment updated.';}
+    // FA-7D: "None" in the goal link unlinks — the link field is the investment's whole goal link, not a partial update.
+    if(id){for(var i=0;i<S.investments.length;i++){if(S.investments[i].id===id){Object.assign(S.investments[i],obj);if(!_invGoalId)delete S.investments[i].goalId;break;}}msg='Investment updated.';}
     else{obj.id=uid();S.investments.push(obj);msg='Investment added.';}
     var invRowId = id || obj.id;
     var invRowAfter = S.investments.filter(function(x){ return x.id===invRowId; })[0];
@@ -42083,7 +42163,7 @@ function geodeShowInstallGuide() {
 
 function exportCSV() {
   var lines = ['Beynd Finance Export','Date,'+new Date().toLocaleDateString(),'User,'+(S.profile.name||''),'Currency,'+S.cur.code,'','SUMMARY','Monthly Income,'+S.income,'Total Debt,'+S.debts.reduce(function(s,d){return s+Number(d.balance);},0),'Annual Interest,'+annInt().toFixed(2),'Goals Saved,'+S.goals.reduce(function(s,g){return s+geodeGoalEffectiveSaved(g);},0),'Investments,'+geodeUnlinkedInvestmentBalance(S),'Net Worth,'+computeSnapshotFigures().netWorth];
-  if(S.goals.length){lines.push('','GOALS','Name,Target,Saved,Monthly,Target Date');S.goals.forEach(function(g){lines.push(g.name+','+g.amount+','+g.saved+','+(g.monthly||0)+','+(g.targetDate||''));});}
+  if(S.goals.length){lines.push('','GOALS','Name,Target,Saved,Monthly,Target Date');S.goals.forEach(function(g){lines.push(g.name+','+g.amount+','+geodeGoalEffectiveSaved(g)+','+(g.monthly||0)+','+(g.targetDate||''));});}
   if(S.debts.length){lines.push('','DEBTS','Name,Balance,APR%,Min Payment');S.debts.forEach(function(d){lines.push(d.name+','+d.balance+','+(d.apr||0)+','+(d.minp||0));});}
   if(S.expenses.length){lines.push('','EXPENSES','Name,Category,Amount,Recurring');S.expenses.forEach(function(e){lines.push(e.name+','+e.cat+','+e.amount+','+(e.rec||'no'));});}
   if(S.investments.length){lines.push('','INVESTMENTS','Name,Type,Balance,Returns,Platform');S.investments.forEach(function(e){lines.push(e.name+','+e.type+','+e.balance+','+(e.returns||0)+','+(e.platform||''));});}
