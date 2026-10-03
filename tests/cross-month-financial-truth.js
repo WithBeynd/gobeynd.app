@@ -109,7 +109,9 @@ const PRODUCTION_FUNCTIONS = [
   'geodeSmartImportConfirm', 'geodeSmartImportRefusedMergeLine', 'geodeSmartImportRefusedLinkedGoalLine', 'exportJSONBackup', 'isPlainObject', 'validateBeyndBackupEnvelope',
   'geodeBeyndBackupRestorableKeyWhitelist', 'geodeBeyndBackupForbiddenDataKeys', 'extractRestorableData',
   // activity log
-  'appendActivityLog', 'trimActivityLogForRetention'
+  'appendActivityLog', 'trimActivityLogForRetention',
+  // modal commit guard (P1-CLOSE): the modal as openModal builds it and closeModal closes it, and its one commit
+  'openModal', 'removeModalDom', 'closeModal', 'geodeModalCommitOpen', 'geodeModalCommitBegin', 'geodeModalCommitRelease'
 ];
 
 /** Production top-level constants the extracted base functions read. */
@@ -170,8 +172,9 @@ var localStorage = {
 var sessionStorage = __memStorage();
 var __fields = {};
 var window = {};
-/** A boolean field is a checkbox. */
+/** #modal is the open modal (__modal); any other id is a form field, and a boolean field is a checkbox. */
 var document = { getElementById: function (id) {
+  if (id === 'modal') return __modal;
   if (!Object.prototype.hasOwnProperty.call(__fields, id)) return null;
   return typeof __fields[id] === 'boolean' ? { checked: __fields[id], value: 'on' } : { value: __fields[id] };
 } };
@@ -180,8 +183,25 @@ var __downloads = [];
 function confirm() { return true; }
 function Blob(parts) { this.text = parts.join(''); }
 var URL = { createObjectURL: function (b) { __downloads.push(b.text); return 'blob:' + __downloads.length; }, revokeObjectURL: function () {} };
-document.createElement = function () { return { click: function () {} }; };
-document.body = { appendChild: function () {}, removeChild: function () {} };
+/** An element's class list and attributes; the one appended with id "modal" is the open modal until it is removed. */
+var __modal = null;
+function __Element() {
+  var cls = {}, attrs = {};
+  this.classList = { add: function (c) { cls[c] = true; }, remove: function (c) { delete cls[c]; }, contains: function (c) { return cls[c] === true; } };
+  this.setAttribute = function (k, v) { attrs[k] = String(v); };
+  this.getAttribute = function (k) { return Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null; };
+  this.removeAttribute = function (k) { delete attrs[k]; };
+}
+__Element.prototype.addEventListener = function () {};
+__Element.prototype.click = function () {};
+__Element.prototype.remove = function () { if (__modal === this) __modal = null; };
+document.createElement = function () { return new __Element(); };
+document.body = { appendChild: function (el) { if (el.id === 'modal') __modal = el; }, removeChild: function () {} };
+/** Timers wait for __runTimers(): until then a closed modal is still in the page, in its close animation. */
+var __timers = [];
+function setTimeout(fn) { __timers.push(fn); return __timers.length; }
+function __runTimers() { while (__timers.length) __timers.shift()(); }
+function geodeQuickSetupExit() {}
 /** Smart Import handoff modal: the summary it was opened with is kept in __handoff. */
 var __handoff = null;
 function geodeSmartImportRememberLearn() {} function geodeSmartImportShowHandoffModal(sum) { __handoff = JSON.parse(JSON.stringify(sum)); }
@@ -191,7 +211,7 @@ function uid() { __uidN++; return 'id' + __uidN; }
 function rc() { return '#9b7fe8'; }
 function fm(v) { return '£' + Math.round(Number(v) || 0); }
 
-function render() {} function rGoals() {} function closeModal() {} function checkAlerts() {} function syncPills() {} function goTab() {}
+function render() {} function rGoals() {} function checkAlerts() {} function syncPills() {} function goTab() {}
 var __toasts = [];
 function toast(m) { __toasts.push(String(m)); } function geodeSuccessToast() {} function geodeStageLToastAfterSave(m) { return m; }
 function geodeEmitPaymentCompletionFeedback() {} function geodeMarkRecentUserSave() {} function geodeSubOnSave() {}
@@ -421,7 +441,8 @@ function buildProgram() {
   if (unresolved.length) {
     throw new HarnessError('unresolved dependencies (extract the production function or add a documented shim):\n    ' + unresolved.join('\n    '));
   }
-  return { script, extracted, structural, src, plan: buildPlanProgram(src, foundation, extracted), payModal: buildPayModalProgram(src, foundation) };
+  return { script, extracted, structural, src, plan: buildPlanProgram(src, foundation, extracted), payModal: buildPayModalProgram(src, foundation),
+    commit: buildCommitProgram(src, foundation, extracted) };
 }
 
 /** Payment-modal environment: page chrome and hints are UI; the form openPayModal writes into the modal is what App.modalForm reads. */
@@ -452,25 +473,46 @@ function buildPayModalProgram(src, foundation) {
 
 /** Base program + PLAN_SHIMS + the PLAN_ENTRY_FUNCTIONS dependency closure; a name nothing defines is an error. */
 function buildPlanProgram(src, foundation, extracted) {
-  const constants = BASE_CONSTANTS.concat(PLAN_CONSTANTS).map(n => extractConstant(src, n));
-  const baseCode = TEST_SHIMS + '\n' + PLAN_SHIMS + '\n' + foundation + '\n' + extracted.map(f => f.text).join('\n') + '\n' + constants.join('\n') + '\n';
+  return buildEntryProgram(src, foundation, extracted, PLAN_SHIMS, PLAN_CONSTANTS, PLAN_ENTRY_FUNCTIONS, 'plan');
+}
+
+/** Base program + shims + the entry functions' dependency closure (entries replace base shims of the same name). */
+function buildEntryProgram(src, foundation, extracted, shims, constantNames, entries, name) {
+  const constants = BASE_CONSTANTS.concat(constantNames).map(n => extractConstant(src, n));
+  const baseCode = TEST_SHIMS + '\n' + shims + '\n' + foundation + '\n' + extracted.map(f => f.text).join('\n') + '\n' + constants.join('\n') + '\n';
   const probe = vm.createContext({ console: { log() {}, info() {}, warn() {}, error() {} } });
-  new vm.Script(baseCode, { filename: 'cross-month-plan-probe.js' }).runInContext(probe);
-  const planShims = new Set();
-  PLAN_SHIMS.replace(/function\s+([A-Za-z_$][\w$]*)\s*\(/g, (_, n) => planShims.add(n));
+  new vm.Script(baseCode, { filename: 'cross-month-' + name + '-probe.js' }).runInContext(probe);
+  const ownShims = new Set();
+  shims.replace(/function\s+([A-Za-z_$][\w$]*)\s*\(/g, (_, n) => ownShims.add(n));
   const have = new Map();
-  const queue = PLAN_ENTRY_FUNCTIONS.slice();
+  const queue = entries.slice();
   while (queue.length) {
     const n = queue.shift();
-    if (have.has(n) || planShims.has(n)) continue;
-    if (PLAN_ENTRY_FUNCTIONS.indexOf(n) < 0 && vm.runInContext('typeof ' + n, probe) !== 'undefined') continue;
+    if (have.has(n) || ownShims.has(n)) continue;
+    if (entries.indexOf(n) < 0 && vm.runInContext('typeof ' + n, probe) !== 'undefined') continue;
     const f = extractFunction(src, n);
     have.set(n, f);
     calledNames(f.text).forEach(c => queue.push(c));
   }
-  const planExtracted = [...have.values()];
-  const code = baseCode + planExtracted.map(f => f.text).join('\n') + '\n';
-  return { script: new vm.Script(code, { filename: 'cross-month-plan-program.js' }), extracted: planExtracted };
+  const entryExtracted = [...have.values()];
+  const code = baseCode + entryExtracted.map(f => f.text).join('\n') + '\n';
+  return { script: new vm.Script(code, { filename: 'cross-month-' + name + '-program.js' }), extracted: entryExtracted };
+}
+
+/**
+ * Modal save handlers (P1-CLOSE). They run in a third program: each reads its form from __fields inside the modal
+ * openModal builds, and their production dependencies are extracted transitively.
+ */
+const COMMIT_ENTRY_FUNCTIONS = ['savePay', 'geodeDupPayResolve', 'geodeDupExpResolve', 'saveExp', 'geodeSaveExpApply', 'saveDebt', 'saveInc',
+  'geodeConfirmSavingsRelease'];
+
+/** Commit-program environment: modal headings and toast copy are UI. */
+const COMMIT_SHIMS = String.raw`
+function mh() { return ''; }
+`;
+
+function buildCommitProgram(src, foundation, extracted) {
+  return buildEntryProgram(src, foundation, extracted, COMMIT_SHIMS, [], COMMIT_ENTRY_FUNCTIONS, 'commit');
 }
 
 // ───────────────────────────── simulated app ─────────────────────────────
@@ -5731,6 +5773,201 @@ function fa7dLinkedGoals() {
   });
 }
 
+// ───────────────────────────── P1-CLOSE: one modal commit, one effect ─────────────────────────────
+
+/** The payment form as savePay reads it. */
+const p1PayForm = o => ({ pn: o.name, pa: String(o.amount), pd: o.date, ps: o.status, prec: o.rec || 'no', pglid: o.goalId || '',
+  pinvlid: o.investId || '', pdebtlid: o.debtId || '' });
+/** A modal as openModal builds it, holding this form (and the intent openPayModal sets); its enter animation has run. */
+const p1Open = (app, fields, intent) => app.run('__fields = ' + JSON.stringify(fields) + '; __toasts = [];' +
+  (intent ? ' window._geodePayLinkedIntent = ' + JSON.stringify(intent) + ';' : '') + ' openModal(""); __runTimers();');
+/** The open modal's commit state; null once it has left the page. */
+const p1Modal = app => JSON.parse(app.run('JSON.stringify(__modal ? { closing: __modal.classList.contains("mo-bg--closing"), commit: __modal.getAttribute("data-geode-commit") } : null)'));
+const p1Toasts = app => JSON.parse(app.run('JSON.stringify(__toasts)'));
+/** Presses the modal's commit this many times before its 165 ms removal runs (a double-click, or a repeated call), then lets time pass; returns the modal's state after the presses. */
+const p1Press = (app, code, presses) => {
+  for (let i = 0; i < presses; i++) app.run(code);
+  const modal = p1Modal(app);
+  app.run('__runTimers()');
+  return modal;
+};
+const P1_OPEN = { closing: false, commit: null };
+const P1_CLOSING = { closing: true, commit: '1' };
+/**
+ * One commit pressed once and pressed twice, each in a fresh app: what look sees after one press, after two (same session)
+ * and after two then reload — one user action, so one effect in all three — and the modal after the second press.
+ */
+function p1Double(state, open, code, look) {
+  const once = new App(state, '2026-06-10', PROGRAM.commit);
+  open(once); p1Press(once, code, 1);
+  const twice = new App(state, '2026-06-10', PROGRAM.commit);
+  open(twice);
+  const modal = p1Press(twice, code, 2);
+  const session = look(twice);
+  twice.reload();
+  return [look(once), session, look(twice), modal];
+}
+const p1Thrice = v => [v, v, v, P1_CLOSING];
+/** [payment rows, active contribution completions, Holiday shown, ISA shown, Monthly Left]. */
+const p1Money = app => { const s = app.snap(); return [app.state().payments.length, app.activeEvents().length, s.goal.gH, s.inv.iA, s.left]; };
+const p1PayOpen = (fields, intent) => app => p1Open(app, fields, intent || 'new');
+const P1_GOAL_50 = p1PayForm({ name: 'Holiday top-up', amount: 50, date: '2026-06-10', status: 'paid', goalId: 'gH' });
+
+function p1Close() {
+  scenario('P1-CLOSE PAYMENTS — one payment form saved twice before it closes is one payment', () => {
+    invariant('P1.pay.goal', 'A: £50 paid to Holiday (£1,000), Save pressed twice → one row, one completion, Holiday £1,050, Monthly Left £2,950 — as one press, also after reload; the modal is closing with its commit taken',
+      p1Double(baseState(), p1PayOpen(P1_GOAL_50), 'savePay("")', p1Money), p1Thrice([1, 1, 1050, 5000, 2950]));
+    invariant('P1.pay.invest', 'B: £50 paid to the ISA (£5,000) twice → one completion, ISA £5,050 once, its valuations untouched (the opening anchor only)',
+      p1Double(baseState(), p1PayOpen(p1PayForm({ name: 'ISA top-up', amount: 50, date: '2026-06-10', status: 'paid', investId: 'iA' })), 'savePay("")',
+        app => p1Money(app).concat([app.state().investments[0].valuations.map(v => v.source)])),
+      p1Thrice([1, 1, 1000, 5050, 2950, ['legacy_transition']]));
+    invariant('P1.pay.bill-paid', 'C: a £30 monthly bill saved paid twice → one row, Monthly Left £2,970',
+      p1Double(baseState(), p1PayOpen(p1PayForm({ name: 'Gym', amount: 30, date: '2026-06-10', status: 'paid', rec: 'yes' })), 'savePay("")', p1Money),
+      p1Thrice([1, 0, 1000, 5000, 2970]));
+    invariant('P1.pay.bill-upcoming', 'D: an £80 upcoming one-off bill saved twice → one row, Monthly Left £2,920',
+      p1Double(baseState(), p1PayOpen(p1PayForm({ name: 'Vet', amount: 80, date: '2026-06-20', status: 'upcoming' })), 'savePay("")', p1Money),
+      p1Thrice([1, 0, 1000, 5000, 2920]));
+    const card = baseState({ debts: [{ id: 'd1', name: 'Card', balance: 1000, minp: 50, apr: 20 }] });
+    invariant('P1.pay.debt', 'E: £100 paid to the card (£1,000) twice → one row, one debt payment event, Monthly Left £2,900; the debt balance stays the £1,000 the user entered',
+      p1Double(card, p1PayOpen(p1PayForm({ name: 'Card payment', amount: 100, date: '2026-06-10', status: 'paid', debtId: 'd1' })), 'savePay("")',
+        app => { const s = app.state(); return [s.payments.length, s.debtPaymentEvents.length, s.debts[0].balance, app.snap().left]; }),
+      p1Thrice([1, 1, 1000, 2900]));
+  });
+
+  scenario('P1-CLOSE ENTITIES — release, goal, investment, expense, debt and income forms commit once', () => {
+    invariant('P1.release', 'F: £200 released from Holiday (£1,000), Confirm pressed twice → one release, Holiday £800 (not £600), also after reload',
+      p1Double(baseState(), app => p1Open(app, { 'geode-sr-source': 'goal:gH', 'geode-sr-amount': '200', 'geode-sr-reason': 'emergency', 'geode-sr-note': '' }),
+        'geodeConfirmSavingsRelease()', app => [app.state().savingsReleases.length, app.snap().goal.gH, app.snap().left]),
+      p1Thrice([1, 800, 3000]));
+    const named = (app, list, name) => app.state()[list].filter(x => x.name === name);
+    invariant('P1.goal.create', 'G: a new goal Car with Saved So Far £1,500 saved twice → one goal, its opening £1,500 once (baseSaved, no contribution event), one activity entry',
+      p1Double(baseState(), app => p1Open(app, { gn: 'Car', ga: '5000', gs: '1500', gm: '0', gd: '', gc: 'other' }), 'saveGoal("")',
+        app => { const car = named(app, 'goals', 'Car'); return [car.length, car.map(g => app.snap().goal[g.id]), app.events().length, app.state().activityLog.filter(e => e.type === 'goal').length]; }),
+      p1Thrice([1, [1500], 0, 1]));
+    invariant('P1.investment.create', 'H: a new investment GIA at £3,000 saved twice → one investment, one manual_create valuation, £3,000 once',
+      p1Double(baseState(), app => p1Open(app, { xn: 'GIA', xb: '3000', xtype: 'isa', xr: '0', xp: '', xo: '', xpurpose: '', xhorizon: '', xcs: '', xgoalid: '' }), 'saveInv("")',
+        app => { const gia = named(app, 'investments', 'GIA'); return [gia.length, gia.map(v => app.snap().inv[v.id]), gia.map(v => v.valuations.map(x => [x.source, x.value]))]; }),
+      p1Thrice([1, [3000], [[['manual_create', 3000]]]]));
+    invariant('P1.expense', 'I: a £40 monthly expense saved twice → one expense, Monthly Left £2,960',
+      p1Double(baseState(), app => p1Open(app, { en: 'Gym', ea: '40', ed: '2026-06-10', ecat: 'other', er: 'yes' }), 'saveExp("")',
+        app => [app.state().expenses.length, app.snap().left]),
+      p1Thrice([1, 2960]));
+    invariant('P1.debt.create', 'A new £1,200 debt saved twice → one debt at £1,200, one activity entry',
+      p1Double(baseState(), app => p1Open(app, { dn: 'Card', db: '1200', dapr: '20', dmp: '50', dinttype: 'fixed', dcat: 'other' }), 'saveDebt("")',
+        app => [app.state().debts.map(d => d.balance), app.state().activityLog.filter(e => e.type === 'debt').length]),
+      p1Thrice([[1200], 1]));
+    invariant('P1.income', 'Income £3,500 saved twice → income £3,500, one activity entry, Monthly Left £3,500',
+      p1Double(baseState(), app => p1Open(app, { mi: '3500' }), 'saveInc()',
+        app => [app.state().income, app.state().activityLog.filter(e => e.type === 'income').length, app.snap().left]),
+      p1Thrice([3500, 1, 3500]));
+  });
+
+  scenario('P1-CLOSE SMART IMPORT AND DUPLICATE PROMPTS — one confirmation imports or resolves once', () => {
+    const importOpen = app => {
+      p1Open(app, { 'gim-inc-0': true, 'gim-type-0': 'payment', 'gim-name-0': 'Holiday savings', 'gim-amt-0': '75', 'gim-date-0': '2026-06-05',
+        'gim-link-0': 'goal:gH', 'gim-merge-0': 'add', 'gim-inc-1': true, 'gim-type-1': 'expense', 'gim-name-1': 'Coffee', 'gim-amt-1': '12',
+        'gim-date-1': '2026-06-05', 'gim-cat-1': 'food', 'gim-rec-1': false, 'gim-merge-1': 'add' });
+      app.run('__handoff = null; window._geodeSmartImportN = 2; window._geodeSmartImportRows = [{}, {}];');
+    };
+    invariant('P1.smart-import', 'J: a statement with a £75 Holiday payment (5 June, so completed) and a £12 coffee, "Add to Beynd" pressed twice → one row, one expense, one completion, Holiday £1,075 at once, Monthly Left £2,913',
+      p1Double(baseState(), importOpen, 'geodeSmartImportConfirm()',
+        app => [app.state().payments.length, app.state().expenses.length, app.activeEvents().length, app.snap().goal.gH, app.snap().left]),
+      p1Thrice([1, 1, 1, 1075, 2913]));
+    const gymExpense = baseState({ expenses: [{ id: 'e1', name: 'Gym', amount: 30, cat: 'other', date: '2026-06-01', rec: 'yes' }] });
+    const counts = app => [app.state().payments.length, app.state().expenses.length, app.snap().left];
+    invariant('P1.dup.pay', 'A £30 Gym bill that matches a Gym expense opens "Already in Spending"; "Keep both" pressed twice → one payment beside the expense, Monthly Left £2,940',
+      p1Double(gymExpense, app => { p1Open(app, p1PayForm({ name: 'Gym', amount: 30, date: '2026-06-10', status: 'paid', rec: 'yes' }), 'new'); app.run('savePay(""); __runTimers();'); },
+        'geodeDupPayResolve("both")', counts),
+      p1Thrice([1, 1, 2940]));
+    const gymBill = baseState({ payments: [{ id: 'p1', name: 'Gym', amount: 30, date: '2026-06-15', status: 'upcoming', rec: 'yes', lastPaidYM: '', payKind: 'bill' }] });
+    invariant('P1.dup.exp', 'A £30 Gym expense that matches a scheduled Gym bill opens "Already scheduled"; "Keep both" pressed twice → one expense beside the bill, Monthly Left £2,940',
+      p1Double(gymBill, app => { p1Open(app, { en: 'Gym', ea: '30', ed: '2026-06-10', ecat: 'other', er: 'yes' }); app.run('saveExp(""); __runTimers();'); },
+        'geodeDupExpResolve("both")', counts),
+      p1Thrice([1, 1, 2940]));
+  });
+
+  scenario('P1-CLOSE PLAN ADD — a Plan "add" saved twice leaves the scheduled row at one addition', () => {
+    const scheduled = baseState({ payments: [{ id: 'pS', name: 'Holiday monthly', amount: 100, date: '2026-06-20', status: 'upcoming', rec: 'yes', lastPaidYM: '', goalId: 'gH', payKind: 'goal' }] });
+    invariant('P1.plan.add', 'K: Plan adds £20 to the £100 scheduled Holiday row (intent add), Save pressed twice → the row is £120 — not £20 (the second press would replace with the reset intent) and not £140 — Monthly Left £2,880, also after reload',
+      p1Double(scheduled, p1PayOpen(p1PayForm({ name: 'Holiday monthly', amount: 20, date: '2026-06-20', status: 'upcoming', rec: 'yes', goalId: 'gH' }), 'add'), 'savePay("")',
+        app => [app.state().payments.map(p => p.amount), app.snap().left]),
+      p1Thrice([[120], 2880]));
+  });
+
+  scenario('P1-CLOSE RECOVERY — a refused save keeps the modal usable; a failure never unlocks a commit; a new modal starts clear', () => {
+    const app = new App(baseState(), '2026-06-10', PROGRAM.commit);
+    p1Open(app, Object.assign({}, P1_GOAL_50, { pa: '' }), 'new');
+    app.run('savePay("")');
+    const formRefused = [p1Toasts(app), p1Modal(app), app.state().payments.length];
+    app.run('__fields.pa = "0"; __toasts = [];');
+    app.run('savePay("")');
+    const applyRefused = [p1Toasts(app).length, p1Modal(app), app.state().payments.length];
+    app.run('__fields.pa = "50"; __toasts = [];');
+    const saved = p1Press(app, 'savePay("")', 2);
+    invariant('P1.validation.pay', 'L: Save with no amount is refused by the form (toast, modal open, no commit taken, nothing saved); £0 paid is refused by the contribution rule (same); corrected to £50 and pressed twice it saves once — £1,050',
+      [formRefused, applyRefused, saved, p1Money(app)],
+      [[['Enter an amount before saving.'], P1_OPEN, 0], [1, P1_OPEN, 0], P1_CLOSING, [1, 1, 1050, 5000, 2950]]);
+
+    const rel = new App(baseState(), '2026-06-10', PROGRAM.commit);
+    p1Open(rel, { 'geode-sr-source': 'goal:gH', 'geode-sr-amount': '', 'geode-sr-reason': 'emergency', 'geode-sr-note': '' });
+    rel.run('geodeConfirmSavingsRelease()');
+    const relRefused = [p1Toasts(rel), p1Modal(rel)];
+    rel.run('__fields["geode-sr-amount"] = "200";');
+    p1Press(rel, 'geodeConfirmSavingsRelease()', 2);
+    const goal = new App(baseState(), '2026-06-10', PROGRAM.commit);
+    p1Open(goal, { gn: '', ga: '5000', gs: '1500', gm: '0', gd: '', gc: 'other' });
+    goal.run('saveGoal("")');
+    const goalRefused = [p1Toasts(goal), p1Modal(goal)];
+    goal.run('__fields.gn = "Car";');
+    p1Press(goal, 'saveGoal("")', 2);
+    invariant('P1.validation.forms', 'L: a release with no amount and a goal with no name are refused with the modal still usable; corrected, each commits once (Holiday £800; two goals)',
+      [relRefused, [rel.state().savingsReleases.length, rel.snap().goal.gH], goalRefused, goal.state().goals.length],
+      [[['Enter an amount to release.'], P1_OPEN], [1, 800], [['Add a name before saving.'], P1_OPEN], 2]);
+
+    const two = new App(baseState(), '2026-06-10', PROGRAM.commit);
+    p1Open(two, P1_GOAL_50, 'new'); p1Press(two, 'savePay("")', 1);
+    p1Open(two, P1_GOAL_50, 'new'); p1Press(two, 'savePay("")', 1);
+    const afterTwo = p1Money(two);
+    two.run('window._geodePayLinkedIntent = "new"; openModal(""); savePay("");');
+    two.run('window._geodePayLinkedIntent = "new"; openModal("");');
+    const fresh = p1Modal(two);
+    two.run('savePay("");');
+    const whileClosing = p1Money(two);
+    two.run('__runTimers()');
+    two.reload();
+    invariant('P1.new-modal', 'M: two separately opened modals each saving £50 are two contributions (Holiday £1,100); a third saves £50 and, while it is still closing, a fourth opens clear and its save counts too (£1,200) — four actions, four effects, also after reload',
+      [afterTwo, fresh, whileClosing, p1Money(two)],
+      [[2, 2, 1100, 5000, 2900], P1_OPEN, [4, 4, 1200, 5000, 2800], [4, 4, 1200, 5000, 2800]]);
+
+    const fail = new App(baseState(), '2026-06-10', PROGRAM.commit);
+    const press = code => { try { fail.run(code); return 'returned'; } catch (e) { return 'threw'; } };
+    p1Open(fail, P1_GOAL_50, 'new');
+    fail.run('var __realSave = save; save = function () { __realSave(); throw new Error("after the change"); };');
+    const after = [press('savePay("")'), press('savePay("")'), p1Modal(fail), p1Money(fail)];
+    fail.run('save = __realSave;');
+    p1Open(fail, P1_GOAL_50, 'new');
+    fail.run('var __realApply = geodeSavePayApply; geodeSavePayApply = function () { throw new Error("before any change"); };');
+    const before = [press('savePay("")'), p1Modal(fail), p1Money(fail)];
+    fail.run('geodeSavePayApply = __realApply;');
+    p1Open(fail, P1_GOAL_50, 'new'); p1Press(fail, 'savePay("")', 1);
+    invariant('P1.failure', 'A save that fails after changing state keeps that modal\'s commit taken (a second press is refused: one row, £1,050); one that fails before changing anything changes nothing; neither locks Beynd — the next modal saves (£1,100)',
+      [after, before, p1Money(fail)],
+      [['threw', 'returned', { closing: false, commit: '1' }, [1, 1, 1050, 5000, 2950]], ['threw', { closing: false, commit: '1' }, [1, 1, 1050, 5000, 2950]],
+        [2, 2, 1100, 5000, 2900]]);
+  });
+
+  scenario('P1-CLOSE INTERACTION LOCK — a committing or closing modal takes no pointer input', () => {
+    const app = new App(baseState(), '2026-06-10', PROGRAM.commit);
+    app.run('openModal(""); __runTimers(); closeModal(); closeModal();');
+    const pending = Number(app.run('__timers.length'));
+    const src = PROGRAM.src;
+    invariant('P1.lock', 'The stylesheet stops pointer input to a committing or closing modal\'s panel (the backdrop still takes the click, so nothing underneath is hit), keeps a committing modal\'s close button usable, and closeModal on a closing modal schedules no second removal',
+      [src.indexOf('.mo-bg[data-geode-commit] .mo,.mo-bg.mo-bg--closing .mo{pointer-events:none}') >= 0,
+        src.indexOf('.mo-bg[data-geode-commit]:not(.mo-bg--closing) .mo-close{pointer-events:auto}') >= 0, pending, p1Modal(app)],
+      [true, true, 1, { closing: true, commit: null }]);
+  });
+}
+
 // ───────────────────────────── run ─────────────────────────────
 
 let PROGRAM;
@@ -5753,6 +5990,7 @@ function main() {
   fa7bTransition(); fa7bSafety(); fa7bJourneys(); fa7bEvidence();
   fa7cLifecycle(); fa7cAnnual(); fa7cSmartImport();
   fa7dLinkedGoals();
+  p1Close();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
   migrationFixtures();
 

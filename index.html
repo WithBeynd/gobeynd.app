@@ -547,6 +547,8 @@ textarea.fi{min-height:70px}
 .mo-bg.on{opacity:1}
 .mo{background:var(--bg-surface);border-radius:var(--radius-xl) var(--radius-xl) 0 0;width:100%;max-width:430px;padding:var(--sp-6) var(--sp-5) max(28px, calc(var(--sp-4) + env(safe-area-inset-bottom, 0px)));border:1px solid var(--bd-em);border-bottom:none;max-height:90vh;overflow-y:auto;-webkit-overflow-scrolling:touch;transform:scale(0.98);opacity:0.98;box-shadow:var(--shadow-lg);transition:transform var(--motion-standard) var(--ease-out),opacity var(--motion-standard) var(--ease-standard),background var(--motion-calm) var(--ease-standard),border-color var(--motion-calm) var(--ease-standard);will-change:transform,opacity}
 .mo-bg.on .mo{transform:scale(1);opacity:1}
+.mo-bg[data-geode-commit] .mo,.mo-bg.mo-bg--closing .mo{pointer-events:none}
+.mo-bg[data-geode-commit]:not(.mo-bg--closing) .mo-close{pointer-events:auto}
 .mo::-webkit-scrollbar{display:none}
 .mo-hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:var(--sp-5);gap:var(--sp-3)}
 .mo-title{font-size:20px;font-weight:800;letter-spacing:-0.02em;color:var(--gem-l);line-height:1.2}
@@ -9595,6 +9597,7 @@ function geodeSavingsReleaseModalImpactRefresh() {
 }
 
 function geodeConfirmSavingsRelease() {
+  if (!geodeModalCommitOpen()) return;
   var ui = geodeSavingsReleaseReadModalUi();
   if (!ui.source) {
     toast('Choose a source to release from.', 'warn');
@@ -9605,6 +9608,7 @@ function geodeConfirmSavingsRelease() {
     toast('Enter an amount to release.', 'warn');
     return;
   }
+  if (!geodeModalCommitBegin()) return;
   var result = geodeApplySavingsRelease({
     sourceType: preview.sourceType,
     sourceId: preview.sourceId,
@@ -9618,6 +9622,7 @@ function geodeConfirmSavingsRelease() {
     copyKey: preview.copyKey
   });
   if (!result.ok) {
+    geodeModalCommitRelease();
     toast('Could not record release.', 'warn');
     return;
   }
@@ -11741,6 +11746,29 @@ function openModal(html) {
   }, 0);
 }
 
+/**
+ * R1: one modal commits money at most once. The commit state lives on the open #modal, so a new modal starts clear.
+ * A save handler checks geodeModalCommitOpen() before reading its form, takes geodeModalCommitBegin() after its
+ * validation and before its first change, and calls geodeModalCommitRelease() only when the save was refused without
+ * changing anything. A closing modal takes no commit. With no modal open, each call is its own action.
+ */
+function geodeModalCommitOpen() {
+  var m = document.getElementById('modal');
+  if (!m) return true;
+  return !m.getAttribute('data-geode-commit') && !m.classList.contains('mo-bg--closing');
+}
+function geodeModalCommitBegin() {
+  var m = document.getElementById('modal');
+  if (!m) return true;
+  if (!geodeModalCommitOpen()) return false;
+  m.setAttribute('data-geode-commit', '1');
+  return true;
+}
+function geodeModalCommitRelease() {
+  var m = document.getElementById('modal');
+  if (m && !m.classList.contains('mo-bg--closing')) m.removeAttribute('data-geode-commit');
+}
+
 /** Subscription review queue only: swap panel HTML without tearing down `#modal` (avoids re-running enter animation). */
 function geodeReplaceMoPanelHtml(html) {
   var bg = document.getElementById('modal');
@@ -11829,7 +11857,11 @@ function closeModal() {
   }
   var m = document.getElementById('modal');
   if (!m) return;
-  try { m.classList.remove('on'); } catch (e) {}
+  if (m.classList.contains('mo-bg--closing')) return;
+  try {
+    m.classList.add('mo-bg--closing');
+    m.classList.remove('on');
+  } catch (e) {}
   setTimeout(removeModalDom, 165);
 }
 function mh(title) { return '<div class="mo-hdr"><span class="mo-title">'+title+'</span><button type="button" class="mo-close" onclick="closeModal()" title="Close" aria-label="Close"><span class="mo-close-x ic mo-close-ic">' + geodeSvg('x') + '</span><span class="mo-close-lb">Close</span></button></div>'; }
@@ -13379,6 +13411,7 @@ function geodeSmartImportCancel() {
   closeModal();
 }
 function geodeSmartImportConfirm() {
+  if (!geodeModalCommitBegin()) return;
   var n = window._geodeSmartImportN || 0;
   if (!n) {
     closeModal();
@@ -13684,8 +13717,10 @@ function openIncModal() {
   setTimeout(function(){ var e=document.getElementById('mi'); if(e)e.focus(); }, 80);
 }
 function saveInc() {
+  if (!geodeModalCommitOpen()) return;
   var v = parseFloat(document.getElementById('mi').value);
   if (!isNaN(v) && v >= 0) {
+    if (!geodeModalCommitBegin()) return;
     var prevInc = Number(S.income) || 0;
     setLastSnapshotBeforeChange();
     appendActivityLog('income', v - prevInc);
@@ -38165,6 +38200,7 @@ function geodeEditAmountChanged(raw, origRaw, current) {
   return Math.round(Number(s) * 100) !== Math.round(orig * 100);
 }
 function saveGoal(id) {
+  if (!geodeModalCommitOpen()) return;
   var nm=(document.getElementById('gn')||{}).value||''; nm=nm.trim();
   var am=(document.getElementById('ga')||{}).value;
   if (!nm) {
@@ -38198,6 +38234,7 @@ function saveGoal(id) {
       return;
     }
   }
+  if (!geodeModalCommitBegin()) return;
   var sumSavedBefore = S.goals.reduce(function(s, g) { return s + toNum(g.saved); }, 0);
   setLastSnapshotBeforeChange();
   var dv=(document.getElementById('gd')||{}).value;
@@ -38893,6 +38930,7 @@ function openDebtModal(id) {
   openModal(h);
 }
 function saveDebt(id) {
+  if (!geodeModalCommitOpen()) return;
   var nm=((document.getElementById('dn')||{}).value||'').trim(), bal=(document.getElementById('db')||{}).value;
   if (!nm) {
     toast('Add a name before saving.', 'warn');
@@ -38902,6 +38940,7 @@ function saveDebt(id) {
     toast('Enter an amount before saving.', 'warn');
     return;
   }
+  if (!geodeModalCommitBegin()) return;
   var prevRow = id ? S.debts.filter(function (x) { return x.id === id; })[0] : null;
   var debtBeforeLocal = prevRow ? toNum(prevRow.balance) : 0;
   var debtBefore = S.debts.reduce(function(s, d) { return s + toNum(d.balance); }, 0);
@@ -40107,6 +40146,7 @@ function geodeFindMatchingPaymentForExpense(name, amount, rec) {
   return null;
 }
 function geodeDupPayResolve(choice) {
+  if ((choice === 'move' || choice === 'both') && !geodeModalCommitBegin()) return;
   var ctx = window._geodeDupPayCtx;
   closeModal();
   window._geodeDupPayCtx = null;
@@ -40121,6 +40161,7 @@ function geodeDupPayResolve(choice) {
   geodeSavePayApply(ctx.id, ctx.nm, ctx.am, ctx.dtPay, ctx.st, ctx.rec, ctx.dt, ctx.gid, ctx.invid, ctx.debtid, ctx.payKind, ctx.amtNum);
 }
 function geodeDupExpResolve(choice) {
+  if ((choice === 'move' || choice === 'both') && !geodeModalCommitBegin()) return;
   var ctx = window._geodeDupExpCtx;
   closeModal();
   window._geodeDupExpCtx = null;
@@ -40144,6 +40185,7 @@ function geodeDupExpResolve(choice) {
   geodeSaveExpApply(ctx.id, ctx.nm, ctx.am, ctx.edRaw, ctx.cat, ctx.rec);
 }
 function savePay(id) {
+  if (!geodeModalCommitOpen()) return;
   var nm = ((document.getElementById('pn') || {}).value || '').trim(),
     am = (document.getElementById('pa') || {}).value;
   var dtPay = ((document.getElementById('pd') || {}).value || '').trim();
@@ -40215,7 +40257,8 @@ function savePay(id) {
       return;
     }
   }
-  geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, payKind, amtNum);
+  if (!geodeModalCommitBegin()) return;
+  if (!geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, payKind, amtNum)) geodeModalCommitRelease();
 }
 function geodeSaveExpApply(id, nm, am, edRaw, cat, rec) {
   setLastSnapshotBeforeChange();
@@ -40223,7 +40266,7 @@ function geodeSaveExpApply(id, nm, am, edRaw, cat, rec) {
     var ex = S.expenses.filter(function(e) {
       return e.id === id;
     })[0];
-    if (!ex) return;
+    if (!ex) return false;
     ex.name = nm;
     ex.amount = Number(am);
     ex.cat = cat;
@@ -40242,6 +40285,7 @@ function geodeSaveExpApply(id, nm, am, edRaw, cat, rec) {
   render();
   checkAlerts();
   geodeSuccessToast(geodeStageLToastAfterSave(expMsg, 'expense', { _seed: Date.now() }));
+  return true;
 }
 function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, payKind, amtNum) {
   var bufPrefill = false;
@@ -40259,7 +40303,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     geodeContributionSaveRefusal(S, saveRow, { kind: saveKind, status: st, amount: amtNum });
   if (saveRefusal) {
     toast(saveRefusal, 'warn');
-    return;
+    return false;
   }
   var payLinkedIntent = 'set';
   try {
@@ -40385,7 +40429,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
   }
   if(id){
     var ex=S.payments.filter(function(x){return x.id===id;})[0];
-    if(!ex)return;
+    if(!ex)return false;
     savedPayBefore = geodeDebtPaymentEventSnapshot(ex);
     savedPayContributionBefore = geodeContributionEventSnapshot(ex);
     var exWasPaid = String(ex.status || '') === 'paid';
@@ -40508,6 +40552,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
       })
     );
   }
+  return true;
 }
 function togglePay(id){
   var p=S.payments.filter(function(x){return x.id===id;})[0];
@@ -41220,6 +41265,7 @@ function openExpModal(id, opts){
   }, 0);
 }
 function saveExp(id){
+  if (!geodeModalCommitOpen()) return;
   var nm=((document.getElementById('en')||{}).value||'').trim(),am=(document.getElementById('ea')||{}).value;
   var edRaw = ((document.getElementById('ed') || {}).value || '').trim();
   if (!nm) {
@@ -41264,7 +41310,8 @@ function saveExp(id){
     openModal(_mhE);
     return;
   }
-  geodeSaveExpApply(id, nm, am, edRaw, cat, rec);
+  if (!geodeModalCommitBegin()) return;
+  if (!geodeSaveExpApply(id, nm, am, edRaw, cat, rec)) geodeModalCommitRelease();
 }
 function delExp(id){S.expenses=S.expenses.filter(function(e){return e.id!==id;});save();render();}
 
@@ -41401,6 +41448,7 @@ function openInvModal(id){
   }, 0);
 }
 function saveInv(id){
+  if (!geodeModalCommitOpen()) return;
   var nm=((document.getElementById('xn')||{}).value||'').trim(),bal=(document.getElementById('xb')||{}).value;
   if (!nm) {
     toast('Add a name before saving.', 'warn');
@@ -41430,6 +41478,7 @@ function saveInv(id){
       toast('This value can\u2019t be saved yet: your device date is earlier than the last value you entered. Check the date and try again.', 'warn');
       return;
     }
+    if (!geodeModalCommitBegin()) return;
     var invBeforeLocal = prevInv ? geodeInvestmentDisplayBalance(S, prevInv) : 0;
     setLastSnapshotBeforeChange();
     var obj={name:nm,type:_invType,balance:Number(bal),returns:_invR,platform:_invP,notes:_invO,purpose:_invPurpose,horizon:_invHorizon,contributionStyle:_invCs,goalId:_invGoalId};
