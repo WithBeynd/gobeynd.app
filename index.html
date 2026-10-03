@@ -752,6 +752,9 @@ canvas{display:block}
 
 /* App chrome utilities */
 .update-banner{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:var(--bg-surface);color:var(--tx-1);padding:10px 14px;border-radius:var(--radius-sm);font-size:12px;display:none;z-index:9999;box-shadow:var(--shadow);pointer-events:none;border:1px solid var(--bd);max-width:min(92vw,420px);line-height:1.45;text-align:center}
+.geode-stale-gate{position:fixed;inset:0;z-index:100000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:24px;background:var(--bg-base,#05050f);color:var(--tx-1);text-align:center}
+.geode-stale-gate__text{max-width:min(88vw,380px);margin:0;font-size:15px;line-height:1.5}
+.geode-stale-gate .btn{width:min(88vw,380px);box-sizing:border-box}
 .update-banner__button{margin-left:10px;background:transparent;border:none;color:var(--gem);cursor:pointer;font-weight:700;font-family:var(--font-sans);pointer-events:auto;white-space:nowrap}
 
 /* Stage EEE inline-style cleanup utilities */
@@ -1356,8 +1359,11 @@ try {
 
 // ── DATA ──────────────────────────────────────────
 var KEY = 'geode_v6';
-/** Deploy/runtime marker for support and PWA freshness checks (80N-P.1); not persisted. */
-var BEYND_RUNTIME_VERSION = 'v1.0.75';
+/**
+ * Deploy/runtime marker for support and PWA freshness checks (80N-P.1); not persisted. Keep equal to service-worker.js
+ * CACHE_VERSION: its install accepts only a shell containing this exact line, and geodeShellCleanup keeps that cache.
+ */
+var BEYND_RUNTIME_VERSION = 'v1.0.76';
 /**
  * Local persisted-state schema marker for backup/restore validation (bump when structure changes).
  * 2: goal Saved is base + dated contribution events + legacy carries − releases (geodeSchema2Transition).
@@ -1588,11 +1594,170 @@ function setAppearance(v) {
 function geodePersistedSchemaVersion(v) {
   return typeof v === 'number' && isFinite(v) && v === Math.floor(v) && v >= 1 ? v : 1;
 }
+/**
+ * Release safety: '' while this page may write KEY; 'newer' once stored data is newer than GEODE_SCHEMA_VERSION;
+ * 'changed' once another window changed it under this page (other schema, unreadable, removed). Lasts until reload.
+ */
+var _geodeRuntimeStale = '';
+/** Whether this page loaded or wrote KEY, so a missing KEY later means another window removed it. */
+var _geodeFinancialKeySeen = false;
+/** geode_shell: this runtime's version once geodeShellCleanup removed every older Beynd cache in this browser. */
+var GEODE_SHELL_KEY = 'geode_shell';
+var GEODE_CACHE_PREFIX = 'beynd-cache-';
+
+/** Schema of a stored KEY string: null when nothing is stored, NaN when it cannot be read. */
+function geodeStoredSchemaVersion(raw) {
+  if (raw === null || raw === undefined) return null;
+  try {
+    var p = JSON.parse(raw);
+    return p && typeof p === 'object' && !Array.isArray(p) ? geodePersistedSchemaVersion(p._schemaVersion) : NaN;
+  } catch (e) {
+    return NaN;
+  }
+}
+
+/** Stops every financial write until reload and shows the reload gate; the first reason is kept. Never writes. */
+function geodeMarkRuntimeStale(reason) {
+  if (_geodeRuntimeStale) return;
+  _geodeRuntimeStale = reason === 'newer' ? 'newer' : 'changed';
+  try {
+    console.warn('[geode] financial writes stopped until reload: ' + _geodeRuntimeStale);
+  } catch (_eW) {}
+  geodeShowStaleRuntimeGate(_geodeRuntimeStale);
+}
+
+/** Boot check on the KEY string load() read: data newer than this runtime understands is never written by it. */
+function geodeNoteFinancialBoot(raw) {
+  _geodeFinancialKeySeen = !!raw;
+  if (geodeStoredSchemaVersion(raw) > GEODE_SCHEMA_VERSION) geodeMarkRuntimeStale('newer');
+}
+
+/**
+ * Guard of every KEY writer (save, persistGeodeToLocalStorage, geodeSchema2CommitTransition). Re-reads what is stored
+ * now, so a change another window made is caught even when its storage event never reached this page (e.g. a page
+ * restored from the back/forward cache). Refuses when stored data is newer than this runtime, has a different schema
+ * from the one this write replaces (`replacing`, default this page's), or was removed after this page saw it.
+ * Unreadable stored data keeps the behaviour from before the guard. Another window's same-schema edits are not
+ * detected (last writer wins).
+ */
+function geodeFinancialWriteAllowed(replacing) {
+  if (_geodeRuntimeStale) return false;
+  var stored;
+  try {
+    stored = geodeStoredSchemaVersion(localStorage.getItem(KEY));
+  } catch (e) {
+    return true;
+  }
+  var expected = replacing === undefined ? geodePersistedSchemaVersion(S._schemaVersion) : replacing;
+  if (stored === null) {
+    if (_geodeFinancialKeySeen) geodeMarkRuntimeStale('changed');
+  } else if (stored > GEODE_SCHEMA_VERSION) {
+    geodeMarkRuntimeStale('newer');
+  } else if (stored === stored && stored !== expected) {
+    geodeMarkRuntimeStale('changed');
+  }
+  return !_geodeRuntimeStale;
+}
+
+/** Storage-event body: `raw` is the KEY value another window just stored (null when it removed KEY or cleared storage). */
+function geodeOnForeignFinancialWrite(raw) {
+  if (_geodeRuntimeStale) return;
+  var v = geodeStoredSchemaVersion(raw);
+  if (v === null || v !== v) geodeMarkRuntimeStale('changed');
+  else if (v > GEODE_SCHEMA_VERSION) geodeMarkRuntimeStale('newer');
+  else if (v !== geodePersistedSchemaVersion(S._schemaVersion)) geodeMarkRuntimeStale('changed');
+}
+
+/** Storage events reach only other windows, so each one on KEY (or a full clear, key null) is a foreign change. */
+function geodeInstallFinancialStorageListener() {
+  try {
+    window.addEventListener('storage', function (e) {
+      if (!e || (e.key !== KEY && e.key !== null)) return;
+      if (e.storageArea && e.storageArea !== localStorage) return;
+      geodeOnForeignFinancialWrite(e.key === null ? null : e.newValue);
+    });
+  } catch (_eL) {}
+}
+
+/** Full-screen reload gate for a stale runtime: plain words, one action, nothing behind it reachable. */
+function geodeShowStaleRuntimeGate(reason) {
+  try {
+    if (typeof document === 'undefined' || !document.body || document.getElementById('geode-stale-gate')) return;
+    var gate = document.createElement('div');
+    gate.id = 'geode-stale-gate';
+    gate.className = 'geode-stale-gate';
+    gate.setAttribute('role', 'alertdialog');
+    gate.setAttribute('aria-modal', 'true');
+    var msg = document.createElement('p');
+    msg.className = 'geode-stale-gate__text';
+    msg.textContent =
+      reason === 'newer'
+        ? 'A newer version of Beynd is needed on this device. Reload to update.'
+        : 'Beynd was updated in another window. Reload to continue \u2014 your saved information is safe.';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-p';
+    btn.textContent = 'Reload';
+    btn.addEventListener('click', function () {
+      location.reload();
+    });
+    gate.appendChild(msg);
+    gate.appendChild(btn);
+    document.body.appendChild(gate);
+  } catch (_eG) {}
+}
+
+/**
+ * Release safety: whether the schema 1 → 2 transition may run in this browser. 'absent': no Cache API, so no older
+ * app copy can be stored here. 'ready': geodeShellCleanup already removed every older Beynd cache for this runtime.
+ * 'pending': not yet, or the Cache API failed. geode_shell proves only that older cached app copies are gone — not
+ * that no older page is still open; those are handled by the service worker reloading its windows on takeover and by
+ * geodeFinancialWriteAllowed / the storage listener.
+ */
+function geodeShellReadiness() {
+  if (typeof caches === 'undefined' || !caches) return 'absent';
+  try {
+    return localStorage.getItem(GEODE_SHELL_KEY) === BEYND_RUNTIME_VERSION ? 'ready' : 'pending';
+  } catch (e) {
+    return 'pending';
+  }
+}
+
+/** Deletes every Beynd cache but this runtime's; records geode_shell only after every deletion succeeded. Never touches KEY. */
+function geodeShellCleanup() {
+  if (geodeShellReadiness() === 'absent') return Promise.resolve(false);
+  var current = GEODE_CACHE_PREFIX + BEYND_RUNTIME_VERSION;
+  try {
+    return caches
+      .keys()
+      .then(function (keys) {
+        return Promise.all(
+          keys
+            .filter(function (k) {
+              return k.indexOf(GEODE_CACHE_PREFIX) === 0 && k !== current;
+            })
+            .map(function (k) {
+              return caches.delete(k);
+            })
+        );
+      })
+      .then(function () {
+        localStorage.setItem(GEODE_SHELL_KEY, BEYND_RUNTIME_VERSION);
+        return true;
+      })
+      .catch(function () {
+        return false;
+      });
+  } catch (e) {
+    return Promise.resolve(false);
+  }
+}
 function load() {
   var _loadedAppearanceWasMissing = false;
   try {
     var d = localStorage.getItem(KEY);
     _geodeFirstBoot = !d;
+    geodeNoteFinancialBoot(d);
     if (d) {
       var p = JSON.parse(d);
       _loadedAppearanceWasMissing = !Object.prototype.hasOwnProperty.call(p, 'appearance');
@@ -1665,9 +1830,15 @@ function load() {
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
   geodeNormalizeSavingsReleases(S);
-  /** FA-3C-C: the transition reads legacy paid rows, so it runs before recurring sync resets them. */
-  if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
-  else geodeSchema2Transition();
+  /**
+   * FA-3C-C: the transition reads legacy paid rows, so it runs before recurring sync resets them. Release safety: it
+   * starts only once no older app copy can be served in this browser (geodeShellReadiness); until then data stays
+   * schema 1. Data newer than this runtime is neither checked nor moved.
+   */
+  if (!_geodeRuntimeStale) {
+    if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
+    else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();
+  }
   syncRecurringPayments();
   geodeNormalizeDebtHealthFields(S);
   geodeNormalizeDebtPaymentEvents(S);
@@ -1715,6 +1886,7 @@ function load() {
   if (__beyndAppearancePreview === 'offwhite') applyAppearance('offwhite');
 }
 function save() {
+  if (!geodeFinancialWriteAllowed()) return;
   geodeNormalizeIncomeTypeFields();
   try {
     geodeArchiveExpiredOneOffExpenses(S);
@@ -1729,6 +1901,7 @@ function save() {
   } catch (e) {}
   try {
     localStorage.setItem(KEY, JSON.stringify(S));
+    _geodeFinancialKeySeen = true;
   } catch (e2) {
     toast('Could not save data (storage may be full).', 'warn');
   }
@@ -1739,8 +1912,10 @@ function save() {
 
 /** Persist S (e.g. nudgeHistory) without snapshot / lastSnapshot side effects. */
 function persistGeodeToLocalStorage() {
+  if (!geodeFinancialWriteAllowed()) return;
   try {
     localStorage.setItem(KEY, JSON.stringify(S));
+    _geodeFinancialKeySeen = true;
   } catch (e) {
     try {
       toast('Could not save data (storage may be full).', 'warn');
@@ -7519,13 +7694,17 @@ function geodeSchema2IntegrityReport(state) {
 
 /**
  * FA-3C-C: the transition's single write — the whole state at KEY, read back to confirm. Unlike save(), it has no
- * snapshot or archive side effects and reports failure instead of swallowing it.
+ * snapshot or archive side effects and reports failure instead of swallowing it. Release safety: it replaces only
+ * the schema-1 data the transition started from (geodeFinancialWriteAllowed).
  */
 function geodeSchema2CommitTransition() {
   try {
+    if (!geodeFinancialWriteAllowed(1)) return false;
     var json = JSON.stringify(S);
     localStorage.setItem(KEY, json);
-    return localStorage.getItem(KEY) === json;
+    if (localStorage.getItem(KEY) !== json) return false;
+    _geodeFinancialKeySeen = true;
+    return true;
   } catch (e) {
     return false;
   }
@@ -10811,6 +10990,8 @@ function checkAlerts() {
 
 // ── SPLASH ────────────────────────────────────────
 load();
+geodeInstallFinancialStorageListener();
+geodeShellCleanup();
 geodeLoadCoachingCopy();
 function hideSplash() {
   applyTheme(S.theme||'dark');

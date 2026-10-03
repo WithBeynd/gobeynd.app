@@ -83,6 +83,9 @@ const PRODUCTION_FUNCTIONS = [
   // schema-2 goal authority (FA-3C-C): version rule, one-time transition, integrity report, carry-aware recurring reset
   'geodePersistedSchemaVersion', 'geodeSchema2Active', 'geodeSchema2AuthorityProblems', 'geodeSchema2IntegrityReport',
   'geodeSchema2CommitTransition', 'geodeSchema2Transition', 'geodeSchema2RecurringResetDue',
+  // release safety: stale-runtime write guard, cross-window detection, shell readiness for the transition
+  'geodeStoredSchemaVersion', 'geodeMarkRuntimeStale', 'geodeNoteFinancialBoot', 'geodeFinancialWriteAllowed',
+  'geodeOnForeignFinancialWrite', 'geodeShellReadiness', 'persistGeodeToLocalStorage',
   // carry lifecycle and contribution input integrity (FA-3C-B): payment actions resolve the carry a row still holds
   'geodeContributionCarryFor', 'geodeContributionCarryForRow', 'geodeResolveContributionCarry', 'geodeContributionCarryFollowRow',
   'geodeContributionSaveRefusal',
@@ -94,14 +97,19 @@ const PRODUCTION_FUNCTIONS = [
 ];
 
 /** Production top-level constants the extracted base functions read. */
-const BASE_CONSTANTS = ['GEODE_SCHEMA_VERSION'];
+const BASE_CONSTANTS = ['GEODE_SCHEMA_VERSION', 'BEYND_RUNTIME_VERSION', '_geodeRuntimeStale', '_geodeFinancialKeySeen',
+  'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
 
 /**
  * Read-only structural checks: the reload and render shims below must mirror these production bodies, and the
  * App.contribute / App.planSchedule intents must mirror what the payment modal's callers pass.
  */
-const STRUCTURAL_FUNCTIONS = ['load', 'render', 'openPayModal', 'geodePayFromGoal', 'geodePayFromInvest', 'geodePayFromDebt',
+const STRUCTURAL_FUNCTIONS = ['load', 'save', 'geodeInstallFinancialStorageListener', 'geodeShowStaleRuntimeGate',
+  'geodeShellCleanup', 'render', 'openPayModal', 'geodePayFromGoal', 'geodePayFromInvest', 'geodePayFromDebt',
   'openPayQuick', 'geodePlanDetailActionForStep', 'geodeMainActionFromPriorityStep', 'openSuggestedAction', 'openGoalModal', 'openInvModal'];
+
+/** The release gate load() and __reload put in front of the schema 1 → 2 transition (geodeShellReadiness). */
+const RELEASE_GATE = "else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();";
 
 /**
  * Test-only environment. Everything here is a side effect the scenarios do not observe (UI, toasts, caches,
@@ -126,7 +134,11 @@ Date = __SimDate;
 
 var KEY = 'geode_v6';
 var __store = null;
-function save() { __store = JSON.stringify(S); }
+/** Production save() minus its snapshot/archive side effects: the same release guard, then the whole state to the store. */
+function save() { if (!geodeFinancialWriteAllowed()) return; __store = JSON.stringify(S); _geodeFinancialKeySeen = true; }
+/** Stale-runtime reload gate (UI): records which gate production would show. */
+var __staleGate = '';
+function geodeShowStaleRuntimeGate(reason) { __staleGate = reason; }
 function __memStorage() { var m = {}; return { getItem: function (k) { return Object.prototype.hasOwnProperty.call(m, k) ? m[k] : null; }, setItem: function (k, v) { m[k] = String(v); }, removeItem: function (k) { delete m[k]; } }; }
 /** localStorage[KEY] is the store save() writes. __storageFault: 'throw' — setItem(KEY) throws; 'lose' — it returns but stores nothing. */
 var __storageFault = '', __otherStorage = __memStorage();
@@ -178,6 +190,8 @@ function geodePlanReadinessState() { return 'active'; }
 
 /** Mirrors load(): the subset of its boot sequence that touches payments, goals, investments and releases. */
 function __reload() {
+  _geodeRuntimeStale = ''; _geodeFinancialKeySeen = false; __staleGate = ''; // a reload is a new page
+  geodeNoteFinancialBoot(__store);
   S = JSON.parse(__store);
   S._schemaVersion = geodePersistedSchemaVersion(S._schemaVersion);
   geodeNormalizeContributionEvents(S);
@@ -185,8 +199,10 @@ function __reload() {
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
   geodeNormalizeSavingsReleases(S);
-  if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
-  else geodeSchema2Transition();
+  if (!_geodeRuntimeStale) {
+    if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
+    else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();
+  }
   syncRecurringPayments();
   geodeNormalizeDebtPaymentEvents(S);
   geodeRecomputeBalancesFromPayments();
@@ -756,9 +772,9 @@ const signature = rows => rows.map(r => ({ rec: r.rec, amount: r.amount })).sort
 function harnessFidelity() {
   scenario('Harness fidelity — shims mirror production boot and render', () => {
     const load = PROGRAM.structural.load;
-    const order = ['S._schemaVersion = geodePersistedSchemaVersion(p._schemaVersion);', 'geodeNormalizeContributionEvents(S);', 'geodeNormalizeContributionCarry(S);',
-      'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();', 'geodeNormalizeSavingsReleases(S);',
-      'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', 'else geodeSchema2Transition();', 'syncRecurringPayments();',
+    const order = ['geodeNoteFinancialBoot(d);', 'S._schemaVersion = geodePersistedSchemaVersion(p._schemaVersion);', 'geodeNormalizeContributionEvents(S);', 'geodeNormalizeContributionCarry(S);',
+      'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();', 'geodeNormalizeSavingsReleases(S);', 'if (!_geodeRuntimeStale) {',
+      'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, 'syncRecurringPayments();',
       'geodeNormalizeDebtPaymentEvents(S);', 'geodeRecomputeBalancesFromPayments();'];
     const at = order.map(c => load.indexOf(c));
     invariant('fidelity.load', 'load() runs the reload-shim sequence in this order', at.every((p, i) => p >= 0 && (i === 0 || p > at[i - 1])), true);
@@ -2406,7 +2422,7 @@ function fa3bOrder() {
   scenario('FA-3B ORDER — migration runs after normalisation and before syncRecurringPayments', () => {
     const load = PROGRAM.structural.load;
     const transition = PROGRAM.src.slice(PROGRAM.src.indexOf('\nfunction geodeSchema2Transition('), PROGRAM.src.indexOf('\nfunction geodeSchema2RecurringResetDue('));
-    const at = ['geodeNormalizeContributionEvents(S);', 'else geodeSchema2Transition();', 'syncRecurringPayments();'].map(c => load.indexOf(c));
+    const at = ['geodeNormalizeContributionEvents(S);', RELEASE_GATE, 'syncRecurringPayments();'].map(c => load.indexOf(c));
     const app = new App(legacyState({ saved: 1250 }, { payments: [legacyPay('pm', { rec: 'yes', lastPaidYM: '2026-06', date: '2026-07-15' })] }), '2026-07-02');
     app.reload();
     const row = app.state().payments[0];
@@ -3821,7 +3837,8 @@ const clockAt = (app, iso, h, m) => { const [y, mo, d] = iso.split('-').map(Numb
 /** A load's financial result without ids or creation times: display, seeded completions, carries, goal parts and positions. */
 const financial = app => { const a = authority(app); return [app.snap(), seededRows(app), carryRows(app.state().contributionCarry), Object.keys(a.goals).map(g => [g, a.goals[g].parts, a.goals[g].position])]; };
 /** __reload up to the transition: what a load has done when it commits schema 2. */
-const FA3CC_TO_TRANSITION = 'S = JSON.parse(__store); S._schemaVersion = geodePersistedSchemaVersion(S._schemaVersion); geodeNormalizeContributionEvents(S); geodeNormalizeContributionCarry(S);' +
+const FA3CC_TO_TRANSITION = "_geodeRuntimeStale = ''; _geodeFinancialKeySeen = false; geodeNoteFinancialBoot(__store);" +
+  ' S = JSON.parse(__store); S._schemaVersion = geodePersistedSchemaVersion(S._schemaVersion); geodeNormalizeContributionEvents(S); geodeNormalizeContributionCarry(S);' +
   ' migratePaymentFlowFields(); geodeNormalizeGoalInvestBaseFields(); geodeNormalizeSavingsReleases(S);';
 /** CARRY_MIX plus a monthly Holiday £100 completed this month (lastPaidYM 2026-08): seeded completions beside the carries; Holiday £1,450. */
 const FA3CC_MIX = (() => {
@@ -3857,8 +3874,9 @@ function fa3ccTransition() {
     const tr = extractFunction(src, 'geodeSchema2Transition').text;
     const steps = ['geodeSeedLegacyContributionEvents();', 'geodeSchema2TransitionCarryRecords(S)', 'geodeSchema2AuthorityProblems(S, true)',
       'S._schemaVersion = GEODE_SCHEMA_VERSION;', 'geodeSchema2CommitTransition()'].map(s => tr.indexOf(s));
-    invariant('FA3CC.c4.order', 'The transition seeds dated completions, then carries what rows cannot date, validates, sets the marker and only then writes; load runs it before recurring sync resets paid rows',
-      [steps.every(i => i >= 0), steps.every((i, n) => !n || steps[n - 1] < i), load.indexOf('else geodeSchema2Transition();') < load.indexOf('syncRecurringPayments();')], [true, true, true]);
+    const gateAt = load.indexOf(RELEASE_GATE), syncAt = load.indexOf('syncRecurringPayments();');
+    invariant('FA3CC.c4.order', 'The transition seeds dated completions, then carries what rows cannot date, validates, sets the marker and only then writes; load runs it (behind the release gate) before recurring sync resets paid rows — every construct is found before its position is compared',
+      [steps.every(i => i >= 0), steps.every((i, n) => !n || steps[n - 1] < i), gateAt >= 0 && syncAt >= 0 && gateAt < syncAt], [true, true, true]);
 
     const once = new App(FA3CC_MIX, '2026-08-20', undefined, { boot: false });
     watchWrites(once);
@@ -4240,6 +4258,246 @@ function fa3ccPositions() {
   });
 }
 
+// FA-3 release safety: a runtime never writes financial data newer than it understands or changed under it by another window,
+// and the schema 1 → 2 transition waits until no older cached copy of the app is left in this browser.
+
+const STALE_WARN = '[geode] financial writes stopped until reload: ';
+/** Consumes the app's console warnings: 'stale:<reason>' per stale mark, 'transition:<why>' per failed transition, '? ' anything else. */
+const relWarnings = app => app.warnings.splice(0).map(w => (w.indexOf(STALE_WARN) === 0 ? 'stale:' + w.slice(STALE_WARN.length)
+  : w.indexOf(FA3CC_FAILED) === 0 ? 'transition:' + w.slice(FA3CC_FAILED.length) : '? ' + w));
+/** [why this page stopped writing, which reload gate it shows]; ['', ''] while it may write. */
+const staleState = app => JSON.parse(app.run('JSON.stringify([_geodeRuntimeStale, __staleGate])'));
+const rawStore = app => app.run('__store');
+/** raw with its schema marker set to v (undefined: removed). */
+const withSchema = (raw, v) => { const p = JSON.parse(raw); if (v === undefined) delete p._schemaVersion; else p._schemaVersion = v; return JSON.stringify(p); };
+/** Another window stores raw at KEY (null: removes it). No storage event reaches this page unless fireStorage sends one. */
+const foreignStore = (app, raw) => { app.ctx.__raw = raw; app.run('__store = __raw;'); };
+/** A financial action: a completed £50 Holiday top-up added from the payment form (save). */
+const relAct = app => app.contribute({ name: 'Top-up', amount: 50, date: '2026-06-05', status: 'paid', goalId: 'gH' });
+/** Runs the production storage listener (geodeInstallFinancialStorageListener) in this page. */
+const relListen = app => {
+  app.run('var __listeners = []; window.addEventListener = function (type, fn) { __listeners.push([type, fn]); };');
+  app.run(PROGRAM.structural.geodeInstallFinancialStorageListener + '\ngeodeInstallFinancialStorageListener();');
+};
+/** A storage event as the browser delivers it to other windows; area: 'local' (default), 'session' or 'none' (no storageArea). */
+const fireStorage = (app, key, newValue, area) => {
+  app.ctx.__evJson = JSON.stringify({ key, newValue });
+  app.run('var __e = JSON.parse(__evJson);' + (area === 'none' ? '' : ' __e.storageArea = ' + (area === 'session' ? 'sessionStorage' : 'localStorage') + ';') +
+    ' __listeners.forEach(function (l) { if (l[0] === "storage") l[1](__e); });');
+};
+/** A page booted on schema 2 data (baseState transitions on its first load; no Cache API here, so nothing holds it back). */
+const schema2App = () => new App(baseState(), '2026-06-05');
+/**
+ * A page loading the G1 fixture (paid one-off £250, schema 1). shell: the geode_shell value stored (true: this runtime's);
+ * cacheApi false: a browser without the Cache API.
+ */
+const shellApp = (shell, cacheApi) => {
+  const f = fa3cbFixture('one-off');
+  const app = new App(f[2], f[3], undefined, { boot: false });
+  if (cacheApi !== false) app.run('var caches = {};');
+  if (shell !== undefined) app.run('__otherStorage.setItem(GEODE_SHELL_KEY, ' + (shell === true ? 'BEYND_RUNTIME_VERSION' : JSON.stringify(shell)) + ');');
+  watchWrites(app);
+  app.run('__reload()');
+  return app;
+};
+/** Schema of the stored data as production reads it (a missing marker is schema 1). */
+const storedSchema = app => app.run('geodeStoredSchemaVersion(__store)');
+
+function releaseSafetyFidelity() {
+  scenario('FA-3 RELEASE — harness and production guards are the same code', () => {
+    const src = PROGRAM.src, load = PROGRAM.structural.load;
+    const reloadShim = TEST_SHIMS.slice(TEST_SHIMS.indexOf('function __reload()'), TEST_SHIMS.indexOf('\n}\n', TEST_SHIMS.indexOf('function __reload()')));
+    const gateOrder = text => { const at = ['geodeNoteFinancialBoot(', 'if (!_geodeRuntimeStale) {', 'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, 'syncRecurringPayments();'].map(c => text.indexOf(c)); return at.every((p, i) => p >= 0 && (!i || p > at[i - 1])); };
+    invariant('REL.fidelity.reload', 'load() and the __reload shim both note the stored schema first, then run the integrity report or the gated transition only while the page may write, before recurring sync',
+      [gateOrder(load), gateOrder(reloadShim), reloadShim.indexOf('geodeNoteFinancialBoot(__store);') >= 0, load.indexOf('geodeNoteFinancialBoot(d);') >= 0], [true, true, true, true]);
+    const guarded = (name, guard) => {
+      const t = extractFunction(src, name).text, g = t.indexOf(guard), w = t.indexOf('localStorage.setItem(KEY'), seen = t.indexOf('_geodeFinancialKeySeen = true;');
+      return g >= 0 && w >= 0 && seen >= 0 && g < w && w < seen && t.slice(t.indexOf('{') + 1, g).replace(/try\s*\{/, '').trim() === '';
+    };
+    invariant('REL.fidelity.writers', 'Each of the three KEY writers asks geodeFinancialWriteAllowed first (the transition commit as the schema-1 data it replaces) and records that it wrote; production has no other KEY writer; the save shim keeps the guard',
+      [guarded('save', 'if (!geodeFinancialWriteAllowed()) return;'), guarded('persistGeodeToLocalStorage', 'if (!geodeFinancialWriteAllowed()) return;'),
+        guarded('geodeSchema2CommitTransition', 'if (!geodeFinancialWriteAllowed(1)) return false;'), src.split('localStorage.setItem(KEY').length - 1,
+        src.indexOf("setItem('geode_v6'") < 0, TEST_SHIMS.indexOf('function save() { if (!geodeFinancialWriteAllowed()) return;') >= 0],
+      [true, true, true, 3, true, true]);
+    invariant('REL.fidelity.boot', 'Boot loads, then listens for other windows\' changes, then cleans older app caches',
+      src.indexOf('\nload();\ngeodeInstallFinancialStorageListener();\ngeodeShellCleanup();\n') >= 0, true);
+  });
+}
+
+function releaseSafetyBoot() {
+  scenario('FA-3 RELEASE BOOT — data newer than this runtime is shown behind the reload gate and never rewritten', () => {
+    const app = new App(baseState(), '2026-06-05');
+    const versions = JSON.parse(app.run(`JSON.stringify([null, '{bad', 'null', '[]', '"x"', '{}', '{"_schemaVersion":"3"}', '{"_schemaVersion":2.5}', '{"_schemaVersion":1}',
+      '{"_schemaVersion":2}', '{"_schemaVersion":3}', '{"_schemaVersion":7}'].map(function (raw) {
+      var v = geodeStoredSchemaVersion(raw); _geodeRuntimeStale = ''; geodeNoteFinancialBoot(raw);
+      return [v !== v ? 'unreadable' : v, _geodeRuntimeStale, _geodeFinancialKeySeen];
+    }))`));
+    app.run("_geodeRuntimeStale = ''; _geodeFinancialKeySeen = true;");
+    invariant('REL.boot.versions', 'Stored KEY: nothing → none; unreadable, JSON null, an array or text → unreadable; a missing, text, fractional or 1 marker → schema 1; 2 and 3 as stored. Only a schema above 2 stops writes at boot; unreadable data is left to load() as before',
+      [versions, relWarnings(app)],
+      [[[null, '', false], ['unreadable', '', true], ['unreadable', '', true], ['unreadable', '', true], ['unreadable', '', true], [1, '', true], [1, '', true], [1, '', true],
+        [1, '', true], [2, '', true], [3, 'newer', true], [7, 'newer', true]], ['stale:newer', 'stale:newer']]);
+
+    const boot = v => {
+      const a = new App(Object.assign(baseState(v > 2 ? { payments: [legacyPay('p1')] } : {}), { _schemaVersion: v }), '2026-06-05', undefined, { boot: false });
+      watchWrites(a);
+      const raw = rawStore(a);
+      a.run('__reload()');
+      const booted = [a.run('S._schemaVersion'), a.events().length, staleState(a)];
+      relAct(a); a.run('persistGeodeToLocalStorage();'); a.run('geodeSchema2CommitTransition();');
+      return [booted, writes(a), rawStore(a) === raw, relWarnings(a)];
+    };
+    invariant('REL.boot.newer', 'Stored schema 3 or 7: kept as stored in memory (never lowered to 2), no transition or seeding, the "newer version" gate; a form save, a direct persist and a transition commit then write nothing — the stored text is byte-identical',
+      [boot(3), boot(7)], [[[3, 0, ['newer', 'newer']], 0, true, ['stale:newer']], [[7, 0, ['newer', 'newer']], 0, true, ['stale:newer']]]);
+    invariant('REL.boot.current', 'Stored schema 2: no gate; the same save and persist write normally (the commit, replacing schema 1 only, refuses and stops writes)',
+      boot(2), [[2, 0, ['', '']], 1, false, ['stale:changed']]);
+
+    const again = new App(Object.assign(baseState(), { _schemaVersion: 3 }), '2026-06-05');
+    const raw = rawStore(again);
+    again.reload(); again.reload();
+    invariant('REL.boot.no-loop', 'Reloading on schema 3 data shows the same gate each time and still writes nothing: the gate never reloads by itself',
+      [staleState(again), rawStore(again) === raw, relWarnings(again)], [['newer', 'newer'], true, ['stale:newer', 'stale:newer', 'stale:newer']]);
+  });
+}
+
+function releaseSafetyWrites() {
+  scenario('FA-3 RELEASE WRITES — every writer re-reads storage and refuses data another window made incompatible', () => {
+    const atWrite = (label, edit, writer) => {
+      const app = schema2App();
+      const mine = rawStore(app), theirs = edit(mine);
+      foreignStore(app, theirs);
+      if (writer === 'persist') app.run('persistGeodeToLocalStorage();'); else relAct(app);
+      const after = rawStore(app);
+      return [label, staleState(app), after === theirs ? 'kept theirs' : after && JSON.parse(after).payments.length === 1 ? 'wrote mine' : '?', relWarnings(app)];
+    };
+    const blocked = (label, why) => [label, [why, why], 'kept theirs', ['stale:' + why]];
+    invariant('REL.write.save', 'A schema 2 page whose stored data another window changed without telling it (no storage event, e.g. restored from the back/forward cache): a form save refuses schema 3 (newer), schema 1, a missing marker, a text "3" marker and removed data (changed), leaving their data byte-identical',
+      [atWrite('schema 3', r => withSchema(r, 3)), atWrite('schema 1', r => withSchema(r, 1)), atWrite('no marker', r => withSchema(r)),
+        atWrite('text "3"', r => withSchema(r, '3')), atWrite('removed', () => null)],
+      [blocked('schema 3', 'newer'), blocked('schema 1', 'changed'), blocked('no marker', 'changed'), blocked('text "3"', 'changed'), blocked('removed', 'changed')]);
+    invariant('REL.write.persist', 'persistGeodeToLocalStorage refuses the same way: schema 3 (newer) and removed data (changed)',
+      [atWrite('schema 3', r => withSchema(r, 3), 'persist'), atWrite('removed', () => null, 'persist')], [blocked('schema 3', 'newer'), blocked('removed', 'changed')]);
+    invariant('REL.write.unreadable', 'Unreadable stored data keeps the behaviour from before the guard: the save writes this page\'s schema 2 state over it',
+      atWrite('unreadable', () => '{bad'), ['unreadable', ['', ''], 'wrote mine', []]);
+    const lww = atWrite('same schema', r => JSON.stringify(Object.assign(JSON.parse(r), { income: 4000 })));
+    current('REL.write.same-schema', 'Another window\'s schema 2 edit is not detected: this page\'s save replaces it (last writer wins; no merge)',
+      lww, ['same schema', ['', ''], 'wrote mine', []]);
+
+    const sticky = schema2App();
+    const mine = rawStore(sticky);
+    foreignStore(sticky, withSchema(mine, 3)); relAct(sticky);
+    foreignStore(sticky, mine); relAct(sticky); sticky.run('persistGeodeToLocalStorage();');
+    const held = [staleState(sticky), rawStore(sticky) === mine];
+    sticky.run('__reload()'); relAct(sticky);
+    invariant('REL.write.sticky', 'Once stopped, the page stays stopped even if storage turns compatible again (no write, same gate); only a reload clears it, after which saves write again',
+      [held, staleState(sticky), JSON.parse(rawStore(sticky)).payments.length, relWarnings(sticky)], [[['newer', 'newer'], true], ['', ''], 1, ['stale:newer']]);
+
+    const blind = schema2App();
+    foreignStore(blind, withSchema(rawStore(blind), 3)); relAct(blind);
+    const held3 = rawStore(blind);
+    blind.run("var __getItem = localStorage.getItem; localStorage.getItem = function (k) { if (k === KEY) throw new Error('SecurityError'); return __getItem.call(localStorage, k); };");
+    relAct(blind); blind.run('persistGeodeToLocalStorage();');
+    invariant('REL.write.stale-unreadable', 'A stopped page stays stopped when storage can no longer be read: the save and persist after that write nothing',
+      [rawStore(blind) === held3, staleState(blind), relWarnings(blind)], [true, ['newer', 'newer'], ['stale:newer']]);
+
+    const f = fa3cbFixture('one-off');
+    const commit = theirs => {
+      const t = new App(f[2], f[3], undefined, { boot: false });
+      watchWrites(t);
+      t.run(FA3CC_TO_TRANSITION);
+      const raw = theirs(rawStore(t));
+      foreignStore(t, raw);
+      const ok = t.run('geodeSchema2Transition()');
+      return [ok, writes(t), rawStore(t) === raw, t.run('S._schemaVersion'), t.events().length, staleState(t), relWarnings(t), toasts(t)];
+    };
+    invariant('REL.write.transition', 'A load that read schema 1 commits nothing when storage became schema 3 (newer) or schema 2 (another window already transitioned): stored data byte-identical, memory back on schema 1, gate shown (the transition\'s storage toast sits behind it); unchanged schema 1 still commits',
+      [commit(r => withSchema(r, 3)), commit(r => withSchema(r, 2)), commit(r => r).slice(0, 6)],
+      [[false, 0, true, 1, 0, ['newer', 'newer'], ['stale:newer', 'transition:storage'], [SAVE_FAILED]],
+        [false, 0, true, 1, 0, ['changed', 'changed'], ['stale:changed', 'transition:storage'], [SAVE_FAILED]],
+        [true, 1, false, 2, 1, ['', '']]]);
+  });
+}
+
+function releaseSafetyListener() {
+  scenario('FA-3 RELEASE LISTENER — another window\'s change to the financial key stops this page at once', () => {
+    const SCHEMA2 = rawStore(schema2App());
+    const event = (label, key, value, area) => {
+      const app = schema2App();
+      relListen(app);
+      if ((key === 'geode_v6' || key === null) && area !== 'session') foreignStore(app, value);
+      fireStorage(app, key, value, area);
+      const gate = staleState(app);
+      const before = rawStore(app);
+      relAct(app);
+      return [label, gate, rawStore(app) === before ? 'no write' : 'wrote', relWarnings(app)];
+    };
+    const stops = (label, why) => [label, [why, why], 'no write', ['stale:' + why]];
+    invariant('REL.listen.stops', 'Storage events on geode_v6 stop writes before any action: schema 3 (newer); schema 1, no marker, text "2", unreadable, removed key, storage cleared (changed)',
+      [event('schema 3', 'geode_v6', withSchema(SCHEMA2, 3)), event('schema 1', 'geode_v6', withSchema(SCHEMA2, 1)), event('no marker', 'geode_v6', withSchema(SCHEMA2)),
+        event('text "2"', 'geode_v6', withSchema(SCHEMA2, '2')), event('unreadable', 'geode_v6', '{bad'), event('removed', 'geode_v6', null), event('cleared', null, null)],
+      [stops('schema 3', 'newer'), stops('schema 1', 'changed'), stops('no marker', 'changed'), stops('text "2"', 'changed'), stops('unreadable', 'changed'),
+        stops('removed', 'changed'), stops('cleared', 'changed')]);
+    invariant('REL.listen.ignores', 'Other keys, sessionStorage events and a same-schema change leave the page writing; an event without storageArea on geode_v6 still counts',
+      [event('other key', 'geode_shell', 'v1.0.76'), event('sessionStorage', 'geode_v6', withSchema(SCHEMA2, 3), 'session'), event('same schema', 'geode_v6', SCHEMA2),
+        event('no area', 'geode_v6', withSchema(SCHEMA2, 3), 'none')],
+      [['other key', ['', ''], 'wrote', []], ['sessionStorage', ['', ''], 'wrote', []], ['same schema', ['', ''], 'wrote', []], stops('no area', 'newer')]);
+    const tabA = schema2App();
+    relListen(tabA);
+    watchWrites(tabA);
+    const tabB = withSchema(rawStore(tabA), 3);
+    foreignStore(tabA, tabB); fireStorage(tabA, 'geode_v6', tabB);
+    relAct(tabA);
+    const writers = [tabA.run('persistGeodeToLocalStorage(); geodeSchema2CommitTransition()'), tabA.run('geodeFinancialWriteAllowed()'), tabA.run('geodeFinancialWriteAllowed(1)')];
+    invariant('REL.listen.all-writers', 'Tab A (schema 2) hears tab B store schema 3: a form save, persistGeodeToLocalStorage and the transition commit all refuse (commit false, no store write), tab B\'s data stays byte-identical, one "newer version" gate',
+      [writers, writes(tabA), rawStore(tabA) === tabB, staleState(tabA), relWarnings(tabA)], [[false, false, false], 0, true, ['newer', 'newer'], ['stale:newer']]);
+    const first = schema2App();
+    relListen(first);
+    fireStorage(first, 'geode_v6', null); fireStorage(first, 'geode_v6', withSchema(SCHEMA2, 3));
+    invariant('REL.listen.first-reason', 'The first reason is kept: removed, then schema 3 → still "changed", one warning, one gate', [staleState(first), relWarnings(first)], [['changed', 'changed'], ['stale:changed']]);
+  });
+}
+
+function releaseSafetyGate() {
+  scenario('FA-3 RELEASE GATE — schema 2 waits until older app caches are gone from this browser', () => {
+    const legacyHoliday = legacyLoad(fa3cbFixture('one-off')[2], fa3cbFixture('one-off')[3]).snap().goal.gH;
+    const look = app => [app.run('geodeShellReadiness()'), writes(app), storedSchema(app), app.events().length, app.snap().goal.gH, staleState(app), relWarnings(app)];
+    const held = ['pending', 0, 1, 0, legacyHoliday, ['', ''], []], moved = r => [r, 1, 2, 1, 1250, ['', ''], []];
+    invariant('REL.gate.readiness', 'With a Cache API: no geode_shell or the previous runtime\'s → pending: no transition, schema 1 stays stored, legacy display; this runtime\'s → ready: one commit to schema 2. No Cache API → absent: transitions',
+      [look(shellApp()), look(shellApp('v1.0.75')), look(shellApp(true)), look(shellApp(undefined, false))], [held, held, moved('ready'), moved('absent')]);
+
+    const app = shellApp();
+    relAct(app);
+    const pending = [storedSchema(app), stored(app).payments.length, staleState(app)];
+    app.run('__otherStorage.setItem(GEODE_SHELL_KEY, BEYND_RUNTIME_VERSION);');
+    app.reload();
+    const opened = [writes(app), storedSchema(app), app.events().length];
+    relAct(app);
+    invariant('REL.gate.open', 'While pending the page keeps saving schema 1 (top-up stored); once geode_shell names this runtime the next load transitions once, and later saves write schema 2',
+      [pending, opened, storedSchema(app), stored(app).payments.length, staleState(app), relWarnings(app)], [[1, 2, ['', '']], [1, 2, 2], 2, 3, ['', ''], []]);
+  });
+}
+
+function releaseSafetyTabs() {
+  scenario('FA-3 RELEASE TABS — two windows of this runtime around the transition', () => {
+    const ready = shellApp(true);
+    const theirs = rawStore(ready);
+    const heard = shellApp();
+    relListen(heard);
+    foreignStore(heard, theirs); fireStorage(heard, 'geode_v6', theirs);
+    relAct(heard);
+    const heardOut = [staleState(heard), rawStore(heard) === theirs];
+    heard.reload(); relAct(heard);
+    invariant('REL.tabs.event', 'A page still on schema 1 (pending) hears another window commit schema 2: it stops at once with the "updated in another window" gate and its save writes nothing; after reload it runs on schema 2 and saves again',
+      [heardOut, heard.run('S._schemaVersion'), storedSchema(heard), staleState(heard), relWarnings(heard)], [[['changed', 'changed'], true], 2, 2, ['', ''], ['stale:changed']]);
+    const missed = shellApp();
+    foreignStore(missed, theirs); relAct(missed);
+    invariant('REL.tabs.missed', 'The same page without the event (suspended or back/forward cache): its next save re-reads storage, refuses and shows the gate',
+      [staleState(missed), rawStore(missed) === theirs, relWarnings(missed)], [['changed', 'changed'], true, ['stale:changed']]);
+    relAct(ready);
+    invariant('REL.tabs.winner', 'The window that transitioned keeps working on schema 2', [staleState(ready), storedSchema(ready), relWarnings(ready)], [['', ''], 2, []]);
+  });
+}
+
 /** Completions FA-3B seeds for each legacy fixture: only rows whose stored fields prove a paid occurrence. */
 const MIG_SEEDED = {
   'goal-completed-one-off': [['p_one_off', 'goal:gH', '2026-06', 250, 'one_off', '2026-06-10', 'migration']],
@@ -4283,6 +4541,7 @@ function main() {
   fa3caNormalise(); fa3caMatrix(); fa3caTransition(); fa3caResolutions(); fa3caLinkedAndCorrection(); fa3caLifecycle();
   fa3cbActions(); fa3cbValidation(); fa3cbTimelines(); fa3cbIntegration(); fa3cb2Boundary(); fa3cb3aForm(); fa3cb3bTemporal();
   fa3ccTransition(); fa3ccCrash(); fa3ccAuthority(); fa3ccLifecycle(); fa3ccRefusal(); fa3ccPositions();
+  releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');

@@ -1,11 +1,15 @@
 // Beynd Service Worker
 // Financial coaching that guides you before every decision that matters.
 //
-// CACHE_VERSION: increment on every release, then commit + push.
+// CACHE_VERSION: increment on every release, then commit + push. Keep it equal to index.html BEYND_RUNTIME_VERSION:
+// install only accepts an app shell that declares exactly this runtime version.
 // CACHE_NAME is derived so old caches are deleted on activate and clients never mix versions.
 
-const CACHE_VERSION = 'v1.0.75'; // DP-3 debt payment activity + coaching copy release
+const CACHE_VERSION = 'v1.0.76'; // FA-3 schema-2 release: verified shell, immediate takeover
 const CACHE_NAME = `beynd-cache-${CACHE_VERSION}`;
+const CACHE_PREFIX = 'beynd-cache-';
+const SHELL_URLS = ['/', '/index.html'];
+const SHELL_MARKER = "\nvar BEYND_RUNTIME_VERSION = '" + CACHE_VERSION + "';";
 
 const PRECACHE_URLS = [
   '/',
@@ -22,34 +26,69 @@ const PRECACHE_URLS = [
   '/icons/icon-512.png'
 ];
 
-// Install — precache core assets; new worker can take over when client sends SKIP_WAITING
+/** A complete app shell of this release: its runtime marker and the closing tag (a truncated or older page fails). */
+function isCurrentShell(body) {
+  return typeof body === 'string' && body.indexOf(SHELL_MARKER) >= 0 && /<\/html>\s*$/i.test(body);
+}
+
+// Install — fetch every asset past the HTTP cache, verify the shell, and only then fill this release's cache.
+// Any failure rejects install before anything is cached, so the current worker and its cache stay as they were.
 self.addEventListener('install', function (event) {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(function (cache) {
-      return cache.addAll(PRECACHE_URLS);
+    Promise.all(PRECACHE_URLS.map(function (url) {
+      return fetch(new Request(url, { cache: 'reload' })).then(function (res) {
+        if (!res || !res.ok) throw new Error('precache ' + url + ': ' + (res ? res.status : 'no response'));
+        if (SHELL_URLS.indexOf(url) < 0) return [url, res];
+        return res.clone().text().then(function (body) {
+          if (!isCurrentShell(body)) throw new Error('precache ' + url + ': not the ' + CACHE_VERSION + ' app shell');
+          return [url, res];
+        });
+      });
+    })).then(function (entries) {
+      return caches.open(CACHE_NAME).then(function (cache) {
+        return Promise.all(entries.map(function (e) { return cache.put(e[0], e[1]); }));
+      });
+    }).then(function () {
+      return self.skipWaiting();
     })
   );
 });
 
-// Activate — remove every cache that is not this release’s name
+// Activate — remove older Beynd caches, take control, then reload every open window onto this release's shell, so
+// no page keeps running an older app after this one takes over. A cache that cannot be deleted is never read here
+// (lookups use CACHE_NAME only), and the page's shell check keeps schema changes waiting until it is gone.
 self.addEventListener('activate', function (event) {
   event.waitUntil(
     caches.keys().then(function (keys) {
       return Promise.all(
-        keys.map(function (key) {
-          if (key !== CACHE_NAME) {
-            return caches.delete(key);
-          }
+        keys.filter(function (key) {
+          return key.indexOf(CACHE_PREFIX) === 0 && key !== CACHE_NAME;
+        }).map(function (key) {
+          return caches.delete(key).catch(function () { return false; });
         })
       );
     }).then(function () {
       return self.clients.claim();
+    }).then(function () {
+      return self.clients.matchAll({ type: 'window' });
+    }).then(function (windows) {
+      return Promise.all(windows.map(function (client) {
+        if (typeof client.navigate !== 'function') return null;
+        return Promise.resolve().then(function () { return client.navigate(client.url); }).catch(function () { return null; });
+      }));
     })
   );
 });
 
-// Fetch — HTML: network-first (fresh shell), then update cache; offline → cached index
-// Same-origin assets: cache-first with validated put. CDN: network-first (e.g. PDF.js).
+/** This release's cache only: an older Beynd cache must never answer for the app. */
+function matchCurrent(req) {
+  return caches.open(CACHE_NAME).then(function (cache) {
+    return cache.match(req);
+  });
+}
+
+// Fetch — HTML: network-first (fresh shell); only this release's shell is cached; offline → this release's verified index.
+// Same-origin assets: cache-first from this release's cache with validated put. CDN: network-first (e.g. PDF.js).
 self.addEventListener('fetch', function (event) {
   var url = new URL(event.request.url);
   var req = event.request;
@@ -58,14 +97,20 @@ self.addEventListener('fetch', function (event) {
     event.respondWith(
       fetch(req, { cache: 'no-store' }).then(function (response) {
         if (response && response.status === 200 && response.type === 'basic') {
-          var clone = response.clone();
-          caches.open(CACHE_NAME).then(function (cache) {
-            cache.put(req, clone);
-          });
+          var check = response.clone();
+          var keep = response.clone();
+          check.text().then(function (body) {
+            if (!isCurrentShell(body)) return;
+            return caches.open(CACHE_NAME).then(function (cache) {
+              return cache.put(req, keep);
+            });
+          }).catch(function () {});
         }
         return response;
       }).catch(function () {
-        return caches.match('/index.html');
+        return matchCurrent('/index.html').then(function (res) {
+          return res || Response.error();
+        });
       })
     );
     return;
@@ -74,14 +119,16 @@ self.addEventListener('fetch', function (event) {
   if (url.origin !== self.location.origin) {
     event.respondWith(
       fetch(req).catch(function () {
-        return caches.match(req);
+        return matchCurrent(req).then(function (res) {
+          return res || Response.error();
+        });
       })
     );
     return;
   }
 
   event.respondWith(
-    caches.match(req).then(function (res) {
+    matchCurrent(req).then(function (res) {
       if (res) return res;
       return fetch(req).then(function (fetchRes) {
         if (!fetchRes || fetchRes.status !== 200 || fetchRes.type !== 'basic') {
