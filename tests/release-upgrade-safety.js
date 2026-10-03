@@ -661,7 +661,8 @@ async function gate() {
   group = 'STALE-RUNTIME GATE — plain words, one Reload';
   const COPY = {
     newer: 'A newer version of Beynd is needed on this device. Reload to update.',
-    changed: 'Beynd was updated in another window. Reload to continue \u2014 your saved information is safe.'
+    changed: 'Beynd was updated in another window. Reload to continue \u2014 your saved information is safe.',
+    foreign: 'Beynd changed in another window. Reload to continue. A change you made here just now may not have been saved.'
   };
   const view = reason => {
     const g = loadGate();
@@ -676,8 +677,9 @@ async function gate() {
   };
   const expected = text => [1, 'geode-stale-gate', 'alertdialog', 'true', ['p:' + text, 'button:Reload'], 1, 1];
   check('gate.newer', 'Newer stored data: the full-screen gate with the update copy and one Reload button; shown once; Reload reloads', view('newer'), expected(COPY.newer));
-  check('gate.changed', 'Another window\'s change: the reassuring copy, same single action', view('changed'), expected(COPY.changed));
-  check('gate.words', 'Neither copy mentions schema, ledger, cache, service worker or migration', Object.values(COPY).filter(t => /schema|ledger|cache|service worker|migrat/i.test(t)), []);
+  check('gate.changed', 'Another window\'s incompatible change: the reassuring copy, same single action', view('changed'), expected(COPY.changed));
+  check('gate.foreign', 'A same-runtime stale write: Reload, and the copy says the change in this window may not have been saved', view('foreign'), expected(COPY.foreign));
+  check('gate.words', 'None of the copies mentions schema, ledger, cache, service worker or migration', Object.values(COPY).filter(t => /schema|ledger|cache|service worker|migrat/i.test(t)), []);
   const bare = loadGate(false);
   let threw = false;
   try { bare.show('newer'); } catch (e) { threw = true; }

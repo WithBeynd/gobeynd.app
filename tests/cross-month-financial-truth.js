@@ -100,7 +100,9 @@ const PRODUCTION_FUNCTIONS = [
   'geodePersistedSchemaVersion', 'geodeSchema2Active', 'geodeSchema2AuthorityProblems', 'geodeSchema2IntegrityReport',
   'geodeSchema2CommitTransition', 'geodeSchema2Transition', 'geodeSchema2RecurringResetDue',
   // release safety: stale-runtime write guard, cross-window detection, shell readiness for the transition
-  'geodeStoredSchemaVersion', 'geodeMarkRuntimeStale', 'geodeNoteFinancialBoot', 'geodeFinancialWriteAllowed',
+  'geodeStoredSchemaVersion', 'geodeMarkRuntimeStale', 'geodeFinancialRevValid', 'geodeFinancialRevFromRaw',
+  'geodeClassifyFinancialRevision', 'geodeFinancialRevId', 'geodeStampFinancialRev', 'geodeFinancialJsonToStore', 'geodeAcceptFinancialWrite',
+  'geodeNoteFinancialBoot', 'geodeFinancialWriteAllowed',
   'geodeOnForeignFinancialWrite', 'geodeShellReadiness', 'persistGeodeToLocalStorage',
   // carry lifecycle and contribution input integrity (FA-3C-B): payment actions resolve the carry a row still holds
   'geodeContributionCarryFor', 'geodeContributionCarryForRow', 'geodeResolveContributionCarry', 'geodeContributionCarryFollowRow',
@@ -116,7 +118,7 @@ const PRODUCTION_FUNCTIONS = [
 
 /** Production top-level constants the extracted base functions read. */
 const BASE_CONSTANTS = ['GEODE_SCHEMA_VERSION', 'BEYND_RUNTIME_VERSION', '_geodeRuntimeStale', '_geodeFinancialKeySeen',
-  'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
+  '_geodeKnownRaw', '_geodeKnownRev', '_geodeRevN', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
 
 /**
  * Read-only structural checks: the reload and render shims below must mirror these production bodies, and the
@@ -155,7 +157,15 @@ Date = __SimDate;
 var KEY = 'geode_v6';
 var __store = null;
 /** Production save() minus its snapshot/archive side effects: the same release guard, then the whole state to the store. */
-function save() { if (!geodeFinancialWriteAllowed()) return; __store = JSON.stringify(S); _geodeFinancialKeySeen = true; }
+function save() {
+  if (!geodeFinancialWriteAllowed()) return;
+  var __prepared = geodeFinancialJsonToStore();
+  if (!__prepared) return;
+  var __json = __prepared.json;
+  __store = __json;
+  if (__store !== __json) { S._rev = __prepared.prev; return; }
+  geodeAcceptFinancialWrite(__json);
+}
 /** Stale-runtime reload gate (UI): records which gate production would show. */
 var __staleGate = '';
 function geodeShowStaleRuntimeGate(reason) { __staleGate = reason; }
@@ -3546,7 +3556,9 @@ const carryView = (app, goalId) => {
     app.activeEvents().map(e => [e.paymentId, e.entityType + ':' + e.entityId, e.occurrenceYm, e.amount]), app.state().goals.filter(x => x.id === g)[0].baseSaved];
 };
 /** [toasts the action showed, stored state unchanged] */
-const attempt = (app, act) => { app.run('__toasts = [];'); const before = app.state(); act(app); return [JSON.parse(app.run('JSON.stringify(__toasts)')), same(app.state(), before)]; };
+/** Toasts plus whether the action changed state. _rev is excluded: a refused action can still reach save(), and a successful save records a revision without being a financial edit. */
+const stateApartFromRev = s => { const c = JSON.parse(JSON.stringify(s)); delete c._rev; return c; };
+const attempt = (app, act) => { app.run('__toasts = [];'); const before = app.state(); act(app); return [JSON.parse(app.run('JSON.stringify(__toasts)')), same(stateApartFromRev(app.state()), stateApartFromRev(before))]; };
 /** The carry, if any, whose occurrence the row's paid state still is. */
 const heldCarry = (app, id) => JSON.parse(app.run('JSON.stringify(geodeContributionCarryForRow(S, geodeContributionEventSnapshot(S.payments.filter(function (p) { return p.id === ' + JSON.stringify(id) + '; })[0])))'));
 const REFUSED_AMOUNT = 'A contribution needs an amount above \u00a30. Nothing has been changed.';
@@ -4919,14 +4931,17 @@ function releaseSafetyFidelity() {
         transitionCalls(load), transitionCalls(reloadShim), transitionCalls(src) - transitionCalls(extractFunction(src, 'geodeInvestmentAuthorityTransition').text)],
       [true, true, true, true, 1, 1, 1]);
     const guarded = (name, guard) => {
-      const t = extractFunction(src, name).text, g = t.indexOf(guard), w = t.indexOf('localStorage.setItem(KEY'), seen = t.indexOf('_geodeFinancialKeySeen = true;');
-      return g >= 0 && w >= 0 && seen >= 0 && g < w && w < seen && t.slice(t.indexOf('{') + 1, g).replace(/try\s*\{/, '').trim() === '';
+      const t = extractFunction(src, name).text, g = t.indexOf(guard), w = t.indexOf('localStorage.setItem(KEY'), seen = t.indexOf('geodeAcceptFinancialWrite(');
+      return g >= 0 && w >= 0 && seen > w && g < w && t.slice(t.indexOf('{') + 1, g).replace(/try\s*\{/, '').trim() === '' &&
+        t.indexOf('localStorage.getItem(KEY) !== json') > w;
     };
-    invariant('REL.fidelity.writers', 'Each of the three KEY writers asks geodeFinancialWriteAllowed first (the transition commit as the schema-1 data it replaces) and records that it wrote; production has no other KEY writer; the save shim keeps the guard',
+    const wipe = extractFunction(src, 'wipeLocalAppStateAndReload').text;
+    invariant('REL.fidelity.writers', 'Each of the three KEY writers asks geodeFinancialWriteAllowed first (the transition commit as the schema-1 data it replaces), stamps _rev, read-backs the one setItem and only then accepts that text; production has no other KEY setItem; wipe asks the same guard before removeItem; the save shim stamps and accepts',
       [guarded('save', 'if (!geodeFinancialWriteAllowed()) return;'), guarded('persistGeodeToLocalStorage', 'if (!geodeFinancialWriteAllowed()) return;'),
         guarded('geodeSchema2CommitTransition', 'if (!geodeFinancialWriteAllowed(1)) return false;'), src.split('localStorage.setItem(KEY').length - 1,
-        src.indexOf("setItem('geode_v6'") < 0, TEST_SHIMS.indexOf('function save() { if (!geodeFinancialWriteAllowed()) return;') >= 0],
-      [true, true, true, 3, true, true]);
+        src.indexOf("setItem('geode_v6'") < 0, TEST_SHIMS.indexOf('geodeFinancialJsonToStore()') >= 0 && TEST_SHIMS.indexOf('geodeAcceptFinancialWrite(__json)') >= 0,
+        wipe.indexOf('if (!geodeFinancialWriteAllowed()) return;') >= 0 && wipe.indexOf('if (!geodeFinancialWriteAllowed()) return;') < wipe.indexOf('localStorage.removeItem(KEY)')],
+      [true, true, true, 3, true, true, true]);
     invariant('REL.fidelity.boot', 'Boot loads, then listens for other windows\' changes, then cleans older app caches',
       src.indexOf('\nload();\ngeodeInstallFinancialStorageListener();\ngeodeShellCleanup();\n') >= 0, true);
   });
@@ -4957,8 +4972,8 @@ function releaseSafetyBoot() {
     };
     invariant('REL.boot.newer', 'Stored schema 3 or 7: kept as stored in memory (never lowered to 2), no transition or seeding, the "newer version" gate; a form save, a direct persist and a transition commit then write nothing — the stored text is byte-identical',
       [boot(3), boot(7)], [[[3, 0, ['newer', 'newer']], 0, true, ['stale:newer']], [[7, 0, ['newer', 'newer']], 0, true, ['stale:newer']]]);
-    invariant('REL.boot.current', 'Stored schema 2: no gate; the same save and persist write normally (the commit, replacing schema 1 only, refuses and stops writes)',
-      boot(2), [[2, 0, ['', '']], 1, false, ['stale:changed']]);
+    invariant('REL.boot.current', 'Stored schema 2: no gate; save persists the reloaded state, and a following persist of that same text does not write it again; the commit, replacing schema 1 only, refuses and stops writes',
+      boot(2), [[2, 0, ['', '']], 0, false, ['stale:changed']]);
 
     const again = new App(Object.assign(baseState(), { _schemaVersion: 3 }), '2026-06-05');
     const raw = rawStore(again);
@@ -4988,8 +5003,8 @@ function releaseSafetyWrites() {
     invariant('REL.write.unreadable', 'Unreadable stored data keeps the behaviour from before the guard: the save writes this page\'s schema 2 state over it',
       atWrite('unreadable', () => '{bad'), ['unreadable', ['', ''], 'wrote mine', []]);
     const lww = atWrite('same schema', r => JSON.stringify(Object.assign(JSON.parse(r), { income: 4000 })));
-    current('REL.write.same-schema', 'Another window\'s schema 2 edit is not detected: this page\'s save replaces it (last writer wins; no merge)',
-      lww, ['same schema', ['', ''], 'wrote mine', []]);
+    invariant('REL.write.same-schema', 'A same-schema change that keeps this page\'s revision id is an unfenced write (P2-1 compatibility): it is logged and this page\'s save still replaces it. A newer fenced revision is refused separately (P2-1)',
+      lww, ['same schema', ['', ''], 'wrote mine', ['? [geode] unfenced financial write observed; this write proceeds']]);
 
     const sticky = schema2App();
     const mine = rawStore(sticky);
@@ -5045,10 +5060,13 @@ function releaseSafetyListener() {
         event('text "2"', 'geode_v6', withSchema(SCHEMA2, '2')), event('unreadable', 'geode_v6', '{bad'), event('removed', 'geode_v6', null), event('cleared', null, null)],
       [stops('schema 3', 'newer'), stops('schema 1', 'changed'), stops('no marker', 'changed'), stops('text "2"', 'changed'), stops('unreadable', 'changed'),
         stops('removed', 'changed'), stops('cleared', 'changed')]);
-    invariant('REL.listen.ignores', 'Other keys, sessionStorage events and a same-schema change leave the page writing; an event without storageArea on geode_v6 still counts',
-      [event('other key', 'geode_shell', 'v1.0.76'), event('sessionStorage', 'geode_v6', withSchema(SCHEMA2, 3), 'session'), event('same schema', 'geode_v6', SCHEMA2),
+    const fencedOther = JSON.parse(SCHEMA2);
+    fencedOther.income = 4321;
+    fencedOther._rev = { seq: 50, id: 'rev_other_window', by: 'v1.0.77', at: 1 };
+    invariant('REL.listen.ignores', 'Other keys and sessionStorage events leave the page writing; an event without storageArea on geode_v6 still counts. Another fenced runtime\'s schema-2 text stops this page (P2-1)',
+      [event('other key', 'geode_shell', 'v1.0.76'), event('sessionStorage', 'geode_v6', withSchema(SCHEMA2, 3), 'session'), event('fenced schema 2', 'geode_v6', JSON.stringify(fencedOther)),
         event('no area', 'geode_v6', withSchema(SCHEMA2, 3), 'none')],
-      [['other key', ['', ''], 'wrote', []], ['sessionStorage', ['', ''], 'wrote', []], ['same schema', ['', ''], 'wrote', []], stops('no area', 'newer')]);
+      [['other key', ['', ''], 'wrote', []], ['sessionStorage', ['', ''], 'wrote', []], stops('fenced schema 2', 'foreign'), stops('no area', 'newer')]);
     const tabA = schema2App();
     relListen(tabA);
     watchWrites(tabA);
@@ -6105,6 +6123,123 @@ function p1RelIdempotence() {
   });
 }
 
+function p2RevisionFence() {
+  const UNFENCED_LOG = '? [geode] unfenced financial write observed; this write proceeds';
+  const pageOn = (raw, clock) => {
+    const app = new App(JSON.parse(raw), clock || '2026-06-05', undefined, { boot: false });
+    app.run('__store = ' + JSON.stringify(raw) + '; __reload();');
+    return app;
+  };
+  scenario('P2-1 REVISION — a stale same-runtime write is refused and a reload adopts the newer text', () => {
+    const origin = schema2App();
+    const parent = rawStore(origin);
+    const tabA = pageOn(parent);
+    const tabB = pageOn(parent);
+    invariant('P2.boot.shared', 'Two pages loaded from one stored text observe that exact text and its revision',
+      [rawStore(tabA) === parent, rawStore(tabB) === parent, tabA.run('_geodeKnownRaw === __store'), tabB.run('JSON.stringify(_geodeKnownRev)')],
+      [true, true, true, tabA.run('JSON.stringify(_geodeKnownRev)')]);
+    tabA.contribute({ name: 'Top-up', amount: 50, date: '2026-06-05', status: 'paid', goalId: 'gH' });
+    const newer = rawStore(tabA);
+    const revA = JSON.parse(newer)._rev;
+    invariant('P2.write.stamp', 'Tab A\'s save advances seq, mints a new id, names this runtime and stores state and revision in one text',
+      [newer !== parent, revA.seq, typeof revA.id === 'string' && revA.id.indexOf('rev_') === 0, revA.by, typeof revA.at === 'number',
+        tabA.run('_geodeKnownRaw === __store'), JSON.parse(newer).payments.length],
+      [true, JSON.parse(parent)._rev.seq + 1, true, 'v1.0.77', true, true, JSON.parse(parent).payments.length + 1]);
+
+    foreignStore(tabB, newer);
+    tabB.run('S.lastSeenAt = 1; persistGeodeToLocalStorage();');
+    const afterPersist = [rawStore(tabB) === newer, staleState(tabB), relWarnings(tabB)];
+    tabB.run('S.income = 1; save();');
+    const afterSave = rawStore(tabB) === newer;
+    tabB.at('2026-07-02');
+    tabB.render();
+    invariant('P2.stale.refused', 'After A\'s fenced write, B\'s lastSeen persist, an unrelated save and a July recurrence roll all leave A\'s text untouched and B stays foreign-stale',
+      [afterPersist, afterSave, rawStore(tabB) === newer, staleState(tabB)],
+      [[true, ['foreign', 'foreign'], ['stale:foreign']], true, true, ['foreign', 'foreign']]);
+
+    relListen(tabA);
+    fireStorage(tabA, 'geode_v6', newer);
+    invariant('P2.echo', 'A storage event carrying the text this page just wrote does not stop it',
+      [staleState(tabA), relWarnings(tabA)], [['', ''], []]);
+
+    tabB.run('__reload();');
+    const adopted = [staleState(tabB), rawStore(tabB) === newer, tabB.run('S.payments.length')];
+    tabB.contribute({ name: 'After reload', amount: 25, date: '2026-07-02', status: 'paid', goalId: 'gH' });
+    const again = JSON.parse(rawStore(tabB))._rev;
+    invariant('P2.reload', 'Reload clears the gate, adopts A\'s text and can write the next revision',
+      [adopted, again.seq, again.id !== revA.id, staleState(tabB)],
+      [[ ['', ''], true, JSON.parse(newer).payments.length ], revA.seq + 1, true, ['', '']]);
+  });
+
+  scenario('P2-1 REVISION — deleted, newer, unfenced, quota and a disabled fence', () => {
+    const origin = schema2App();
+    const parent = rawStore(origin);
+    const kept = pageOn(parent);
+    foreignStore(kept, null);
+    kept.run('save();');
+    invariant('P2.deleted', 'KEY removed after this page saw it: no write, changed gate',
+      [rawStore(kept), staleState(kept), relWarnings(kept)], [null, ['changed', 'changed'], ['stale:changed']]);
+
+    const newer = pageOn(parent);
+    foreignStore(newer, withSchema(parent, 3));
+    newer.run('persistGeodeToLocalStorage();');
+    invariant('P2.newer', 'Stored schema 3 is still refused before any revision check',
+      [rawStore(newer) === withSchema(parent, 3), staleState(newer), relWarnings(newer)], [true, ['newer', 'newer'], ['stale:newer']]);
+
+    const old = pageOn(parent);
+    const unfenced = JSON.parse(parent);
+    unfenced.income = 2222;
+    foreignStore(old, JSON.stringify(unfenced));
+    old.run('S.income = 3333; save();');
+    const storedOld = JSON.parse(rawStore(old));
+    invariant('P2.unfenced', 'An older runtime that rewrites the same revision id is logged and last-writer-wins; this page then mints the next revision',
+      [storedOld.income, storedOld._rev.seq, storedOld._rev.id !== unfenced._rev.id, staleState(old), relWarnings(old)],
+      [3333, unfenced._rev.seq + 1, true, ['', ''], [UNFENCED_LOG]]);
+
+    const quota = pageOn(parent);
+    const beforeRev = quota.run('JSON.stringify(S._rev)');
+    quota.run('S.lastSeenAt = 9; __storageFault = "throw"; persistGeodeToLocalStorage();');
+    const thrown = [rawStore(quota) === parent, quota.run('JSON.stringify(S._rev)') === beforeRev, quota.run('_geodeKnownRaw === __store'), JSON.parse(quota.run('JSON.stringify(__toasts)'))];
+    quota.run('__storageFault = "lose"; __toasts = []; persistGeodeToLocalStorage();');
+    const lost = [rawStore(quota) === parent, quota.run('JSON.stringify(S._rev)') === beforeRev, quota.run('_geodeKnownRaw === __store'), JSON.parse(quota.run('JSON.stringify(__toasts)'))];
+    invariant('P2.quota', 'A throwing setItem and a write that does not read back leave the stored text, in-memory revision and knownRaw where they were',
+      [thrown, lost], [[true, true, true, ['Could not save data (storage may be full).']], [true, true, true, ['Could not save data (storage may be full).']]]);
+
+    const disabled = pageOn(parent);
+    const victim = JSON.parse(parent);
+    victim.income = 4444;
+    victim._rev = { seq: victim._rev.seq + 5, id: 'rev_fenced_other', by: 'v1.0.77', at: 2 };
+    const victimRaw = JSON.stringify(victim);
+    foreignStore(disabled, victimRaw);
+    disabled.run('geodeClassifyFinancialRevision = function () { return "unfenced"; }; S.income = 5555; save();');
+    invariant('P2.fence.disabled', 'With revision classification forced to unfenced, the same foreign text is overwritten — the refusal depends on the classifier',
+      [JSON.parse(rawStore(disabled)).income !== 4444, staleState(disabled)], [true, ['', '']]);
+    relWarnings(disabled);
+  });
+
+  scenario('P2-1 REVISION — a stale modal does not begin a commit', () => {
+    const origin = schema2App();
+    const parent = rawStore(origin);
+    const tab = pageOn(parent);
+    const fenced = JSON.parse(parent);
+    fenced._rev = { seq: fenced._rev.seq + 1, id: 'rev_modal_other', by: 'v1.0.77', at: 3 };
+    fenced.income = 4600;
+    foreignStore(tab, JSON.stringify(fenced));
+    tab.run('openModal("<p>edit</p>");');
+    const began = tab.run('geodeModalCommitBegin()');
+    const again = tab.run('geodeModalCommitBegin()');
+    invariant('P2.modal.stale', 'geodeModalCommitBegin uses the same admission check: a fenced foreign text refuses the commit before the flag is taken, and the stored text stays',
+      [began, again, tab.run('document.getElementById("modal").getAttribute("data-geode-commit")'), rawStore(tab) === JSON.stringify(fenced), staleState(tab), relWarnings(tab)],
+      [false, false, null, true, ['foreign', 'foreign'], ['stale:foreign']]);
+    const fresh = pageOn(parent);
+    fresh.run('openModal("<p>edit</p>");');
+    const first = fresh.run('geodeModalCommitBegin()');
+    const second = fresh.run('geodeModalCommitBegin()');
+    invariant('P2.modal.once', 'A modal whose storage is still the text this page loaded still commits once',
+      [first, second, fresh.run('document.getElementById("modal").getAttribute("data-geode-commit")')], [true, false, '1']);
+  });
+}
+
 function p1RelOldWriter() {
   scenario('P1-REL OLD WRITER — a v1.0.76 page can still write schema 2 (documented limitation)', () => {
     const f = p1rFixture('P2');
@@ -6115,6 +6250,7 @@ function p1RelOldWriter() {
     theirs.income = 3100;
     foreignStore(app, JSON.stringify(theirs));
     const allowed = app.run('geodeFinancialWriteAllowed()');
+    relWarnings(app);
     app.run('__reload();');
     current('P1REL.old-writer', 'After this runtime anchored P2 and recorded +£100 (£5,300), a v1.0.76 page that loaded before the upgrade stores its memory (schema 2, no valuations, an unrelated income edit): schema protection sees the same schema, so nothing refuses it; the anchor and the £100 are gone and the next load re-anchors the £5,200 that data holds (no double count). This release relies on the version bump, the worker reloading every window on takeover, old-cache removal and the readiness gate; refusing such writes is Phase 2',
       [before, allowed, staleState(app), [app.snap().inv.iA, p1rVals(app.state().investments), app.events().length, app.state().income]],
@@ -6144,7 +6280,7 @@ function main() {
   fa7dLinkedGoals();
   p1Close();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
-  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p1RelOldWriter();
+  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2RevisionFence(); p1RelOldWriter();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');

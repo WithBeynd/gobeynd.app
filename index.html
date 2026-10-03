@@ -1603,6 +1603,14 @@ function geodePersistedSchemaVersion(v) {
 var _geodeRuntimeStale = '';
 /** Whether this page loaded or wrote KEY, so a missing KEY later means another window removed it. */
 var _geodeFinancialKeySeen = false;
+/**
+ * P2-1: the exact KEY text this page last loaded or successfully wrote, and the _rev inside it.
+ * Admission compares stored text to _geodeKnownRaw. _rev only classifies a difference. null raw means KEY was absent.
+ */
+var _geodeKnownRaw = null;
+var _geodeKnownRev = null;
+/** P2-1: revision ids only. Kept off uid() so financial event ids stay on their own sequence. */
+var _geodeRevN = 0;
 /** geode_shell: this runtime's version once geodeShellCleanup removed every older Beynd cache in this browser. */
 var GEODE_SHELL_KEY = 'geode_shell';
 var GEODE_CACHE_PREFIX = 'beynd-cache-';
@@ -1621,35 +1629,116 @@ function geodeStoredSchemaVersion(raw) {
 /** Stops every financial write until reload and shows the reload gate; the first reason is kept. Never writes. */
 function geodeMarkRuntimeStale(reason) {
   if (_geodeRuntimeStale) return;
-  _geodeRuntimeStale = reason === 'newer' ? 'newer' : 'changed';
+  _geodeRuntimeStale = reason === 'newer' ? 'newer' : reason === 'foreign' ? 'foreign' : 'changed';
   try {
     console.warn('[geode] financial writes stopped until reload: ' + _geodeRuntimeStale);
   } catch (_eW) {}
   geodeShowStaleRuntimeGate(_geodeRuntimeStale);
 }
 
+/**
+ * P2-1: a revision record carried inside the financial JSON. It classifies writers. It is not write-admission
+ * authority — that is the exact stored text (_geodeKnownRaw).
+ */
+function geodeFinancialRevValid(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v) &&
+    typeof v.seq === 'number' && isFinite(v.seq) && v.seq >= 1 && Math.floor(v.seq) === v.seq &&
+    typeof v.id === 'string' && !!v.id && typeof v.by === 'string' && !!v.by &&
+    typeof v.at === 'number' && isFinite(v.at);
+}
+
+/** The valid _rev inside a stored KEY string, or null. Unreadable text has none. */
+function geodeFinancialRevFromRaw(raw) {
+  if (typeof raw !== 'string') return null;
+  try {
+    var p = JSON.parse(raw);
+    if (!p || !geodeFinancialRevValid(p._rev)) return null;
+    return { seq: p._rev.seq, id: p._rev.id, by: p._rev.by, at: p._rev.at };
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * P2-1: how a stored KEY string that is not the text this page last observed should be treated, once schema
+ * checks have already allowed it. 'fenced' — another copy of this fence wrote a new revision: refuse.
+ * 'unfenced' — an older runtime wrote (no revision, the same revision id with different text, or an older seq).
+ */
+function geodeClassifyFinancialRevision(raw) {
+  var rev = geodeFinancialRevFromRaw(raw);
+  if (!rev || !geodeFinancialRevValid(_geodeKnownRev)) return rev ? 'fenced' : 'unfenced';
+  if (rev.id === _geodeKnownRev.id) return 'unfenced';
+  if (rev.seq >= _geodeKnownRev.seq) return 'fenced';
+  return 'unfenced';
+}
+
+function geodeFinancialRevId() {
+  _geodeRevN += 1;
+  var id = 'rev_' + _geodeRevN;
+  if (_geodeKnownRev && id === _geodeKnownRev.id) {
+    _geodeRevN += 1;
+    id = 'rev_' + _geodeRevN;
+  }
+  return id;
+}
+
+/** Puts the next revision on S. Returns the previous _rev so a failed store can put it back. */
+function geodeStampFinancialRev() {
+  var prev = S._rev;
+  var seq = _geodeKnownRev && typeof _geodeKnownRev.seq === 'number' ? _geodeKnownRev.seq : 0;
+  S._rev = { seq: seq + 1, id: geodeFinancialRevId(), by: BEYND_RUNTIME_VERSION, at: Date.now() };
+  return prev;
+}
+
+/**
+ * P2-1: the one JSON a fenced writer may store. Stamps the next revision, then puts the previous one back when the
+ * rest of the state is already the stored text — a no-op save must not mint a revision for a state that is not written.
+ * Returns null in that case. Otherwise S holds the new revision and the result is { json, prev }.
+ */
+function geodeFinancialJsonToStore() {
+  var prev = geodeStampFinancialRev();
+  var json = JSON.stringify(S);
+  if (prev === undefined) delete S._rev;
+  else S._rev = prev;
+  if (JSON.stringify(S) === _geodeKnownRaw) return null;
+  S._rev = JSON.parse(json)._rev;
+  return { json: json, prev: prev };
+}
+
+/** After a KEY write that read back as `json`: this page now observes that exact text. */
+function geodeAcceptFinancialWrite(json) {
+  _geodeKnownRaw = json;
+  _geodeFinancialKeySeen = true;
+  _geodeKnownRev = geodeFinancialRevFromRaw(json);
+}
+
 /** Boot check on the KEY string load() read: data newer than this runtime understands is never written by it. */
 function geodeNoteFinancialBoot(raw) {
   _geodeFinancialKeySeen = !!raw;
+  _geodeKnownRaw = raw == null ? null : String(raw);
+  _geodeKnownRev = geodeFinancialRevFromRaw(raw);
   if (geodeStoredSchemaVersion(raw) > GEODE_SCHEMA_VERSION) geodeMarkRuntimeStale('newer');
 }
 
 /**
- * Guard of every KEY writer (save, persistGeodeToLocalStorage, geodeSchema2CommitTransition). Re-reads what is stored
- * now, so a change another window made is caught even when its storage event never reached this page (e.g. a page
- * restored from the back/forward cache). Refuses when stored data is newer than this runtime, has a different schema
- * from the one this write replaces (`replacing`, default this page's), or was removed after this page saw it.
- * Unreadable stored data keeps the behaviour from before the guard. Another window's same-schema edits are not
- * detected (last writer wins).
+ * Guard of every KEY writer (save, persistGeodeToLocalStorage, geodeSchema2CommitTransition, wipe). Re-reads what is
+ * stored now, so a change another window made is caught even when its storage event never reached this page.
+ * Refuses when stored data is newer than this runtime, has a different schema from the one this write replaces
+ * (`replacing`, default this page's), or was removed after this page saw it. Unreadable stored data keeps the
+ * behaviour from before the guard.
+ * P2-1: a different text that carries a newer fenced revision is refused ('foreign') until reload. A different text
+ * from an unfenced runtime is logged and still allowed (last writer wins) until a later schema can refuse it.
+ * The exact stored text is the admission check. _rev only classifies a text that differs.
  */
 function geodeFinancialWriteAllowed(replacing) {
   if (_geodeRuntimeStale) return false;
-  var stored;
+  var raw;
   try {
-    stored = geodeStoredSchemaVersion(localStorage.getItem(KEY));
+    raw = localStorage.getItem(KEY);
   } catch (e) {
     return true;
   }
+  var stored = geodeStoredSchemaVersion(raw);
   var expected = replacing === undefined ? geodePersistedSchemaVersion(S._schemaVersion) : replacing;
   if (stored === null) {
     if (_geodeFinancialKeySeen) geodeMarkRuntimeStale('changed');
@@ -1657,6 +1746,13 @@ function geodeFinancialWriteAllowed(replacing) {
     geodeMarkRuntimeStale('newer');
   } else if (stored === stored && stored !== expected) {
     geodeMarkRuntimeStale('changed');
+  } else if (stored === stored && raw !== _geodeKnownRaw) {
+    if (geodeClassifyFinancialRevision(raw) === 'fenced') geodeMarkRuntimeStale('foreign');
+    else {
+      try {
+        console.warn('[geode] unfenced financial write observed; this write proceeds');
+      } catch (_eU) {}
+    }
   }
   return !_geodeRuntimeStale;
 }
@@ -1664,10 +1760,17 @@ function geodeFinancialWriteAllowed(replacing) {
 /** Storage-event body: `raw` is the KEY value another window just stored (null when it removed KEY or cleared storage). */
 function geodeOnForeignFinancialWrite(raw) {
   if (_geodeRuntimeStale) return;
+  if (raw === _geodeKnownRaw) return;
   var v = geodeStoredSchemaVersion(raw);
   if (v === null || v !== v) geodeMarkRuntimeStale('changed');
   else if (v > GEODE_SCHEMA_VERSION) geodeMarkRuntimeStale('newer');
   else if (v !== geodePersistedSchemaVersion(S._schemaVersion)) geodeMarkRuntimeStale('changed');
+  else if (geodeClassifyFinancialRevision(raw) === 'fenced') geodeMarkRuntimeStale('foreign');
+  else {
+    try {
+      console.warn('[geode] unfenced financial write observed; this page is not stopped');
+    } catch (_eU) {}
+  }
 }
 
 /** Storage events reach only other windows, so each one on KEY (or a full clear, key null) is a foreign change. */
@@ -1695,7 +1798,9 @@ function geodeShowStaleRuntimeGate(reason) {
     msg.textContent =
       reason === 'newer'
         ? 'A newer version of Beynd is needed on this device. Reload to update.'
-        : 'Beynd was updated in another window. Reload to continue \u2014 your saved information is safe.';
+        : reason === 'foreign'
+          ? 'Beynd changed in another window. Reload to continue. A change you made here just now may not have been saved.'
+          : 'Beynd was updated in another window. Reload to continue \u2014 your saved information is safe.';
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn btn-p';
@@ -1907,11 +2012,22 @@ function save() {
     _saveHasPendingBaseline = false;
     S.lastSnapshot = extendLastSnapshotFigures(computeSnapshotFigures());
   } catch (e) {}
-  try {
-    localStorage.setItem(KEY, JSON.stringify(S));
-    _geodeFinancialKeySeen = true;
-  } catch (e2) {
-    toast('Could not save data (storage may be full).', 'warn');
+  var prepared = geodeFinancialJsonToStore();
+  if (prepared) {
+    var json = prepared.json;
+    var prevRev = prepared.prev;
+    try {
+      localStorage.setItem(KEY, json);
+      if (localStorage.getItem(KEY) !== json) {
+        S._rev = prevRev;
+        toast('Could not save data (storage may be full).', 'warn');
+      } else {
+        geodeAcceptFinancialWrite(json);
+      }
+    } catch (e2) {
+      S._rev = prevRev;
+      toast('Could not save data (storage may be full).', 'warn');
+    }
   }
   if (typeof _geodeBootstrap !== 'undefined' && !_geodeBootstrap) {
     markActive();
@@ -1921,10 +2037,19 @@ function save() {
 /** Persist S (e.g. nudgeHistory) without snapshot / lastSnapshot side effects. */
 function persistGeodeToLocalStorage() {
   if (!geodeFinancialWriteAllowed()) return;
+  var prepared = geodeFinancialJsonToStore();
+  if (!prepared) return;
+  var prevRev = prepared.prev;
+  var json = prepared.json;
   try {
-    localStorage.setItem(KEY, JSON.stringify(S));
-    _geodeFinancialKeySeen = true;
+    localStorage.setItem(KEY, json);
+    if (localStorage.getItem(KEY) !== json) {
+      S._rev = prevRev;
+      throw new Error('lose');
+    }
+    geodeAcceptFinancialWrite(json);
   } catch (e) {
+    S._rev = prevRev;
     try {
       toast('Could not save data (storage may be full).', 'warn');
     } catch (e2) {}
@@ -8112,12 +8237,21 @@ function geodeSchema2IntegrityReport(state) {
 function geodeSchema2CommitTransition() {
   try {
     if (!geodeFinancialWriteAllowed(1)) return false;
-    var json = JSON.stringify(S);
+    var prepared = geodeFinancialJsonToStore();
+    if (!prepared) return false;
+    var prevRev = prepared.prev;
+    var json = prepared.json;
     localStorage.setItem(KEY, json);
-    if (localStorage.getItem(KEY) !== json) return false;
-    _geodeFinancialKeySeen = true;
+    if (localStorage.getItem(KEY) !== json) {
+      S._rev = prevRev;
+      return false;
+    }
+    geodeAcceptFinancialWrite(json);
     return true;
   } catch (e) {
+    try {
+      S._rev = prevRev;
+    } catch (_eR) {}
     return false;
   }
 }
@@ -11554,7 +11688,11 @@ function doUnlock() { document.getElementById('pg-login').style.display = 'none'
 /** Full local wipe + reload: same end state as Profile "Reset All Data" (first-run / onboarding after reload). */
 function wipeLocalAppStateAndReload() {
   try {
+    if (!geodeFinancialWriteAllowed()) return;
     localStorage.removeItem(KEY);
+    _geodeKnownRaw = null;
+    _geodeKnownRev = null;
+    _geodeFinancialKeySeen = false;
     localStorage.removeItem(LAST_ACTIVE_KEY);
     localStorage.removeItem('geode_fr_intro_v1');
     sessionStorage.removeItem('geode_rot');
@@ -11763,6 +11901,7 @@ function geodeModalCommitBegin() {
   var m = document.getElementById('modal');
   if (!m) return true;
   if (!geodeModalCommitOpen()) return false;
+  if (!geodeFinancialWriteAllowed()) return false;
   m.setAttribute('data-geode-commit', '1');
   return true;
 }
