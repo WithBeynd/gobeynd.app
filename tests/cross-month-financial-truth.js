@@ -128,6 +128,8 @@ const STRUCTURAL_FUNCTIONS = ['load', 'save', 'geodeInstallFinancialStorageListe
 
 /** The release gate load() and __reload put in front of the schema 1 → 2 transition (geodeShellReadiness). */
 const RELEASE_GATE = "else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();";
+/** P1-REL: the same readiness in front of the automatic FA-7B investment transition, after RELEASE_GATE and before recurring sync. */
+const INVESTMENT_GATE = "if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') geodeInvestmentAuthorityTransition(S, _geodeInvOpening);";
 
 /**
  * Test-only environment. Everything here is a side effect the scenarios do not observe (UI, toasts, caches,
@@ -239,7 +241,7 @@ function __reload() {
   if (!_geodeRuntimeStale) {
     if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
     else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();
-    if (geodeSchema2Active(S)) geodeInvestmentAuthorityTransition(S, _geodeInvOpening);
+    if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') geodeInvestmentAuthorityTransition(S, _geodeInvOpening);
   }
   syncRecurringPayments();
   geodeNormalizeDebtPaymentEvents(S);
@@ -835,8 +837,7 @@ function harnessFidelity() {
     const order = ['geodeNoteFinancialBoot(d);', 'S._schemaVersion = geodePersistedSchemaVersion(p._schemaVersion);', 'geodeNormalizeContributionEvents(S);', 'geodeNormalizeContributionCarry(S);',
       'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();', 'geodeNormalizeSavingsReleases(S);',
       'var _geodeInvOpening = _geodeRuntimeStale ? [] : geodeInvestmentLegacyOpeningValues(S);', 'if (!_geodeRuntimeStale) {',
-      'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE,
-      'if (geodeSchema2Active(S)) geodeInvestmentAuthorityTransition(S, _geodeInvOpening);', 'syncRecurringPayments();',
+      'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, INVESTMENT_GATE, 'syncRecurringPayments();',
       'geodeNormalizeDebtPaymentEvents(S);', 'geodeRecomputeBalancesFromPayments();'];
     const at = order.map(c => load.indexOf(c));
     invariant('fidelity.load', 'load() runs the reload-shim sequence in this order', at.every((p, i) => p >= 0 && (i === 0 || p > at[i - 1])), true);
@@ -4911,9 +4912,12 @@ function releaseSafetyFidelity() {
   scenario('FA-3 RELEASE — harness and production guards are the same code', () => {
     const src = PROGRAM.src, load = PROGRAM.structural.load;
     const reloadShim = TEST_SHIMS.slice(TEST_SHIMS.indexOf('function __reload()'), TEST_SHIMS.indexOf('\n}\n', TEST_SHIMS.indexOf('function __reload()')));
-    const gateOrder = text => { const at = ['geodeNoteFinancialBoot(', 'if (!_geodeRuntimeStale) {', 'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, 'syncRecurringPayments();'].map(c => text.indexOf(c)); return at.every((p, i) => p >= 0 && (!i || p > at[i - 1])); };
-    invariant('REL.fidelity.reload', 'load() and the __reload shim both note the stored schema first, then run the integrity report or the gated transition only while the page may write, before recurring sync',
-      [gateOrder(load), gateOrder(reloadShim), reloadShim.indexOf('geodeNoteFinancialBoot(__store);') >= 0, load.indexOf('geodeNoteFinancialBoot(d);') >= 0], [true, true, true, true]);
+    const gateOrder = text => { const at = ['geodeNoteFinancialBoot(', 'if (!_geodeRuntimeStale) {', 'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, INVESTMENT_GATE, 'syncRecurringPayments();'].map(c => text.indexOf(c)); return at.every((p, i) => p >= 0 && (!i || p > at[i - 1])); };
+    const transitionCalls = text => text.split('geodeInvestmentAuthorityTransition(').length - 1;
+    invariant('REL.fidelity.reload', 'load() and the __reload shim both note the stored schema first, then run the integrity report or the gated schema transition, then the investment transition behind the same shell readiness (P1-REL), only while the page may write and before recurring sync; each calls the investment transition exactly once, and production calls it nowhere else',
+      [gateOrder(load), gateOrder(reloadShim), reloadShim.indexOf('geodeNoteFinancialBoot(__store);') >= 0, load.indexOf('geodeNoteFinancialBoot(d);') >= 0,
+        transitionCalls(load), transitionCalls(reloadShim), transitionCalls(src) - transitionCalls(extractFunction(src, 'geodeInvestmentAuthorityTransition').text)],
+      [true, true, true, true, 1, 1, 1]);
     const guarded = (name, guard) => {
       const t = extractFunction(src, name).text, g = t.indexOf(guard), w = t.indexOf('localStorage.setItem(KEY'), seen = t.indexOf('_geodeFinancialKeySeen = true;');
       return g >= 0 && w >= 0 && seen >= 0 && g < w && w < seen && t.slice(t.indexOf('{') + 1, g).replace(/try\s*\{/, '').trim() === '';
@@ -5970,6 +5974,154 @@ function p1Close() {
 
 // ───────────────────────────── run ─────────────────────────────
 
+// P1-REL: the automatic FA-7B investment transition waits for this release's shell (geodeShellReadiness), like the
+// schema 1 → 2 transition. RELEASE_STATES_JSON holds schema-2 data as the deployed v1.0.76 runtime stored it, with what
+// that runtime showed; pages here have a Cache API, so readiness follows the stored geode_shell.
+
+const RELEASE_STATES_JSON = path.join(__dirname, 'fixtures', 'release-v1.0.76-states.json');
+const P1R_PREVIOUS = 'v1.0.76';
+let p1rData = null;
+const p1rFixtures = () => (p1rData = p1rData || JSON.parse(readSource(RELEASE_STATES_JSON))).fixtures;
+const p1rFixture = key => p1rFixtures().filter(f => f.key === key)[0];
+/** A page of this runtime first loading state (Cache API present); shell: stored geode_shell (true: this runtime's, null: none). */
+const p1rPage = (state, clock, shell) => {
+  const app = new App(state, clock, undefined, { boot: false });
+  app.run('var caches = {}; __uidN = 9000;');
+  if (shell) app.run('__otherStorage.setItem(GEODE_SHELL_KEY, ' + (shell === true ? 'BEYND_RUNTIME_VERSION' : JSON.stringify(shell)) + ');');
+  watchWrites(app);
+  app.run('__reload()');
+  return app;
+};
+/** geodeShellCleanup succeeded in this browser: geode_shell names this runtime. */
+const p1rReady = app => app.run('__otherStorage.setItem(GEODE_SHELL_KEY, BEYND_RUNTIME_VERSION);');
+/** Valuations per investment as [id, [[value, source]...] | null]. */
+const p1rVals = list => (list || []).map(i => [String(i.id), Array.isArray(i.valuations) ? i.valuations.map(v => [v.value, v.source]) : null]);
+const p1rShown = app => { const s = app.snap(); return { inv: s.inv, goal: s.goal }; };
+/** [readiness, shown, valuations in memory, valuations stored]. */
+const p1rLook = app => [app.run('geodeShellReadiness()'), p1rShown(app), p1rVals(app.state().investments), p1rVals(stored(app).investments)];
+const p1rLegacy = f => f.state.investments.map(i => [String(i.id), null]);
+/** One legacy_transition anchor per investment that has an id, at the figure v1.0.76 showed. */
+const p1rAnchored = f => f.state.investments.map(i => [String(i.id), i.id == null ? null : [[f.shown.inv[String(i.id)], 'legacy_transition']]]);
+const p1rMoney = shown => Object.keys(shown.inv).map(k => k + ' ' + show(shown.inv[k])).concat(Object.keys(shown.goal).map(k => 'goal ' + k + ' ' + show(shown.goal[k]))).join(', ');
+
+function p1RelFixtures() {
+  p1rFixtures().forEach(f => scenario('P1-REL FIXTURE — ' + f.key + ' ' + f.description, () => {
+    const legacy = p1rLegacy(f), anchored = p1rAnchored(f);
+    const app = p1rPage(f.state, f.clock, P1R_PREVIOUS);
+    const pending = p1rLook(app), pendingWrites = writes(app);
+    app.run('save();');
+    const saved = p1rVals(stored(app).investments);
+    p1rReady(app); app.reload();
+    const ready = p1rLook(app).slice(0, 3);
+    app.run('save();');
+    const readySaved = p1rVals(stored(app).investments);
+    app.reload(); const again = p1rLook(app);
+    app.advance('2026-09-02', 'reload'); const sept = p1rLook(app);
+    app.advance('2026-10-02', 'reload'); const oct = p1rLook(app);
+    const settled = ['ready', f.shown, anchored, anchored];
+    invariant('P1REL.fixture.' + f.key, 'v1.0.76 showed ' + (p1rMoney(f.shown) || 'nothing') + '. First load of this runtime with the shell pending (geode_shell ' + P1R_PREVIOUS +
+      '): the same figures, no anchor in memory or storage, the load writes nothing and a save stores no anchor; once geode_shell names this runtime the next load anchors each investment with an id once, at the figure v1.0.76 showed, and the next save stores it; reload, September and October: same figures, same single anchor',
+      [pending, pendingWrites, saved, ready, readySaved, again, sept, oct],
+      [['pending', f.shown, legacy, legacy], 0, legacy, ['ready', f.shown, anchored], anchored, settled, settled, settled]);
+  }));
+}
+
+function p1RelPending() {
+  scenario('P1-REL PENDING — the automatic investment transition waits while the shell is not verified', () => {
+    const f = p1rFixture('P10'), legacy = p1rLegacy(f);
+    const look = app => [app.run('geodeShellReadiness()'), p1rShown(app).inv, p1rVals(app.state().investments)];
+    invariant('P1REL.pending.markers', 'geode_shell v1.0.76 (stale), none (absent marker) or an older v1.0.70: readiness pending, no anchor, the v1.0.76 figures (ISA £5,200, GIA £2,100, Pension £10,000)',
+      [P1R_PREVIOUS, null, 'v1.0.70'].map(m => look(p1rPage(f.state, f.clock, m))), [0, 1, 2].map(() => ['pending', f.shown.inv, legacy]));
+
+    const held = p1rPage(f.state, f.clock, P1R_PREVIOUS);
+    held.reload(); held.advance('2026-09-02', 'reload'); held.run('save();');
+    const stuck = [look(held), p1rVals(stored(held).investments)];
+    p1rReady(held); held.reload(); held.run('save();');
+    invariant('P1REL.pending.cleanup-fails', 'Cleanup that keeps failing (Cache API error) leaves geode_shell at v1.0.76: two more loads, one in September, and a save store no anchor; investments stay on legacy authority (ISA £5,000 in September: legacy rollover, as v1.0.76 shows it); once cleanup succeeds the next load anchors that figure once',
+      [stuck, look(held), p1rVals(stored(held).investments)],
+      [[['pending', { iA: 5000, iG: 2100, iP: 10000 }, legacy], legacy], ['ready', { iA: 5000, iG: 2100, iP: 10000 }, [['iA', [[5000, 'legacy_transition']]], ['iG', [[2100, 'legacy_transition']]], ['iP', [[10000, 'legacy_transition']]]]],
+        [['iA', [[5000, 'legacy_transition']]], ['iG', [[2100, 'legacy_transition']]], ['iP', [[10000, 'legacy_transition']]]]]);
+
+    const p2 = p1rFixture('P2');
+    const acting = p1rPage(p2.state, p2.clock, P1R_PREVIOUS);
+    acting.contribute({ name: 'ISA extra', amount: 100, date: p2.clock, status: 'paid', rec: 'no', investId: 'iA' });
+    const during = [look(acting), p1rVals(stored(acting).investments), acting.events().length];
+    p1rReady(acting); acting.reload(); acting.run('save();');
+    invariant('P1REL.pending.actions', 'While pending, a paid one-off £100 to the ISA is recorded on legacy authority (£5,300, a second completion) and its save stores no anchor; the next ready load anchors the legacy figure then available, £5,300, once',
+      [during, look(acting), p1rVals(stored(acting).investments)],
+      [[['pending', { iA: 5300 }, [['iA', null]]], [['iA', null]], 2], ['ready', { iA: 5300 }, [['iA', [[5300, 'legacy_transition']]]]], [['iA', [[5300, 'legacy_transition']]]]]);
+
+    const manual = p1rPage(f.state, f.clock, P1R_PREVIOUS);
+    manual.saveInvestment('iA', 'ISA', 6000);
+    manual.createInvestment('Fund', 1500);
+    const fund = String(manual.state().investments.filter(i => i.name === 'Fund')[0].id);
+    const entered = [look(manual), p1rVals(stored(manual).investments)];
+    p1rReady(manual); manual.reload(); manual.run('save();');
+    const kept = [['iA', [[6000, 'manual']]], ['iG', null], ['iP', null], [fund, [[1500, 'manual_create']]]];
+    const moved = [['iA', [[6000, 'manual']]], ['iG', [[2100, 'legacy_transition']]], ['iP', [[10000, 'legacy_transition']]], [fund, [[1500, 'manual_create']]]];
+    invariant('P1REL.pending.manual', 'User observations are not held: while pending, entering the ISA value £6,000 and creating Fund £1,500 store a manual and a manual_create valuation (no legacy anchor anywhere); the next ready load anchors only the investments without a valuation (GIA, Pension) and keeps the user\'s values',
+      [entered, look(manual), p1rVals(stored(manual).investments)],
+      [[['pending', { iA: 6000, iG: 2100, iP: 10000, [fund]: 1500 }, kept], kept], ['ready', { iA: 6000, iG: 2100, iP: 10000, [fund]: 1500 }, moved], moved]);
+
+    const noCache = new App(f.state, f.clock);
+    invariant('P1REL.absent', 'A browser without the Cache API (readiness absent: no app copy can be cached there) keeps FA-7B behaviour: the first load anchors each investment at the v1.0.76 figure',
+      look(noCache), ['absent', f.shown.inv, p1rAnchored(f)]);
+  });
+
+  scenario('P1-REL NEW MONTH — the first load of this runtime is also the first load of a new month, shell pending', () => {
+    const f = p1rFixture('P2');
+    const app = p1rPage(f.state, '2026-09-02', P1R_PREVIOUS);
+    const pending = [p1rLook(app).slice(0, 3), app.state().payments.map(p => p.status)];
+    p1rReady(app); app.reload();
+    const ready = p1rLook(app).slice(0, 3);
+    app.advance('2026-10-02', 'reload');
+    current('P1REL.new-month', 'P2 (August monthly £200 completed, shown £5,200) first opened by this runtime on 2 September with the shell pending: the automatic transition is held, legacy rollover resets the row and shows £5,000 — what v1.0.76 shows on that load; the next ready load anchors that £5,000 and nothing reconstructs the £200, so the FA-7B rescue of D1 reaches this user a month late (the deferred-write refinement is Phase 2)',
+      [f.shownNextMonth.inv, pending, ready, p1rShown(app).inv],
+      [{ iA: 5000 }, [['pending', { inv: { iA: 5000 }, goal: { gH: 1000 } }, [['iA', null]]], ['upcoming']], ['ready', { inv: { iA: 5000 }, goal: { gH: 1000 } }, [['iA', [[5000, 'legacy_transition']]]]], { iA: 5000 }]);
+  });
+}
+
+function p1RelIdempotence() {
+  scenario('P1-REL IDEMPOTENCE — the gated transition keeps FA-7B identity, determinism and recovery', () => {
+    const f = p1rFixture('P3');
+    const anchor = list => (list || []).map(i => (i.valuations || []).map(v => [v.id, v.value, v.source, v.recordedAt]));
+    const app = p1rPage(f.state, f.clock, P1R_PREVIOUS);
+    p1rReady(app);
+    app.run('__reload();');
+    const lost = [anchor(app.state().investments), anchor(stored(app).investments)];
+    app.run('__reload();');
+    const retried = anchor(app.state().investments);
+    app.run('save();'); app.reload(); app.reload();
+    const forged = app.run('JSON.stringify([geodeInvestmentAuthorityTransition(S, geodeInvestmentLegacyOpeningValues(S)), geodeInvestmentAuthorityTransition(S, [9999])])');
+    const settled = [anchor(app.state().investments), anchor(stored(app).investments), app.snap().inv.iA];
+    const other = p1rPage(f.state, '2026-08-25', true);
+    app.contribute({ name: 'ISA extra', amount: 100, date: f.clock, status: 'paid', rec: 'no', investId: 'iA' });
+    app.reload(); app.reload();
+    const once = retried[0][0];
+    invariant('P1REL.idempotent', 'P3 (£6,000): a ready load whose state never reaches storage (the tab closes or the write is lost) holds the anchor in memory only; the next load builds the same anchor (fixed id val_legacy_iA, £6,000, recordedAt = its latest evidence); running the transition again, even with a forged opening value, adds nothing; two reloads keep one anchor; another page transitioning the same v1.0.76 data on another day builds the identical anchor; a later £100 contribution counts once (£6,100 across two reloads)',
+      [lost, retried, JSON.parse(forged), settled, anchor(other.state().investments), app.snap().inv.iA, anchor(stored(app).investments)],
+      [[[[once]], [[]]], [[once]], [true, true], [[[once]], [[once]], 6000], [[once]], 6100, [[once]]]);
+    invariant('P1REL.idempotent.anchor', 'That anchor is val_legacy_iA at £6,000 (legacy_transition)', once.slice(0, 3), ['val_legacy_iA', 6000, 'legacy_transition']);
+  });
+}
+
+function p1RelOldWriter() {
+  scenario('P1-REL OLD WRITER — a v1.0.76 page can still write schema 2 (documented limitation)', () => {
+    const f = p1rFixture('P2');
+    const app = p1rPage(f.state, f.clock, true);
+    app.contribute({ name: 'ISA extra', amount: 100, date: f.clock, status: 'paid', rec: 'no', investId: 'iA' });
+    const before = [app.snap().inv.iA, p1rVals(stored(app).investments), app.events().length];
+    const theirs = JSON.parse(JSON.stringify(f.state));
+    theirs.income = 3100;
+    foreignStore(app, JSON.stringify(theirs));
+    const allowed = app.run('geodeFinancialWriteAllowed()');
+    app.run('__reload();');
+    current('P1REL.old-writer', 'After this runtime anchored P2 and recorded +£100 (£5,300), a v1.0.76 page that loaded before the upgrade stores its memory (schema 2, no valuations, an unrelated income edit): schema protection sees the same schema, so nothing refuses it; the anchor and the £100 are gone and the next load re-anchors the £5,200 that data holds (no double count). This release relies on the version bump, the worker reloading every window on takeover, old-cache removal and the readiness gate; refusing such writes is Phase 2',
+      [before, allowed, staleState(app), [app.snap().inv.iA, p1rVals(app.state().investments), app.events().length, app.state().income]],
+      [[5300, [['iA', [[5200, 'legacy_transition']]]], 2], true, ['', ''], [5200, [['iA', [[5200, 'legacy_transition']]]], 1, 3100]]);
+  });
+}
+
 let PROGRAM;
 function main() {
   try {
@@ -5992,6 +6144,7 @@ function main() {
   fa7dLinkedGoals();
   p1Close();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
+  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p1RelOldWriter();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');

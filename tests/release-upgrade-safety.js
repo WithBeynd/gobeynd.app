@@ -11,6 +11,10 @@
  *   - every cache lookup reads this release's cache only, so an older cached app can never answer;
  *   - the page records geode_shell only after older Beynd caches are gone, which is what lets the schema 1 → 2
  *     transition start (the financial behaviour of that gate is in tests/cross-month-financial-truth.js, FA-3 RELEASE);
+ *   - the automatic investment valuation transition (FA-7B) waits for the same readiness: load()'s boot block, run as
+ *     written, never calls it while the shell is pending, and the harness shim mirrors it (financial behaviour: P1-REL);
+ *   - an older worker, an older page, a stale or missing marker, a failing Cache API or an offline older shell never
+ *     lets the transition run before this release's shell is verified;
  *   - the stale-runtime gate speaks plainly and offers one Reload.
  * Exit code 0 when every check passes, 1 otherwise.
  */
@@ -23,8 +27,12 @@ const read = rel => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/
 const INDEX = read('index.html');
 const SW = read('service-worker.js');
 const ORIGIN = 'https://gobeynd.app';
-const PREVIOUS = 'v1.0.75';
+const HARNESS = read('tests/cross-month-financial-truth.js');
+const PREVIOUS = 'v1.0.76';
 const RELEASE_GATE = "else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();";
+const INVESTMENT_GATE = "if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') geodeInvestmentAuthorityTransition(S, _geodeInvOpening);";
+const flat = text => text.replace(/\s+/g, ' ');
+const count = (text, part) => text.split(part).length - 1;
 
 // ───────────────────────────── page source ─────────────────────────────
 
@@ -153,7 +161,7 @@ const OLD_FILES = { '/': OLD_SHELL, '/index.html': OLD_SHELL, '/js/geode-pure/01
 
 // ───────────────────────────── worker ─────────────────────────────
 
-/** A fresh worker running service-worker.js; windows: the open pages it can claim ({ url, navigate? }). */
+/** A fresh worker running service-worker.js (or env.source); windows: the open pages it can claim ({ url, navigate? }). */
 function loadWorker(env) {
   const listeners = {};
   const sandbox = {
@@ -170,7 +178,7 @@ function loadWorker(env) {
   };
   sandbox.self = sandbox;
   const ctx = vm.createContext(sandbox);
-  new vm.Script(SW, { filename: 'service-worker.js' }).runInContext(ctx);
+  new vm.Script(env.source || SW, { filename: 'service-worker.js' }).runInContext(ctx);
   const lifecycle = type => {
     let done = Promise.resolve();
     const event = { waitUntil(p) { done = Promise.resolve(p); } };
@@ -219,6 +227,41 @@ function loadPage(caches, storage) {
   return { readiness: () => vm.runInContext('geodeShellReadiness()', ctx), cleanup: () => Promise.resolve(vm.runInContext('geodeShellCleanup()', ctx)) };
 }
 
+/** load()'s block from the legacy investment read to recurring sync: the schema and investment transitions and their gates. */
+function bootBlock(text) {
+  const from = text.indexOf('var _geodeInvOpening'), to = text.indexOf('syncRecurringPayments();', from);
+  if (from < 0 || to < 0) throw new Error('no transition block before syncRecurringPayments()');
+  return text.slice(from, to + 'syncRecurringPayments();'.length);
+}
+const LOAD = extractFunction('load');
+const RELOAD_SHIM = HARNESS.slice(HARNESS.indexOf('function __reload()'), HARNESS.indexOf('\n}\n', HARNESS.indexOf('function __reload()')));
+
+/**
+ * Runs that block exactly as index.html has it, with the page's own geodeShellReadiness and constants; everything it
+ * calls is recorded. caches: a FakeCaches or undefined (no Cache API); schema: the stored data's schema; stale: a
+ * stale-runtime reason. Returns the calls in order ('investment' carries the legacy opening values it was given).
+ */
+function runBoot(caches, storage, schema, stale) {
+  const calls = [];
+  const sandbox = { console: { log() {}, info() {}, warn() {}, error() {} }, localStorage: storage, __calls: calls };
+  if (caches) sandbox.caches = caches;
+  const ctx = vm.createContext(sandbox);
+  const code = ['BEYND_RUNTIME_VERSION', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'].map(extractConstant).join('\n') + '\n' + extractFunction('geodeShellReadiness') + '\n' +
+    'var S = { _schemaVersion: ' + schema + ' }, _geodeRuntimeStale = ' + JSON.stringify(stale || '') + ';\n' +
+    'function geodeInvestmentLegacyOpeningValues() { __calls.push("opening"); return [5200]; }\n' +
+    'function geodeSchema2Active(s) { return s._schemaVersion === 2; }\n' +
+    'function geodeSchema2IntegrityReport() { __calls.push("integrity"); }\n' +
+    'function geodeSchema2Transition() { __calls.push("schema"); S._schemaVersion = 2; }\n' +
+    'function geodeInvestmentAuthorityTransition(s, opening) { __calls.push("investment " + JSON.stringify(opening)); return true; }\n' +
+    'function syncRecurringPayments() { __calls.push("sync"); }\n' +
+    '(function () {\n' + bootBlock(LOAD) + '\n})();';
+  new vm.Script(code, { filename: 'index-boot-block.js' }).runInContext(ctx);
+  return calls;
+}
+const HELD2 = ['opening', 'integrity', 'sync'];
+const MOVED2 = ['opening', 'integrity', 'investment [5200]', 'sync'];
+const OLD_SW = SW.replace("const CACHE_VERSION = '" + RUNTIME + "';", "const CACHE_VERSION = '" + PREVIOUS + "';");
+
 /** A minimal DOM for geodeShowStaleRuntimeGate. */
 function loadGate(withBody) {
   const reloads = [];
@@ -254,9 +297,10 @@ async function versions() {
   group = 'VERSIONS — page runtime and worker cache move together';
   const worker = loadWorker({ caches: new FakeCaches(), net: fakeNetwork({}) });
   const cacheVersion = worker.value('CACHE_VERSION');
-  check('ver.values', 'index.html BEYND_RUNTIME_VERSION and service-worker.js CACHE_VERSION are v1.0.76', [RUNTIME, cacheVersion], ['v1.0.76', 'v1.0.76']);
+  check('ver.values', 'index.html BEYND_RUNTIME_VERSION and service-worker.js CACHE_VERSION are v1.0.77 (P1-REL)', [RUNTIME, cacheVersion], ['v1.0.77', 'v1.0.77']);
   check('ver.lockstep', 'They match, so the worker accepts exactly this page and names its cache after it', [RUNTIME === cacheVersion, worker.value('CACHE_NAME')], [true, 'beynd-cache-' + RUNTIME]);
-  check('ver.bumped', 'Both differ from the deployed v1.0.75, so every browser installs this release', [RUNTIME !== PREVIOUS, cacheVersion !== PREVIOUS], [true, true]);
+  check('ver.bumped', 'Both differ from the deployed ' + PREVIOUS + ', so every browser installs this release; the older worker modelled here really is ' + PREVIOUS,
+    [RUNTIME !== PREVIOUS, cacheVersion !== PREVIOUS, loadWorker({ source: OLD_SW, caches: new FakeCaches(), net: fakeNetwork({}) }).value('CACHE_NAME')], [true, true, 'beynd-cache-' + PREVIOUS]);
   check('ver.schema', 'The financial schema stays 2', SCHEMA, '2');
   check('ver.settings', 'Settings shows "Runtime " + BEYND_RUNTIME_VERSION through the existing display',
     INDEX.indexOf("Runtime ' +\n    escHtmlLite(typeof BEYND_RUNTIME_VERSION !== 'undefined' ? BEYND_RUNTIME_VERSION : 'unknown')") >= 0, true);
@@ -277,7 +321,7 @@ async function install() {
   const urls = PRECACHE();
   check('inst.ok', 'Correct shell: install resolves and this release\'s cache holds every precached URL', [ok, caches.map.get(CURRENT_CACHE).paths()], ['resolved', urls.slice().sort()]);
   check('inst.reload', 'Every precache request bypasses the HTTP cache (cache: reload)', net.requests, urls.map(u => u + ' reload'));
-  check('inst.shell-copy', 'The cached shell is the fetched v1.0.76 page, byte for byte', caches.map.get(CURRENT_CACHE).body('/index.html') === INDEX, true);
+  check('inst.shell-copy', 'The cached shell is the fetched ' + RUNTIME + ' page, byte for byte', caches.map.get(CURRENT_CACHE).body('/index.html') === INDEX, true);
   const skip = log.indexOf('skipWaiting');
   check('inst.skipWaiting', 'skipWaiting runs once, after every asset is stored', [log.filter(x => x === 'skipWaiting').length, skip > lastIndex(log, x => x.indexOf('put:') === 0)], [1, true]);
   check('inst.no-early-put', 'Nothing is stored before every fetch has been verified', firstIndex(log, x => x.indexOf('put:') === 0) > lastIndex(log, x => x.indexOf('fetch:') === 0), true);
@@ -292,7 +336,7 @@ async function install() {
   };
   const kept = label => [label, true, ['beynd-cache-' + PREVIOUS], true, false, false];
   const truncated = INDEX.slice(0, Math.floor(INDEX.length / 2));
-  check('inst.old-shell', 'An older shell (v1.0.75 marker) at /index.html or at / is rejected even with HTTP 200: install fails, no new cache, the previous cache intact, no skipWaiting',
+  check('inst.old-shell', 'An older shell (' + PREVIOUS + ' marker) at /index.html or at / is rejected even with HTTP 200: install fails, no new cache, the previous cache intact, no skipWaiting',
     [await refused('old /index.html', { '/index.html': OLD_SHELL }), await refused('old /', { '/': OLD_SHELL })], [kept('old /index.html'), kept('old /')]);
   check('inst.malformed', 'Malformed shells are rejected: truncated mid-file, a 200 maintenance page, an empty body, the marker only inside a comment of a truncated page',
     [await refused('truncated', { '/index.html': truncated }), await refused('maintenance', { '/index.html': '<!doctype html><html><body>Back soon</body></html>' }),
@@ -312,16 +356,17 @@ async function installFailure() {
   const storage = fakeStorage({ geode_v6: '{"income":3000}' });
   const page = loadPage(caches, storage);
   const failed = await loadWorker({ caches, net: fakeNetwork(releaseFiles({ '/index.html': OLD_SHELL, '/': OLD_SHELL })) }).install();
-  const load = extractFunction('load');
-  check('fail.held', 'CDN still serving the old page: install fails; the previous cache stays; shell readiness is pending, so load() takes no transition branch; the financial key is untouched',
-    [failed.indexOf('rejected') === 0, caches.names(), page.readiness(), load.indexOf('if (!_geodeRuntimeStale) {') >= 0 && load.indexOf(RELEASE_GATE) > load.indexOf('if (!_geodeRuntimeStale) {'), storage.m.geode_v6],
-    [true, ['beynd-cache-' + PREVIOUS], 'pending', true, '{"income":3000}']);
+  const load = LOAD;
+  check('fail.held', 'CDN still serving the old page: install fails; the previous cache stays; shell readiness is pending, so load()\'s boot block, run as written, takes neither transition (schema 1 stays schema 1; schema 2 keeps legacy investment authority); the financial key is untouched',
+    [failed.indexOf('rejected') === 0, caches.names(), page.readiness(), load.indexOf('if (!_geodeRuntimeStale) {') >= 0 && load.indexOf(RELEASE_GATE) > load.indexOf('if (!_geodeRuntimeStale) {'),
+      runBoot(caches, storage, 1), runBoot(caches, storage, 2), storage.m.geode_v6],
+    [true, ['beynd-cache-' + PREVIOUS], 'pending', true, ['opening', 'sync'], HELD2, '{"income":3000}']);
   const retried = await loadWorker({ caches, net: fakeNetwork(releaseFiles()), windows: [] }).install();
   const worker = loadWorker({ caches, net: fakeNetwork(releaseFiles()), windows: [] });
   const activated = await worker.activate();
   await page.cleanup();
-  check('fail.retry', 'Once the network serves v1.0.76, the next install succeeds, activation removes the previous cache and the page then records shell readiness',
-    [retried, activated, caches.names(), page.readiness(), storage.m.geode_shell, storage.m.geode_v6], ['resolved', 'resolved', [CURRENT_CACHE], 'ready', RUNTIME, '{"income":3000}']);
+  check('fail.retry', 'Once the network serves ' + RUNTIME + ', the next install succeeds, activation removes the previous cache and the page then records shell readiness; the next boot runs the investment transition',
+    [retried, activated, caches.names(), page.readiness(), storage.m.geode_shell, runBoot(caches, storage, 2), storage.m.geode_v6], ['resolved', 'resolved', [CURRENT_CACHE], 'ready', RUNTIME, MOVED2, '{"income":3000}']);
 }
 
 async function activate() {
@@ -400,10 +445,10 @@ async function navigation() {
     const worker = loadWorker({ caches, net });
     const answer = await worker.fetch(url, 'navigate');
     await settle();
-    return [answer === INDEX ? 'v1.0.76 page' : answer === OLD_SHELL ? 'old page' : answer, net.requests, caches.map.get(CURRENT_CACHE).paths()];
+    return [answer === INDEX ? 'this page' : answer === OLD_SHELL ? 'old page' : answer, net.requests, caches.map.get(CURRENT_CACHE).paths()];
   };
   check('nav.network-first', 'Online, a navigation is answered from the network (no-store) and the verified page is stored under its URL',
-    await nav({}, '/?source=pwa'), ['v1.0.76 page', ['/?source=pwa no-store'], ['/?source=pwa', '/index.html']]);
+    await nav({}, '/?source=pwa'), ['this page', ['/?source=pwa no-store'], ['/?source=pwa', '/index.html']]);
   const stale = await nav({ '/index.html': OLD_SHELL }, '/index.html');
   check('nav.stale-not-cached', 'A stale CDN copy of the older page is shown as served but never replaces this release\'s cached /index.html',
     [stale[0], stale[2], await (async () => { const c = new FakeCaches(); c.seed(CURRENT_CACHE, { '/index.html': INDEX }); const w = loadWorker({ caches: c, net: fakeNetwork({ '/index.html': OLD_SHELL }) });
@@ -434,7 +479,7 @@ async function shellReadiness() {
   const cleaned = loadPage(full, store);
   const ok = await cleaned.cleanup();
   const mark = log.indexOf('setItem:geode_shell=' + RUNTIME);
-  check('shell.cleanup', 'Cleanup deletes every older Beynd cache (not this release\'s, not others), and only after both deletions finished records geode_shell = v1.0.76; readiness becomes ready; the financial key is untouched',
+  check('shell.cleanup', 'Cleanup deletes every older Beynd cache (not this release\'s, not others), and only after both deletions finished records geode_shell = ' + RUNTIME + '; readiness becomes ready; the financial key is untouched',
     [ok, full.names(), mark > log.indexOf('deleted:beynd-cache-' + PREVIOUS) && mark > log.indexOf('deleted:beynd-cache-v1.0.70'), cleaned.readiness(), store.m],
     [true, [CURRENT_CACHE, 'other-app'], true, 'ready', { geode_v6: '{"_schemaVersion":1}', geode_shell: RUNTIME }]);
   check('shell.doc', 'The code says geode_shell is not a stale-tab lock', extractFunction('geodeShellReadiness').length > 0 &&
@@ -458,6 +503,103 @@ async function cleanupFailure() {
     [held('delete fails'), held('keys rejects'), held('keys throws')]);
   const retry = await attempt('next boot', {});
   check('clean.retry', 'The next boot with a working Cache API completes cleanup and becomes ready', retry, ['next boot', true, 'ready', { geode_v6: '{"_schemaVersion":1}', geode_shell: RUNTIME }]);
+}
+
+async function investmentGate() {
+  group = 'INVESTMENT GATE — the automatic FA-7B transition waits for this release\'s shell (P1-REL)';
+  const load = flat(LOAD), shim = flat(RELOAD_SHIM), gateText = flat(INVESTMENT_GATE);
+  const calls = text => count(text, 'geodeInvestmentAuthorityTransition(');
+  check('inv.gate.once', 'index.html calls geodeInvestmentAuthorityTransition once outside its own definition; that call is in load() and is the gated statement',
+    [calls(INDEX) - calls(extractFunction('geodeInvestmentAuthorityTransition')), calls(LOAD), count(load, gateText), count(flat(INDEX), gateText)], [1, 1, 1, 1]);
+  const guard = text => { const at = text.indexOf('geodeInvestmentAuthorityTransition('); return text.slice(text.lastIndexOf('if (', at), at); };
+  check('inv.gate.readiness', 'The call\'s own guard is schema 2 and geodeShellReadiness() !== \'pending\', the readiness test the schema transition\'s gate uses',
+    [guard(load), RELEASE_GATE.indexOf("geodeShellReadiness() !== 'pending'") >= 0], ["if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') ", true]);
+  const placed = text => {
+    const open = text.indexOf('if (!_geodeRuntimeStale) {'), rel = text.indexOf(flat(RELEASE_GATE)), at = text.indexOf(gateText), end = at + gateText.length;
+    const sync = text.indexOf('syncRecurringPayments();', end);
+    return [open >= 0 && rel > open, at > rel, text.slice(open, at).indexOf('}') < 0, sync > end && text.slice(end, sync).replace(/[\s}]/g, ''), count(text.slice(0, at), 'syncRecurringPayments();')];
+  };
+  const PLACED = [true, true, true, '', 0];
+  check('inv.gate.order', 'In load(): inside if (!_geodeRuntimeStale) { … }, after the schema transition\'s gate, and followed only by that block\'s end and then syncRecurringPayments(); no recurring sync runs before it',
+    placed(load), PLACED);
+  check('inv.gate.shim', 'The harness __reload shim places the same statement the same way, has the same block from the legacy read to recurring sync as load() (whitespace aside), and calls the transition once',
+    [placed(shim), bootBlock(shim) === bootBlock(load), calls(RELOAD_SHIM)], [PLACED, true, 1]);
+
+  const ready = () => fakeStorage({ geode_shell: RUNTIME });
+  check('inv.boot.ready', 'Run as written, schema 2 with geode_shell = ' + RUNTIME + ': the legacy opening values are read, the integrity report runs, the investment transition gets those values, then recurring sync',
+    runBoot(new FakeCaches(), ready(), 2), MOVED2);
+  check('inv.boot.absent', 'No Cache API (readiness absent): the transition runs on the first load, as FA-7B shipped', runBoot(undefined, fakeStorage(), 2), MOVED2);
+  check('inv.boot.schema1', 'Schema 1: pending → neither transition; ready → the schema transition, then the investment transition in the same load, both before recurring sync',
+    [runBoot(new FakeCaches(), fakeStorage({ geode_shell: PREVIOUS }), 1), runBoot(new FakeCaches(), ready(), 1)], [['opening', 'sync'], ['opening', 'schema', 'investment [5200]', 'sync']]);
+  check('inv.boot.stale', 'A stale runtime (newer stored data, or another window changed the schema): nothing is read or moved, even when ready or without a Cache API',
+    [runBoot(new FakeCaches(), ready(), 2, 'newer'), runBoot(undefined, fakeStorage(), 1, 'changed')], [['sync'], ['sync']]);
+}
+
+async function mixedVersions() {
+  group = 'MIXED VERSIONS — an older piece never lets the investment transition run early';
+  const oldCaches = () => { const c = new FakeCaches(); c.seed('beynd-cache-' + PREVIOUS, OLD_FILES); return c; };
+  const schema2 = () => fakeStorage({ geode_v6: '{"_schemaVersion":2}', geode_shell: PREVIOUS });
+
+  log.length = 0;
+  let caches = oldCaches(), storage = schema2();
+  const served = await loadWorker({ source: OLD_SW, caches, net: fakeNetwork(releaseFiles()) }).fetch('/', 'navigate');
+  await settle();
+  const oldKept = caches.map.get('beynd-cache-' + PREVIOUS).body('/index.html') === OLD_SHELL;
+  const heldA = runBoot(caches, storage, 2);
+  const cleaned = await loadPage(caches, storage).cleanup();
+  const left = caches.names();
+  const fallback = await loadWorker({ source: OLD_SW, caches, net: fakeNetwork({}, { offline: true }) }).fetch('/', 'navigate');
+  check('mix.a.new-page-old-worker', 'A. The ' + PREVIOUS + ' worker still controls and passes this page through from the network without caching it (not its shell); the page is pending and its boot holds the investment transition; its cleanup removes the older cache and records readiness, after which the older worker has no older shell to serve offline (a network error) and the next boot transitions',
+    [served === INDEX, oldKept, heldA, cleaned, left, fallback, runBoot(caches, storage, 2), storage.m.geode_v6],
+    [true, true, HELD2, true, [], 'network error', MOVED2, '{"_schemaVersion":2}']);
+
+  log.length = 0;
+  caches = oldCaches(); storage = schema2();
+  const refused = await loadWorker({ caches, net: fakeNetwork(releaseFiles({ '/': OLD_SHELL, '/index.html': OLD_SHELL })) }).install();
+  check('mix.b.old-page-new-worker', 'B. An older page fetches this worker while the network still serves the older page: install is refused (no skipWaiting, so no takeover), the older cache keeps serving, and a page of this runtime that loads meanwhile stays pending and holds the investment transition',
+    [refused.indexOf('rejected') === 0, log.indexOf('skipWaiting') >= 0, caches.names(), runBoot(caches, storage, 2)], [true, false, ['beynd-cache-' + PREVIOUS], HELD2]);
+
+  log.length = 0;
+  caches = oldCaches(); storage = schema2();
+  const navigated = [];
+  const windows = [{ url: ORIGIN + '/', navigate(u) { navigated.push(pathOf(u)); return Promise.resolve(this); } }];
+  const installed = await loadWorker({ caches, net: fakeNetwork(releaseFiles()), windows }).install();
+  const activated = await loadWorker({ caches, net: fakeNetwork(releaseFiles()), windows }).activate();
+  const marker = storage.m.geode_shell;
+  const first = runBoot(caches, storage, 2);
+  const cleanedC = await loadPage(caches, storage).cleanup();
+  check('mix.c.takeover', 'C. This worker installs and activates while an older page is open: the older cache is deleted and the page reloaded once onto this release; the worker has no access to geode_shell, so the reloaded page\'s first boot still holds the investment transition until its own cleanup records readiness; the next boot transitions',
+    [installed, activated, navigated, caches.names(), SW.indexOf('localStorage') < 0, marker, first, cleanedC, storage.m.geode_shell, runBoot(caches, storage, 2)],
+    ['resolved', 'resolved', ['/'], [CURRENT_CACHE], true, PREVIOUS, HELD2, true, RUNTIME, MOVED2]);
+
+  const look = (label, store) => { const c = new FakeCaches(); return [label, loadPage(c, store).readiness(), runBoot(c, store, 2)]; };
+  check('mix.d.stale-marker', 'D. geode_shell from an older release (' + PREVIOUS + ', v1.0.70): pending, the investment transition held',
+    [look(PREVIOUS, fakeStorage({ geode_shell: PREVIOUS })), look('v1.0.70', fakeStorage({ geode_shell: 'v1.0.70' }))],
+    [[PREVIOUS, 'pending', HELD2], ['v1.0.70', 'pending', HELD2]]);
+  const unreadable = fakeStorage({ geode_shell: RUNTIME });
+  unreadable.throwOnGet = true;
+  check('mix.e.absent-marker', 'E. No geode_shell (a Cache API but no completed cleanup) or storage that cannot be read: pending, the investment transition held',
+    [look('none', fakeStorage()), look('unreadable', unreadable)], [['none', 'pending', HELD2], ['unreadable', 'pending', HELD2]]);
+
+  const failing = async (label, fail) => {
+    const c = new FakeCaches(fail);
+    c.seed('beynd-cache-' + PREVIOUS, OLD_FILES); c.seed(CURRENT_CACHE, {});
+    const s = fakeStorage({ geode_shell: PREVIOUS });
+    const ok = await loadPage(c, s).cleanup();
+    return [label, ok, s.m.geode_shell, runBoot(c, s, 2)];
+  };
+  check('mix.f.cache-failure', 'F. Cleanup that fails (an older cache that cannot be deleted, caches.keys() rejecting or throwing) records nothing, so the boot holds the investment transition; once cleanup succeeds the next boot transitions; without a Cache API readiness is absent and the transition runs (nothing older can be cached there)',
+    [await failing('delete fails', { delete: new Set(['beynd-cache-' + PREVIOUS]) }), await failing('keys rejects', { keys: 'reject' }), await failing('keys throws', { keys: 'throw' }),
+      await failing('works', {}), runBoot(undefined, fakeStorage(), 2)],
+    [['delete fails', false, PREVIOUS, HELD2], ['keys rejects', false, PREVIOUS, HELD2], ['keys throws', false, PREVIOUS, HELD2], ['works', true, RUNTIME, MOVED2], MOVED2]);
+
+  log.length = 0;
+  caches = oldCaches(); storage = schema2();
+  const shown = await loadWorker({ source: OLD_SW, caches, net: fakeNetwork(releaseFiles(), { offline: true }) }).fetch('/', 'navigate');
+  const blocked = await loadWorker({ caches, net: fakeNetwork(releaseFiles(), { offline: true }) }).install();
+  check('mix.g.offline-old-shell', 'G. Offline before any transition: the ' + PREVIOUS + ' worker serves its own cached shell; this worker cannot install offline, so the older cache and geode_shell ' + PREVIOUS + ' stay, and the first page of this runtime that loads later is pending and holds the investment transition',
+    [shown === OLD_SHELL, blocked.indexOf('rejected') === 0, caches.names(), storage.m.geode_shell, runBoot(caches, storage, 2)],
+    [true, true, ['beynd-cache-' + PREVIOUS], PREVIOUS, HELD2]);
 }
 
 async function gate() {
@@ -492,7 +634,7 @@ async function main() {
   try {
     if (!RUNTIME) throw new Error('index.html has no BEYND_RUNTIME_VERSION line');
     await versions(); await install(); await installFailure(); await activate(); await lookups(); await navigation();
-    await shellReadiness(); await cleanupFailure(); await gate();
+    await shellReadiness(); await cleanupFailure(); await investmentGate(); await mixedVersions(); await gate();
   } catch (e) {
     results.push({ group, id: 'error', text: 'harness error', ok: false, detail: String(e && e.stack || e) });
   }

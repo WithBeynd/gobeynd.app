@@ -1,0 +1,1266 @@
+{
+  "description": "Schema-2 states as the deployed v1.0.76 runtime (commit a9489f5) stores them, written through its own production functions under a simulated clock, with what that runtime shows: on the day stored (shown) and on its first load of the next month (shownNextMonth, 2026-09-02). P1-REL upgrade tests load these into the current runtime.",
+  "runtime": "v1.0.76",
+  "commit": "a9489f5",
+  "schemaVersion": 2,
+  "fixtures": [
+    {
+      "key": "P0",
+      "description": "no investments; Holiday Â£1,000 + monthly Â£100 completed in August",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {},
+        "goal": {
+          "gH": 1100
+        }
+      },
+      "shownNextMonth": {
+        "inv": {},
+        "goal": {
+          "gH": 1100
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [
+          {
+            "id": "id1",
+            "name": "Holiday monthly",
+            "amount": 100,
+            "date": "2026-09-05",
+            "status": "paid",
+            "rec": "yes",
+            "lastPaidYM": "2026-08",
+            "goalId": "gH",
+            "investId": "",
+            "debtId": "",
+            "payKind": "goal",
+            "createdAt": 1785927600000,
+            "directContribution": true,
+            "contributionEventId": "cev_id2"
+          }
+        ],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1100,
+            "baseSaved": 1000,
+            "monthly": 100,
+            "cat": "other"
+          }
+        ],
+        "investments": [],
+        "debts": [],
+        "savingsReleases": [],
+        "debtPaymentEvents": [],
+        "activityLog": [
+          {
+            "ts": 1785927600000,
+            "type": "payment",
+            "delta": 100,
+            "payKind": "goal",
+            "goalId": "gH",
+            "investId": "",
+            "debtId": "",
+            "name": "Holiday monthly",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1785927600000,
+            "type": "payment",
+            "delta": 100,
+            "payKind": "goal",
+            "goalId": "gH",
+            "investId": "",
+            "debtId": "",
+            "name": "Holiday monthly",
+            "plan": "",
+            "aligned": false
+          }
+        ],
+        "lastSuggestedActions": [],
+        "_schemaVersion": 2,
+        "contributionEvents": [
+          {
+            "id": "cev_id2",
+            "eventType": "completion",
+            "paymentId": "id1",
+            "entityType": "goal",
+            "entityId": "gH",
+            "occurrenceYm": "2026-08",
+            "amount": 100,
+            "recurrence": "monthly",
+            "dueDateSnapshot": "2026-08-05",
+            "recordedAt": 1785927600000,
+            "source": "mark_completed"
+          }
+        ],
+        "contributionCarry": [],
+        "archivedExpenses": [],
+        "beyondStatement": []
+      }
+    },
+    {
+      "key": "P1",
+      "description": "ISA Â£5,000, no contributions",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {
+          "iA": 5000
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "shownNextMonth": {
+        "inv": {
+          "iA": 5000
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1000,
+            "baseSaved": 1000,
+            "monthly": 0,
+            "cat": "other"
+          }
+        ],
+        "investments": [
+          {
+            "id": "iA",
+            "name": "ISA",
+            "type": "isa",
+            "balance": 5000,
+            "baseBalance": 5000
+          }
+        ],
+        "debts": [],
+        "savingsReleases": [],
+        "debtPaymentEvents": [],
+        "activityLog": [],
+        "lastSuggestedActions": [],
+        "_schemaVersion": 2,
+        "contributionEvents": [],
+        "contributionCarry": [],
+        "archivedExpenses": [],
+        "beyondStatement": []
+      }
+    },
+    {
+      "key": "P2",
+      "description": "ISA Â£5,000 + monthly Â£200 completed in August",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {
+          "iA": 5200
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "shownNextMonth": {
+        "inv": {
+          "iA": 5000
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [
+          {
+            "id": "id1",
+            "name": "ISA monthly",
+            "amount": 200,
+            "date": "2026-09-05",
+            "status": "paid",
+            "rec": "yes",
+            "lastPaidYM": "2026-08",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "payKind": "invest",
+            "createdAt": 1785927600000,
+            "directContribution": true,
+            "contributionEventId": "cev_id2"
+          }
+        ],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1000,
+            "baseSaved": 1000,
+            "monthly": 0,
+            "cat": "other"
+          }
+        ],
+        "investments": [
+          {
+            "id": "iA",
+            "name": "ISA",
+            "type": "isa",
+            "balance": 5200,
+            "baseBalance": 5000
+          }
+        ],
+        "debts": [],
+        "savingsReleases": [],
+        "debtPaymentEvents": [],
+        "activityLog": [
+          {
+            "ts": 1785927600000,
+            "type": "payment",
+            "delta": 200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA monthly",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1785927600000,
+            "type": "payment",
+            "delta": 200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA monthly",
+            "plan": "",
+            "aligned": false
+          }
+        ],
+        "lastSuggestedActions": [],
+        "_schemaVersion": 2,
+        "contributionEvents": [
+          {
+            "id": "cev_id2",
+            "eventType": "completion",
+            "paymentId": "id1",
+            "entityType": "investment",
+            "entityId": "iA",
+            "occurrenceYm": "2026-08",
+            "amount": 200,
+            "recurrence": "monthly",
+            "dueDateSnapshot": "2026-08-05",
+            "recordedAt": 1785927600000,
+            "source": "mark_completed"
+          }
+        ],
+        "contributionCarry": [],
+        "archivedExpenses": [],
+        "beyondStatement": []
+      }
+    },
+    {
+      "key": "P3",
+      "description": "ISA Â£5,000 + one-off Â£500 (June) + monthly Â£200 (June, August) + one-off Â£300 (July)",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {
+          "iA": 6000
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "shownNextMonth": {
+        "inv": {
+          "iA": 5800
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [
+          {
+            "id": "id1",
+            "name": "ISA top-up",
+            "amount": 500,
+            "date": "2026-06-05",
+            "status": "paid",
+            "rec": "no",
+            "lastPaidYM": "",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "payKind": "invest",
+            "createdAt": 1780657200000,
+            "directContribution": true,
+            "contributionEventId": "cev_id2"
+          },
+          {
+            "id": "id3",
+            "name": "ISA monthly",
+            "amount": 200,
+            "date": "2026-09-06",
+            "status": "paid",
+            "rec": "yes",
+            "lastPaidYM": "2026-08",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "payKind": "invest",
+            "createdAt": 1780657200000,
+            "directContribution": true,
+            "contributionEventId": "cev_id7"
+          },
+          {
+            "id": "id5",
+            "name": "ISA extra",
+            "amount": 300,
+            "date": "2026-07-20",
+            "status": "paid",
+            "rec": "no",
+            "lastPaidYM": "",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "payKind": "invest",
+            "createdAt": 1784545200000,
+            "directContribution": true,
+            "contributionEventId": "cev_id6"
+          }
+        ],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1000,
+            "baseSaved": 1000,
+            "monthly": 0,
+            "cat": "other"
+          }
+        ],
+        "investments": [
+          {
+            "id": "iA",
+            "name": "ISA",
+            "type": "isa",
+            "balance": 6000,
+            "baseBalance": 5000
+          }
+        ],
+        "debts": [],
+        "savingsReleases": [],
+        "debtPaymentEvents": [],
+        "activityLog": [
+          {
+            "ts": 1780657200000,
+            "type": "payment",
+            "delta": 500,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA top-up",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1780657200000,
+            "type": "payment",
+            "delta": 200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA monthly",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1780657200000,
+            "type": "payment",
+            "delta": 200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA monthly",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1784545200000,
+            "type": "payment",
+            "delta": 300,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA extra",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1786014000000,
+            "type": "payment",
+            "delta": 200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA monthly",
+            "plan": "",
+            "aligned": false
+          }
+        ],
+        "lastSuggestedActions": [],
+        "_schemaVersion": 2,
+        "contributionEvents": [
+          {
+            "id": "cev_id2",
+            "eventType": "completion",
+            "paymentId": "id1",
+            "entityType": "investment",
+            "entityId": "iA",
+            "occurrenceYm": "2026-06",
+            "amount": 500,
+            "recurrence": "one_off",
+            "dueDateSnapshot": "2026-06-05",
+            "recordedAt": 1780657200000,
+            "source": "payment_form"
+          },
+          {
+            "id": "cev_id4",
+            "eventType": "completion",
+            "paymentId": "id3",
+            "entityType": "investment",
+            "entityId": "iA",
+            "occurrenceYm": "2026-06",
+            "amount": 200,
+            "recurrence": "monthly",
+            "dueDateSnapshot": "2026-06-06",
+            "recordedAt": 1780657200000,
+            "source": "mark_completed"
+          },
+          {
+            "id": "cev_id6",
+            "eventType": "completion",
+            "paymentId": "id5",
+            "entityType": "investment",
+            "entityId": "iA",
+            "occurrenceYm": "2026-07",
+            "amount": 300,
+            "recurrence": "one_off",
+            "dueDateSnapshot": "2026-07-20",
+            "recordedAt": 1784545200000,
+            "source": "payment_form"
+          },
+          {
+            "id": "cev_id7",
+            "eventType": "completion",
+            "paymentId": "id3",
+            "entityType": "investment",
+            "entityId": "iA",
+            "occurrenceYm": "2026-08",
+            "amount": 200,
+            "recurrence": "monthly",
+            "dueDateSnapshot": "2026-08-06",
+            "recordedAt": 1786014000000,
+            "source": "mark_completed"
+          }
+        ],
+        "contributionCarry": [],
+        "archivedExpenses": [],
+        "beyondStatement": []
+      }
+    },
+    {
+      "key": "P4",
+      "description": "ISA Â£5,000 + one-off Â£500 âˆ’ release Â£300 (July) [release ok=true]",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {
+          "iA": 5200
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "shownNextMonth": {
+        "inv": {
+          "iA": 5200
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [
+          {
+            "id": "id1",
+            "name": "ISA top-up",
+            "amount": 500,
+            "date": "2026-06-05",
+            "status": "paid",
+            "rec": "no",
+            "lastPaidYM": "",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "payKind": "invest",
+            "createdAt": 1780657200000,
+            "directContribution": true,
+            "contributionEventId": "cev_id2"
+          }
+        ],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1000,
+            "baseSaved": 1000,
+            "monthly": 0,
+            "cat": "other"
+          }
+        ],
+        "investments": [
+          {
+            "id": "iA",
+            "name": "ISA",
+            "type": "isa",
+            "balance": 5200,
+            "baseBalance": 5000
+          }
+        ],
+        "debts": [],
+        "savingsReleases": [
+          {
+            "id": "id3",
+            "sourceType": "investment",
+            "sourceId": "iA",
+            "amount": 300,
+            "reason": "emergency",
+            "date": "2026-07-25",
+            "ym": "2026-07",
+            "relatedYm": "2026-07",
+            "remainingBalance": 5200,
+            "createdAt": 1784977200000,
+            "confirmedByUser": true,
+            "note": "",
+            "balanceMutationMode": "event_derived",
+            "reserveClass": "future_capital",
+            "reserveTier": 3,
+            "copyKey": "future_capital"
+          }
+        ],
+        "debtPaymentEvents": [],
+        "activityLog": [
+          {
+            "ts": 1780657200000,
+            "type": "payment",
+            "delta": 500,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA top-up",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1784977200000,
+            "type": "savings_release",
+            "delta": -300,
+            "sourceType": "investment",
+            "sourceId": "iA",
+            "sourceName": "ISA",
+            "reason": "emergency",
+            "releaseId": "id3",
+            "relatedYm": "2026-07",
+            "reserveClass": "future_capital",
+            "reserveTier": 3
+          }
+        ],
+        "lastSuggestedActions": [],
+        "_schemaVersion": 2,
+        "contributionEvents": [
+          {
+            "id": "cev_id2",
+            "eventType": "completion",
+            "paymentId": "id1",
+            "entityType": "investment",
+            "entityId": "iA",
+            "occurrenceYm": "2026-06",
+            "amount": 500,
+            "recurrence": "one_off",
+            "dueDateSnapshot": "2026-06-05",
+            "recordedAt": 1780657200000,
+            "source": "payment_form"
+          }
+        ],
+        "contributionCarry": [],
+        "archivedExpenses": [],
+        "beyondStatement": []
+      }
+    },
+    {
+      "key": "P5",
+      "description": "ISA Â£5,000 + ambiguous paid monthly Â£200 (no lastPaidYM, legacy build data)",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {
+          "iA": 5200
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "shownNextMonth": {
+        "inv": {
+          "iA": 5200
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [
+          {
+            "id": "im",
+            "name": "im",
+            "amount": 200,
+            "date": "2026-06-05",
+            "status": "paid",
+            "rec": "yes",
+            "lastPaidYM": "",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "payKind": "invest",
+            "createdAt": 1
+          }
+        ],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1000,
+            "baseSaved": 1000,
+            "monthly": 0,
+            "cat": "other"
+          }
+        ],
+        "investments": [
+          {
+            "id": "iA",
+            "name": "ISA",
+            "type": "isa",
+            "balance": 5200,
+            "baseBalance": 5000
+          }
+        ],
+        "debts": [],
+        "savingsReleases": [],
+        "debtPaymentEvents": [],
+        "activityLog": [],
+        "lastSuggestedActions": [],
+        "incomeExplicitlySet": true,
+        "_schemaVersion": 2,
+        "contributionEvents": [],
+        "contributionCarry": []
+      }
+    },
+    {
+      "key": "P6",
+      "description": "Holiday goal linked to ISA Â£5,000 + monthly Â£200 completed in August",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {
+          "iA": 5200
+        },
+        "goal": {
+          "gH": 5200
+        }
+      },
+      "shownNextMonth": {
+        "inv": {
+          "iA": 5000
+        },
+        "goal": {
+          "gH": 5000
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [
+          {
+            "id": "id1",
+            "name": "ISA monthly",
+            "amount": 200,
+            "date": "2026-09-05",
+            "status": "paid",
+            "rec": "yes",
+            "lastPaidYM": "2026-08",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "payKind": "invest",
+            "createdAt": 1785927600000,
+            "directContribution": true,
+            "contributionEventId": "cev_id2"
+          }
+        ],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1000,
+            "baseSaved": 1000,
+            "monthly": 0,
+            "cat": "other"
+          }
+        ],
+        "investments": [
+          {
+            "id": "iA",
+            "name": "ISA",
+            "type": "isa",
+            "balance": 5200,
+            "baseBalance": 5000,
+            "returns": 0,
+            "platform": "",
+            "notes": "",
+            "purpose": "goal-linked",
+            "goalId": "gH"
+          }
+        ],
+        "debts": [],
+        "savingsReleases": [],
+        "debtPaymentEvents": [],
+        "activityLog": [
+          {
+            "ts": 1785927600000,
+            "type": "payment",
+            "delta": 200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA monthly",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1785927600000,
+            "type": "payment",
+            "delta": 200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA monthly",
+            "plan": "",
+            "aligned": false
+          }
+        ],
+        "lastSuggestedActions": [],
+        "_schemaVersion": 2,
+        "contributionEvents": [
+          {
+            "id": "cev_id2",
+            "eventType": "completion",
+            "paymentId": "id1",
+            "entityType": "investment",
+            "entityId": "iA",
+            "occurrenceYm": "2026-08",
+            "amount": 200,
+            "recurrence": "monthly",
+            "dueDateSnapshot": "2026-08-05",
+            "recordedAt": 1785927600000,
+            "source": "mark_completed"
+          }
+        ],
+        "contributionCarry": [],
+        "archivedExpenses": [],
+        "beyondStatement": []
+      }
+    },
+    {
+      "key": "P7",
+      "description": "ISA Â£5,000 + annual Â£1,200 completed in June",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {
+          "iA": 6200
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "shownNextMonth": {
+        "inv": {
+          "iA": 6200
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [
+          {
+            "id": "id1",
+            "name": "ISA annual",
+            "amount": 1200,
+            "date": "2027-06-10",
+            "status": "paid",
+            "rec": "annual",
+            "lastPaidYM": "2026-06",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "payKind": "invest",
+            "createdAt": 1781089200000,
+            "directContribution": true,
+            "contributionEventId": "cev_id2"
+          }
+        ],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1000,
+            "baseSaved": 1000,
+            "monthly": 0,
+            "cat": "other"
+          }
+        ],
+        "investments": [
+          {
+            "id": "iA",
+            "name": "ISA",
+            "type": "isa",
+            "balance": 6200,
+            "baseBalance": 5000
+          }
+        ],
+        "debts": [],
+        "savingsReleases": [],
+        "debtPaymentEvents": [],
+        "activityLog": [
+          {
+            "ts": 1781089200000,
+            "type": "payment",
+            "delta": 1200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA annual",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1781089200000,
+            "type": "payment",
+            "delta": 1200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA annual",
+            "plan": "",
+            "aligned": false
+          }
+        ],
+        "lastSuggestedActions": [],
+        "_schemaVersion": 2,
+        "contributionEvents": [
+          {
+            "id": "cev_id2",
+            "eventType": "completion",
+            "paymentId": "id1",
+            "entityType": "investment",
+            "entityId": "iA",
+            "occurrenceYm": "2026-06",
+            "amount": 1200,
+            "recurrence": "annual",
+            "dueDateSnapshot": "2026-06-10",
+            "recordedAt": 1781089200000,
+            "source": "mark_completed"
+          }
+        ],
+        "contributionCarry": [],
+        "archivedExpenses": [],
+        "beyondStatement": []
+      }
+    },
+    {
+      "key": "P8",
+      "description": "no investments; Holiday with a legacy carry (ambiguous monthly Â£100) and a dated one-off Â£250",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {},
+        "goal": {
+          "gH": 1350
+        }
+      },
+      "shownNextMonth": {
+        "inv": {},
+        "goal": {
+          "gH": 1350
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [
+          {
+            "id": "gm",
+            "name": "gm",
+            "amount": 100,
+            "date": "2026-08-05",
+            "status": "upcoming",
+            "rec": "yes",
+            "lastPaidYM": "",
+            "goalId": "gH",
+            "investId": "",
+            "debtId": "",
+            "payKind": "goal",
+            "createdAt": 1
+          },
+          {
+            "id": "g1",
+            "name": "g1",
+            "amount": 250,
+            "date": "2026-06-10",
+            "status": "paid",
+            "rec": "no",
+            "lastPaidYM": "",
+            "goalId": "gH",
+            "investId": "",
+            "debtId": "",
+            "payKind": "goal",
+            "createdAt": 1,
+            "contributionEventId": "cev_id1"
+          }
+        ],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1350,
+            "baseSaved": 1000,
+            "monthly": 0,
+            "cat": "other"
+          }
+        ],
+        "investments": [],
+        "debts": [],
+        "savingsReleases": [],
+        "debtPaymentEvents": [],
+        "activityLog": [],
+        "lastSuggestedActions": [],
+        "_schemaVersion": 2,
+        "contributionEvents": [
+          {
+            "id": "cev_id1",
+            "eventType": "completion",
+            "paymentId": "g1",
+            "entityType": "goal",
+            "entityId": "gH",
+            "occurrenceYm": "2026-06",
+            "amount": 250,
+            "recurrence": "one_off",
+            "dueDateSnapshot": "2026-06-10",
+            "recordedAt": 1782990000000,
+            "source": "migration"
+          }
+        ],
+        "contributionCarry": [
+          {
+            "id": "carry_gm",
+            "paymentId": "gm",
+            "entityType": "goal",
+            "entityId": "gH",
+            "kind": "undated_contribution",
+            "amount": 100,
+            "recurrence": "monthly",
+            "dueDateSnapshot": "2026-06-05",
+            "createdAt": 1782990000000,
+            "source": "schema2_transition"
+          }
+        ],
+        "archivedExpenses": [],
+        "beyondStatement": []
+      }
+    },
+    {
+      "key": "P9",
+      "description": "malformed: text base/balance; no id; balance without baseBalance",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {
+          "iX": 0,
+          "undefined": 300,
+          "iY": 700
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "shownNextMonth": {
+        "inv": {
+          "iX": 0,
+          "undefined": 300,
+          "iY": 700
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1000,
+            "baseSaved": 1000,
+            "monthly": 0,
+            "cat": "other"
+          }
+        ],
+        "investments": [
+          {
+            "id": "iX",
+            "name": "Odd",
+            "baseBalance": "abc",
+            "balance": "x"
+          },
+          {
+            "name": "No id",
+            "balance": 300,
+            "baseBalance": 300
+          },
+          {
+            "id": "iY",
+            "name": "No base",
+            "balance": 700,
+            "baseBalance": 700
+          }
+        ],
+        "debts": [],
+        "savingsReleases": [],
+        "debtPaymentEvents": [],
+        "activityLog": [],
+        "lastSuggestedActions": [],
+        "_schemaVersion": 2,
+        "contributionEvents": [],
+        "contributionCarry": []
+      }
+    },
+    {
+      "key": "P10",
+      "description": "ISA Â£5,000 + monthly Â£200 (Aug); GIA Â£2,000 + one-off Â£100; Pension Â£10,000",
+      "clock": "2026-08-20",
+      "shown": {
+        "inv": {
+          "iA": 5200,
+          "iG": 2100,
+          "iP": 10000
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "shownNextMonth": {
+        "inv": {
+          "iA": 5000,
+          "iG": 2100,
+          "iP": 10000
+        },
+        "goal": {
+          "gH": 1000
+        }
+      },
+      "state": {
+        "income": 3000,
+        "payments": [
+          {
+            "id": "id1",
+            "name": "ISA monthly",
+            "amount": 200,
+            "date": "2026-09-05",
+            "status": "paid",
+            "rec": "yes",
+            "lastPaidYM": "2026-08",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "payKind": "invest",
+            "createdAt": 1785927600000,
+            "directContribution": true,
+            "contributionEventId": "cev_id2"
+          },
+          {
+            "id": "id3",
+            "name": "GIA top-up",
+            "amount": 100,
+            "date": "2026-07-01",
+            "status": "paid",
+            "rec": "no",
+            "lastPaidYM": "",
+            "goalId": "",
+            "investId": "iG",
+            "debtId": "",
+            "payKind": "invest",
+            "createdAt": 1785927600000,
+            "directContribution": true,
+            "contributionEventId": "cev_id4"
+          }
+        ],
+        "expenses": [],
+        "goals": [
+          {
+            "id": "gH",
+            "name": "Holiday",
+            "amount": 2000,
+            "saved": 1000,
+            "baseSaved": 1000,
+            "monthly": 0,
+            "cat": "other"
+          }
+        ],
+        "investments": [
+          {
+            "id": "iA",
+            "name": "ISA",
+            "type": "isa",
+            "balance": 5200,
+            "baseBalance": 5000
+          },
+          {
+            "id": "iG",
+            "name": "GIA",
+            "type": "gia",
+            "balance": 2100,
+            "baseBalance": 2000
+          },
+          {
+            "id": "iP",
+            "name": "Pension",
+            "type": "pension",
+            "balance": 10000,
+            "baseBalance": 10000
+          }
+        ],
+        "debts": [],
+        "savingsReleases": [],
+        "debtPaymentEvents": [],
+        "activityLog": [
+          {
+            "ts": 1785927600000,
+            "type": "payment",
+            "delta": 200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA monthly",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1785927600000,
+            "type": "payment",
+            "delta": 200,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iA",
+            "debtId": "",
+            "name": "ISA monthly",
+            "plan": "",
+            "aligned": false
+          },
+          {
+            "ts": 1785927600000,
+            "type": "payment",
+            "delta": 100,
+            "payKind": "invest",
+            "goalId": "",
+            "investId": "iG",
+            "debtId": "",
+            "name": "GIA top-up",
+            "plan": "",
+            "aligned": false
+          }
+        ],
+        "lastSuggestedActions": [],
+        "_schemaVersion": 2,
+        "contributionEvents": [
+          {
+            "id": "cev_id2",
+            "eventType": "completion",
+            "paymentId": "id1",
+            "entityType": "investment",
+            "entityId": "iA",
+            "occurrenceYm": "2026-08",
+            "amount": 200,
+            "recurrence": "monthly",
+            "dueDateSnapshot": "2026-08-05",
+            "recordedAt": 1785927600000,
+            "source": "mark_completed"
+          },
+          {
+            "id": "cev_id4",
+            "eventType": "completion",
+            "paymentId": "id3",
+            "entityType": "investment",
+            "entityId": "iG",
+            "occurrenceYm": "2026-08",
+            "amount": 100,
+            "recurrence": "one_off",
+            "dueDateSnapshot": "2026-07-01",
+            "recordedAt": 1785927600000,
+            "source": "payment_form"
+          }
+        ],
+        "contributionCarry": [],
+        "archivedExpenses": [],
+        "beyondStatement": []
+      }
+    }
+  ]
+}

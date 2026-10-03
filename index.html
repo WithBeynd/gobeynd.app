@@ -1365,7 +1365,7 @@ var KEY = 'geode_v6';
  * Deploy/runtime marker for support and PWA freshness checks (80N-P.1); not persisted. Keep equal to service-worker.js
  * CACHE_VERSION: its install accepts only a shell containing this exact line, and geodeShellCleanup keeps that cache.
  */
-var BEYND_RUNTIME_VERSION = 'v1.0.76';
+var BEYND_RUNTIME_VERSION = 'v1.0.77';
 /**
  * Local persisted-state schema marker for backup/restore validation (bump when structure changes).
  * 2: goal Saved is base + dated contribution events + legacy carries − releases (geodeSchema2Transition).
@@ -1710,8 +1710,8 @@ function geodeShowStaleRuntimeGate(reason) {
 }
 
 /**
- * Release safety: whether the schema 1 → 2 transition may run in this browser. 'absent': no Cache API, so no older
- * app copy can be stored here. 'ready': geodeShellCleanup already removed every older Beynd cache for this runtime.
+ * Release safety: whether the schema 1 → 2 transition and the automatic investment valuation transition (FA-7B) may
+ * run in this browser. 'absent': no Cache API, so no older app copy can be stored here. 'ready': geodeShellCleanup already removed every older Beynd cache for this runtime.
  * 'pending': not yet, or the Cache API failed. geode_shell proves only that older cached app copies are gone — not
  * that no older page is still open; those are handled by the service worker reloading its windows on takeover and by
  * geodeFinancialWriteAllowed / the storage listener.
@@ -1837,13 +1837,15 @@ function load() {
    * starts only once no older app copy can be served in this browser (geodeShellReadiness); until then data stays
    * schema 1. Data newer than this runtime is neither checked nor moved.
    * FA-7B: legacy investment figures are read from the same untouched rows; investments move to valuation authority
-   * only on schema-2 data, after the goal transition and before recurring sync.
+   * only on schema-2 data, after the goal transition and before recurring sync. P1-REL: that move waits for the same
+   * shell readiness, because the previous runtime reads schema 2 but not valuation authority; until then investments
+   * stay on legacy authority.
    */
   var _geodeInvOpening = _geodeRuntimeStale ? [] : geodeInvestmentLegacyOpeningValues(S);
   if (!_geodeRuntimeStale) {
     if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
     else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();
-    if (geodeSchema2Active(S)) geodeInvestmentAuthorityTransition(S, _geodeInvOpening);
+    if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') geodeInvestmentAuthorityTransition(S, _geodeInvOpening);
   }
   syncRecurringPayments();
   geodeNormalizeDebtHealthFields(S);
@@ -4991,11 +4993,11 @@ function geodeInvestmentEvidenceLatestAt(state, inv) {
 
 /**
  * FA-7B: the one-time move of legacy investments to valuation authority, run by load() on schema-2 data before
- * syncRecurringPayments. Each investment `opening` names (geodeInvestmentLegacyOpeningValues) that still has no valid
- * valuation gains one legacy_transition anchor at that value, dated today, its recordedAt the latest evidence it holds,
- * so it subsumes every contribution and release already recorded and only later ones move it: the new position equals
- * the legacy figure. The id is fixed per investment and a valid anchor is never added twice. If any position does not
- * equal its opening value, every anchor is removed again and all investments stay on legacy authority until the next
+ * syncRecurringPayments, once geodeShellReadiness() is not 'pending' (P1-REL). Each investment `opening` names
+ * (geodeInvestmentLegacyOpeningValues) that still has no valid valuation gains one legacy_transition anchor at that
+ * value, dated today, its recordedAt the latest evidence it holds, so it subsumes every contribution and release
+ * already recorded and only later ones move it: the new position equals the legacy figure. The id is fixed per
+ * investment and a valid anchor is never added twice. If any position does not equal its opening value, every anchor is removed again and all investments stay on legacy authority until the next
  * load. Nothing is written here: the anchors reach storage with the next whole-state save, which always follows them,
  * so stored data is either untouched or holds the anchors together with any row reset after them.
  */
