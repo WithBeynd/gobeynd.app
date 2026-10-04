@@ -469,8 +469,10 @@ function checksFor(src) {
     [['Rent'], ['Phone'], false]);
 
   r = ready('W', CASES['W.negative']());
-  check('W.text', 'Negative plan: the detail sits beside the existing Plan link; one disclosure, one link, no new action', [r.done.map(x => x[0]),
-    (r.html.match(/<details/g) || []).length, (r.html.match(/<button/g) || []).length, r.html.indexOf('<details') < r.html.indexOf('Review this month in Plan')], [['Rent'], 1, 1, true]);
+  // P3-5D: the Pulse's one other button is its income action ("Record income received"), outside the detail.
+  check('W.text', 'Negative plan: the detail sits beside the existing Plan link; one disclosure, the Plan link and the Pulse income action, no action in the detail', [r.done.map(x => x[0]),
+    (r.html.match(/<details/g) || []).length, (r.html.match(/<button/g) || []).length, r.html.indexOf('<details') < r.html.indexOf('Review this month in Plan'),
+    /<button/.test(r.detail), (r.html.match(/data-geode-income-action="record"/g) || []).length], [['Rent'], 1, 2, true, false, 1]);
 
   r = ready('Z.system', CASES['Z.system-and-orphan']());
   check('Z.system.text', 'Events no payment item cites (a deleted row, a safety-net record) are listed once by the model\'s labels, the system one said to be recorded by Beynd',

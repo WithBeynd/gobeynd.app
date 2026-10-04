@@ -38638,6 +38638,7 @@ function geodeMonthPulseView(model) {
     incomePlanned: income.planned,
     incomeType: income.type,
     incomeReceived: income.received === undefined ? null : income.received,
+    incomeState: income.state || null,
     detail: geodeMonthDetailView(model)
   };
 }
@@ -38706,7 +38707,7 @@ function geodeMonthChangeView(changes) {
  * evidenceSource and id) is that item and is not listed again — an event cited by an unplaced item stays with that
  * item. Releases and valuations are listed, never totalled. Still ahead is payments.ahead (totalling aheadTotal).
  * Payment items are ordered by the due date the model gives (none last); events keep the model's order.
- * P3-5C: income receipt items stay in the model until P3-5D gives them their own wording; they are not listed here.
+ * P3-5C/P3-5D: income receipt items are never "also recorded" payment evidence; they are the Income part alone.
  */
 function geodeMonthDetailView(model) {
   if (!model || model.status !== 'ready' || !model.payments) return null;
@@ -38734,7 +38735,35 @@ function geodeMonthDetailView(model) {
     aheadTotal: payments.aheadTotal,
     unplaced: (payments.unplaced || []).slice(),
     earlierGapCount: earlier.gapCount > 0 ? earlier.gapCount : 0,
-    changes: geodeMonthChangeView(model.changes)
+    changes: geodeMonthChangeView(model.changes),
+    income: geodeMonthIncomeView(model)
+  };
+}
+
+/**
+ * P3-5D: the detail's Income part — the month's income receipts (the model's income_recorded items) beside the plan's
+ * income, never combined with it: no difference, share or amount still due is formed. Null unless income received is
+ * recorded this month. Dated receipts come first, by the day received; month-only receipts follow in the model's order,
+ * with no day invented. recordedAt never dates or orders a receipt here.
+ */
+function geodeMonthIncomeView(model) {
+  var income = model && model.income;
+  if (!income || income.state !== 'recorded' || typeof income.received !== 'number' || !model.month) return null;
+  var items = (model.happened || []).filter(function (e) { return e && e.type === 'income_recorded'; })
+    .map(function (e, i) { return { id: e.id, amount: e.amount, date: e.eventDate || null, label: e.label || null, i: i }; });
+  items.sort(function (a, b) {
+    if (!a.date !== !b.date) return a.date ? -1 : 1;
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return a.i - b.i;
+  });
+  if (!items.length) return null;
+  return {
+    received: income.received,
+    planned: typeof income.planned === 'number' && income.planned > 0 ? income.planned : 0,
+    irregular: income.type === 'irregular',
+    receipts: items.map(function (x) {
+      return { id: x.id, amount: x.amount, date: x.date, ym: x.date ? x.date.slice(0, 7) : String(model.month.ym || ''), label: x.label };
+    })
   };
 }
 
@@ -38745,10 +38774,13 @@ function geodeMonthDetailView(model) {
  * a release is money released from a goal or investment; a valuation is a recorded value, not a flow. Amounts in the
  * right-hand column are exactly the items each section total counts.
  * P3-4E: What changed follows Still ahead — the change view's sentence and its changed components, plan figures only.
+ * P3-5D: Income comes first when receipts are recorded: each receipt is income recorded by the user — never a deposit
+ * or a bank's confirmation — dated by the day received or said to have no day; planned income stays a plan figure on
+ * its own line. Each receipt offers Correct and Remove record, by its id.
  */
 function geodeMonthDetailHtml(d) {
   var changed = !!(d && d.changes && d.changes.changed);
-  if (!d || !(d.done.length || d.also.length || d.ahead.length || d.unplaced.length || d.earlierGapCount || changed)) return '';
+  if (!d || !(d.done.length || d.also.length || d.ahead.length || d.unplaced.length || d.earlierGapCount || changed || d.income)) return '';
   function kindLabel(x) {
     return x.kind === 'debt' ? 'Debt payment' : x.kind === 'goal_contribution' ? 'Goal contribution'
       : x.kind === 'investment_contribution' ? 'Investment contribution' : '';
@@ -38816,8 +38848,38 @@ function geodeMonthDetailHtml(d) {
       : (allocation ? 'planned for ' : 'scheduled \u00b7 due ') + day;
     return row(x.name || kindLabel(x) || 'Payment', meta([kindLabel(x), when]), x.amount);
   }
+  function receiptButton(action, text, name, id) {
+    var handler = action === 'correct'
+      ? 'geodeIncomeReceiptCorrect(this.getAttribute(\'data-geode-receipt-id\'), this)'
+      : 'geodeIncomeReceiptRemove(this.getAttribute(\'data-geode-receipt-id\'), this)';
+    return (
+      '<button type="button" class="btn-sm" data-geode-receipt-action="' + action + '" data-geode-receipt-id="' + escHtmlLite(id) + '" aria-label="' +
+      escHtmlLite(text + ': ' + name) + '" onclick="' + handler + '" data-geode-css="min-height:32px">' + escHtmlLite(text) + '</button>'
+    );
+  }
+  function incomeRow(r) {
+    var shown = fmExact(r.amount);
+    var when = r.date ? geodeMonthPulseDay(r.date) : (geodeMonthPulseMonthName(r.ym) || 'This month') + ' \u00b7 no day recorded';
+    var title = r.label || 'Income recorded';
+    var name = title + ', ' + shown + ', ' + when;
+    return (
+      '<li data-geode-month-income-receipt="1" data-geode-css="padding:7px 0;border-top:1px solid var(--bd)">' +
+      '<div data-geode-css="min-width:0;overflow-wrap:anywhere">' +
+      '<div data-geode-css="font-size:12px;font-weight:600;color:var(--tx-1);line-height:1.4">' + escHtmlLite(title) + '</div>' +
+      '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.45">' + escHtmlLite(meta([r.label ? shown + ' income recorded' : shown, when])) + '</div>' +
+      '</div>' +
+      '<div data-geode-css="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">' +
+      receiptButton('correct', 'Correct', name, r.id) + receiptButton('remove', 'Remove record', name, r.id) +
+      '</div></li>'
+    );
+  }
 
   var h = '';
+  if (d.income) {
+    h += heading('Income', fmExact(d.income.received) + ' recorded as received');
+    h += list('income', d.income.receipts.map(incomeRow));
+    h += note(d.income.planned > 0 ? 'Planned income ' + fmExact(d.income.planned) + (d.income.irregular ? ' \u00b7 irregular' : '') : 'No planned income this month.');
+  }
   if (d.done.length || d.also.length || d.ahead.length) {
     h += heading('Happened', d.done.length ? fm(d.doneTotal) + ' completed' : '');
     if (d.done.length) h += list('done', d.done.map(doneRow));
@@ -38868,10 +38930,13 @@ function geodeMonthDetailHtml(d) {
 /**
  * P3-2: the Month Pulse surface, or '' without a view. The remainder is Monthly Left — a plan figure, never cash, a
  * balance or money that is safe to spend. Completed / still ahead are the model's done / ahead totals of scheduled
- * payments and contributions, not spending. No received figure is shown: the not-tracked note appears only while the
- * model has no received total (P3-5C: a recorded receipt withdraws it; P3-5D owns any receipt wording).
- * opts.dueShownElsewhere: Home's needs-attention card already lists the due items.
+ * payments and contributions, not spending.
+ * opts.dueShownElsewhere: Home's needs-attention card already lists the due items. opts.detailOpen: the detail was open
+ * before this render (runtime only), so a receipt action does not fold it away.
  * P3-4E: one plan-change cue when the remainder moved — the change view's, never a figure formed here.
+ * P3-5D: one income line — the total recorded as received this month (evidence the user recorded, beside the plan and
+ * never combined with it), or that none has been recorded — never a zero, a shortfall or an amount still to come. With
+ * an unreadable receipt store the line and its action are left out.
  */
 function geodeMonthPulseHtml(view, opts) {
   if (!view) return '';
@@ -38938,7 +39003,7 @@ function geodeMonthPulseHtml(view, opts) {
   var detail = geodeMonthDetailHtml(view.detail);
   if (detail) {
     h +=
-      '<details data-geode-month-detail="1" data-geode-css="margin-top:10px">' +
+      '<details data-geode-month-detail="1"' + (opts.detailOpen ? ' open' : '') + ' ontoggle="geodeMonthDetailToggled(this)" data-geode-css="margin-top:10px">' +
       '<summary data-geode-css="font-size:11px;font-weight:600;color:rgba(155,127,232,0.88);cursor:pointer;line-height:1.45">' +
       escHtmlLite(change && change.changed ? 'See what\u2019s happened, what\u2019s ahead and what changed' : 'See what\u2019s happened and what\u2019s ahead') +
       '</summary>' +
@@ -38953,13 +39018,22 @@ function geodeMonthPulseHtml(view, opts) {
       escHtmlLite('Review this month in Plan') +
       ' \u203a</button>';
   }
-  if (view.incomeReceived === null && view.incomePlanned > 0) {
+  var incomeText = '';
+  if (view.incomeState === 'recorded' && typeof view.incomeReceived === 'number') {
+    incomeText = fmExact(view.incomeReceived) + ' recorded as received this month.';
+  } else if (view.incomeState === 'none_recorded') {
+    incomeText = (view.incomeType === 'irregular' ? 'Planned income can vary. ' : '') + 'Income received hasn\u2019t been recorded this month.';
+  }
+  if (incomeText) {
+    var recorded = view.incomeState === 'recorded';
     h +=
-      '<div data-geode-month-pulse-income="1" data-geode-css="margin-top:10px;font-size:10px;color:var(--tx-3);line-height:1.45">' +
-      escHtmlLite(view.incomeType === 'irregular'
-        ? 'Planned income can vary. Income received isn\u2019t tracked yet.'
-        : 'Income received isn\u2019t tracked yet.') +
-      '</div>';
+      '<div data-geode-month-pulse-income="1" data-geode-css="margin-top:10px;font-size:11px;color:var(--tx-2);line-height:1.45;overflow-wrap:anywhere">' +
+      '<div>' + escHtmlLite(incomeText) + '</div>' +
+      '<button type="button" data-geode-income-action="' + (recorded ? 'add' : 'record') + '" onclick="geodeIncomeReceiptRecord(this)" ' +
+      'data-geode-css="display:inline-block;margin-top:2px;padding:6px 0;min-height:32px;border:none;background:transparent;font-family:inherit;' +
+      'font-size:11px;font-weight:600;color:rgba(155,127,232,0.88);cursor:pointer;line-height:1.45;text-align:left;-webkit-tap-highlight-color:transparent">' +
+      escHtmlLite(recorded ? 'Add income' : 'Record income received') +
+      '</button></div>';
   }
   return h + '</section>';
 }
@@ -38971,6 +39045,456 @@ function geodeHomeMonthPulseHtml(state, now, opts) {
   } catch (_eMonthPulse) {
     return '';
   }
+}
+
+// ── P3-5D INCOME RECEIPTS (record / correct / remove) ──────────────────
+/*
+ * Income received is evidence the user records from the Month Pulse. Every change is one call to a P3-5B writer
+ * (geodeRecordIncomeReceipt, geodeCorrectIncomeReceipt, geodeVoidIncomeReceipt) after an explicit confirmation; this UI
+ * never edits receipts itself, saves, logs activity, raises plan alerts or touches planned income, and after any writer
+ * outcome renders from the committed state. Receipts are read only through the Living Month model and
+ * geodeLivingMonthReceipts. Form state lives in the open dialog: nothing here is persisted.
+ */
+
+/** P3-5D: the typed amount as a number — '' when blank, NaN when not a number. Spaces, commas and a leading currency sign are ignored. */
+function geodeIncomeReceiptParseAmount(text) {
+  var s = String(text == null ? '' : text).replace(/[\s,]/g, '').replace(/^[^\da-zA-Z.+\-]/, '');
+  if (!s) return '';
+  return /^[+\-]?(\d+\.?\d*|\.\d+)$/.test(s) ? Number(s) : NaN;
+}
+
+/** P3-5D: the dialog's confirm text — the amount it will record once the writer would accept it. */
+function geodeIncomeReceiptSubmitLabel(mode, amountText) {
+  if (mode === 'correct') return 'Save correction';
+  var n = geodeIncomeReceiptParseAmount(amountText);
+  return geodeIncomeReceiptAmountValid(n) ? 'Record ' + fmExact(n) + ' received' : 'Record income received';
+}
+
+/**
+ * P3-5D: the writer input from the dialog's fields — { input } or { field, message }. Pure. When it was received is
+ * the user's explicit choice: Today (today's date), Another day (that date) or the month with no day (ctx.monthYm, no
+ * date). With no choice made nothing is built: a missing choice never becomes month-only or today. Amount and date
+ * rules beyond "a number" and "a choice" are the writer's.
+ */
+function geodeIncomeReceiptInput(form, ctx) {
+  var amount = geodeIncomeReceiptParseAmount(form.amount);
+  if (amount === '') return { field: 'amount', message: 'Enter the amount you received.' };
+  if (typeof amount !== 'number' || !isFinite(amount)) return { field: 'amount', message: 'Enter the amount in numbers, like 2500 or 2500.50.' };
+  var input;
+  if (form.timing === 'today') input = { amount: amount, ym: String(ctx.today || '').slice(0, 7), date: ctx.today };
+  else if (form.timing === 'day') {
+    if (!form.date) return { field: 'date', message: 'Choose the day you received it.' };
+    input = { amount: amount, ym: String(form.date).slice(0, 7), date: form.date };
+  } else if (form.timing === 'month') input = { amount: amount, ym: ctx.monthYm };
+  else return { field: 'when', message: 'Choose when you received it.' };
+  if (String(form.label || '').trim()) input.label = String(form.label);
+  return { input: input };
+}
+
+/** P3-5D: what a writer's 'invalid' reason means for the dialog: the field to fix and a plain message. */
+function geodeIncomeReceiptReasonMessage(reason, timing) {
+  if (reason === 'invalid_amount') return { field: 'amount', message: 'Enter an amount more than zero, with no more than two decimal places.' };
+  if (reason === 'invalid_label') return { field: 'label', message: 'Keep the label to 40 characters or fewer.' };
+  if (reason === 'future_date' || reason === 'future_month') {
+    return { field: timing === 'day' ? 'date' : 'when', message: 'That day hasn\u2019t happened yet. Choose today or an earlier day.' };
+  }
+  if (reason === 'invalid_date') return { field: timing === 'day' ? 'date' : 'when', message: 'Choose a valid day.' };
+  if (reason === 'invalid_month') return { field: 'when', message: 'Choose when you received it.' };
+  return { field: '', message: 'Beynd couldn\u2019t check this entry. Nothing was saved.' };
+}
+
+/** P3-5D: what a writer outcome other than 'saved' or 'invalid' tells the user — never that anything was recorded. */
+function geodeIncomeReceiptOutcomeMessage(status) {
+  if (status === 'refused') return 'Nothing was saved. Beynd changed in another tab or window \u2014 reload to continue.';
+  if (status === 'unavailable') return 'Income records can\u2019t be changed here right now. Nothing was saved.';
+  if (status === 'not_found' || status === 'already_voided') return 'This income record has already been changed or removed. Nothing was saved.';
+  return 'Nothing was saved. Please try again.';
+}
+
+/**
+ * P3-5D: an active receipt that looks like the one about to be recorded — the same amount on the same day, or, both
+ * with no day, the same amount in the same month — or null. A prompt to check only: the new receipt is never refused,
+ * merged or replaced. Labels, the plan and recordedAt play no part. Pure.
+ */
+function geodeIncomeReceiptLikelyDuplicate(receipts, input) {
+  if (!Array.isArray(receipts) || !input) return null;
+  for (var i = 0; i < receipts.length; i++) {
+    var r = receipts[i];
+    if (!r || r.amount !== input.amount) continue;
+    if (input.date ? r.date === input.date : !r.date && r.ym === input.ym) return r;
+  }
+  return null;
+}
+
+/** P3-5D: the duplicate prompt's sentence. */
+function geodeIncomeReceiptDuplicateText(r) {
+  return 'You already recorded ' + fmExact(r.amount) + ' for ' +
+    (r.date ? geodeMonthPulseDay(r.date) : (geodeMonthPulseMonthName(r.ym) || 'this month') + ' (no day recorded)') + '. Record another?';
+}
+
+/**
+ * P3-5D: the record / correct dialog (pure markup). cfg: mode 'record' | 'correct'; cur (currency code); planned
+ * (record only: offered as a button, never filled in); amount, timing ('' | 'today' | 'day' | 'month'), date, label —
+ * empty with no timing chosen when recording, the receipt's own when correcting; monthYm (the month a "day not known"
+ * receipt belongs to); today (YYYY-MM-DD, the latest day the date field offers).
+ */
+function geodeIncomeReceiptFormHtml(cfg) {
+  var correct = cfg.mode === 'correct';
+  var today = String(cfg.today || '');
+  var monthText = (cfg.monthYm === today.slice(0, 7) ? 'This month' : geodeMonthPulseMonthName(cfg.monthYm) || 'This month') + ' \u2014 day not known';
+  var labelCss = 'display:block;font-size:10px;font-weight:800;color:var(--tx-3);text-transform:uppercase;letter-spacing:1.4px;margin-bottom:8px';
+  function error(id) {
+    return '<div id="' + id + '" data-geode-css="font-size:12px;color:var(--danger);line-height:1.45;margin-top:4px;overflow-wrap:anywhere"></div>';
+  }
+  function choice(value, text) {
+    return (
+      '<label data-geode-css="display:flex;align-items:center;gap:10px;min-height:40px;font-size:14px;color:var(--tx-1);cursor:pointer;overflow-wrap:anywhere">' +
+      '<input type="radio" name="geode-ir-when" value="' + value + '"' + (cfg.timing === value ? ' checked' : '') +
+      ' onchange="geodeIncomeReceiptTimingChanged()" data-geode-css="width:18px;height:18px;margin:0;flex-shrink:0">' +
+      '<span>' + escHtmlLite(text) + '</span></label>'
+    );
+  }
+  var h =
+    '<div class="mo-hdr"><span class="mo-title" id="geode-ir-title">' + escHtmlLite(correct ? 'Correct income record' : 'Record income received') + '</span>' +
+    '<button type="button" class="mo-close" onclick="geodeIncomeReceiptClose()" title="Close" aria-label="Close"><span class="mo-close-x ic mo-close-ic">' +
+    geodeSvg('x') + '</span><span class="mo-close-lb">Close</span></button></div>';
+  h += '<p data-geode-css="margin:0 0 14px;font-size:12px;color:var(--tx-2);line-height:1.5">' +
+    escHtmlLite(correct ? 'Change what you recorded. Your planned income stays as it is.' : 'Record income you\u2019ve received. Your planned income stays as it is.') + '</p>';
+  h += '<div class="field"><label for="geode-ir-amount">' + escHtmlLite('Amount received (' + (cfg.cur || '') + ')') + '</label>' +
+    '<input type="text" inputmode="decimal" autocomplete="off" id="geode-ir-amount" class="fi" value="' + escHtmlLite(cfg.amount || '') +
+    '" aria-describedby="geode-ir-amount-error" oninput="geodeIncomeReceiptAmountChanged()">' + error('geode-ir-amount-error');
+  if (!correct && cfg.planned > 0) {
+    var planned = Math.round(cfg.planned * 100) / 100;
+    h += '<button type="button" class="btn-sm" data-geode-ir-planned="' + planned + '" onclick="geodeIncomeReceiptUsePlanned(this)" data-geode-css="margin-top:8px;min-height:32px">' +
+      escHtmlLite('Use planned amount \u00b7 ' + fmExact(planned)) + '</button>';
+  }
+  h += '</div>';
+  h += '<fieldset data-geode-css="border:none;margin:0 0 14px;padding:0;min-width:0"><legend data-geode-css="' + labelCss + ';padding:0">When did you receive it?</legend>' +
+    choice('today', 'Today (' + geodeMonthPulseDay(today) + ')') + choice('day', 'Another day') +
+    '<div id="geode-ir-day"' + (cfg.timing === 'day' ? '' : ' hidden') + ' data-geode-css="margin:2px 0 8px 28px">' +
+    '<label for="geode-ir-date" data-geode-css="' + labelCss + '">Day received</label>' +
+    '<input type="date" id="geode-ir-date" class="fi" max="' + escHtmlLite(today) + '" value="' + escHtmlLite(cfg.date || '') +
+    '" aria-describedby="geode-ir-date-error" onchange="geodeIncomeReceiptTimingChanged()">' + error('geode-ir-date-error') + '</div>' +
+    choice('month', monthText) + error('geode-ir-when-error') + '</fieldset>';
+  h += '<details id="geode-ir-label-box"' + (cfg.label ? ' open' : '') + ' data-geode-css="margin:0 0 14px">' +
+    '<summary data-geode-css="font-size:12px;font-weight:600;color:var(--tx-2);cursor:pointer;min-height:32px;line-height:32px">Label (optional)</summary>' +
+    '<label for="geode-ir-label" data-geode-css="' + labelCss + ';margin-top:6px">Label</label>' +
+    '<input type="text" id="geode-ir-label" class="fi" maxlength="40" autocomplete="off" placeholder="e.g. Salary, Freelance, Bonus" value="' +
+    escHtmlLite(cfg.label || '') + '" aria-describedby="geode-ir-label-hint geode-ir-label-error">' +
+    '<div id="geode-ir-label-hint" data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin-top:4px">Just a name for this record \u2014 up to 40 characters.</div>' +
+    error('geode-ir-label-error') + '</details>';
+  h += '<div id="geode-ir-warning"></div>' + error('geode-ir-message');
+  h += '<button type="button" class="btn btn-p" id="geode-ir-submit" onclick="geodeIncomeReceiptSubmit(false)">' +
+    escHtmlLite(geodeIncomeReceiptSubmitLabel(cfg.mode, cfg.amount)) + '</button>';
+  h += '<button type="button" class="btn btn-s" onclick="geodeIncomeReceiptClose()">Cancel</button>';
+  return h;
+}
+
+/** P3-5D: the remove confirmation (pure markup) for a receipt view item { amount, date, ym, label }. */
+function geodeIncomeReceiptRemoveHtml(r) {
+  var when = r.date ? geodeMonthPulseDay(r.date) : (geodeMonthPulseMonthName(r.ym) || 'This month') + ' \u00b7 no day recorded';
+  var h =
+    '<div class="mo-hdr"><span class="mo-title" id="geode-ir-title">Remove this income record?</span>' +
+    '<button type="button" class="mo-close" onclick="geodeIncomeReceiptClose()" title="Close" aria-label="Close"><span class="mo-close-x ic mo-close-ic">' +
+    geodeSvg('x') + '</span><span class="mo-close-lb">Close</span></button></div>';
+  h += '<p data-geode-css="margin:0 0 8px;font-size:14px;font-weight:600;color:var(--tx-1);line-height:1.45;overflow-wrap:anywhere">' +
+    escHtmlLite([r.label || 'Income recorded', fmExact(r.amount), when].join(' \u00b7 ')) + '</p>';
+  h += '<p data-geode-css="margin:0 0 14px;font-size:12px;color:var(--tx-2);line-height:1.5">' +
+    escHtmlLite('This removes it from Beynd\u2019s recorded income. It won\u2019t change your planned income.') + '</p>';
+  h += '<div id="geode-ir-message" data-geode-css="font-size:12px;color:var(--danger);line-height:1.45;margin-bottom:8px;overflow-wrap:anywhere"></div>';
+  h += '<div data-geode-css="display:flex;flex-wrap:wrap;gap:8px">' +
+    '<button type="button" class="btn btn-s" id="geode-ir-keep" data-geode-css="flex:1;margin-top:0;min-width:120px" onclick="geodeIncomeReceiptClose()">Keep record</button>' +
+    '<button type="button" class="btn btn-p" id="geode-ir-remove" data-geode-css="flex:1;min-width:120px;background:linear-gradient(135deg,#e05555,#c03030)" onclick="geodeIncomeReceiptRemoveConfirm()">Remove record</button>' +
+    '</div>';
+  return h;
+}
+
+/** P3-5D: the Living Month model when receipts can be changed here — ready, with a readable receipt store — else null. */
+function geodeIncomeReceiptModel() {
+  try {
+    var model = geodeLivingMonthModel(S, new Date());
+    return model && model.status === 'ready' && model.month && model.income && model.income.state !== 'unavailable' ? model : null;
+  } catch (_eIrModel) {
+    return null;
+  }
+}
+
+/** P3-5D: this month's receipt with `id`, as the detail lists it, or null. */
+function geodeIncomeReceiptFind(model, id) {
+  var income = model ? geodeMonthIncomeView(model) : null;
+  var list = income ? income.receipts : [];
+  for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+  return null;
+}
+
+/** P3-5D: the Pulse detail's open state, for this session only. */
+function geodeMonthDetailToggled(el) {
+  try {
+    window._geodeMonthDetailOpen = !!(el && el.open);
+  } catch (_eMdT) {}
+}
+
+/** P3-5D: remembers the control that opened the dialog, so focus can find it again after the page re-renders. */
+function geodeIncomeReceiptRemember(el) {
+  var t = null;
+  try {
+    if (el && el.getAttribute && el.getAttribute('data-geode-receipt-action')) {
+      t = { action: el.getAttribute('data-geode-receipt-action'), id: el.getAttribute('data-geode-receipt-id') };
+    }
+  } catch (_eIrR) {}
+  window._geodeReceiptReturn = t;
+}
+
+/** P3-5D: the dialog is gone — forget its form and return focus to the control that opened it (or the Pulse's income action). */
+function geodeIncomeReceiptDismissed() {
+  var t = window._geodeReceiptReturn;
+  window._geodeReceiptForm = null;
+  window._geodeReceiptReturn = null;
+  setTimeout(function () {
+    try {
+      var el = null;
+      if (t) {
+        var buttons = document.querySelectorAll('[data-geode-receipt-action]');
+        for (var i = 0; i < buttons.length && !el; i++) {
+          if (buttons[i].getAttribute('data-geode-receipt-action') === t.action && buttons[i].getAttribute('data-geode-receipt-id') === t.id) el = buttons[i];
+        }
+      }
+      el = el || document.querySelector('[data-geode-income-action]') || document.querySelector('[data-geode-month-detail="1"] > summary');
+      if (el && el.focus) el.focus();
+    } catch (_eIrF) {}
+  }, 180);
+}
+
+function geodeIncomeReceiptClose() {
+  closeModal();
+  geodeIncomeReceiptDismissed();
+}
+
+/** P3-5D: makes the open #modal an accessible dialog: named, Escape closes it, Tab stays inside, focus moves in. */
+function geodeIncomeReceiptDialogReady(focusId) {
+  var bg = document.getElementById('modal');
+  if (!bg) return;
+  var mo = bg.firstElementChild;
+  if (mo) {
+    mo.setAttribute('role', 'dialog');
+    mo.setAttribute('aria-modal', 'true');
+    mo.setAttribute('aria-labelledby', 'geode-ir-title');
+  }
+  bg.addEventListener('click', function (e) { if (e.target === bg) geodeIncomeReceiptDismissed(); });
+  bg.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      geodeIncomeReceiptClose();
+      return;
+    }
+    if (e.key !== 'Tab' || !mo) return;
+    var all = mo.querySelectorAll('button, input, summary, [tabindex="-1"]');
+    var list = [];
+    for (var i = 0; i < all.length; i++) if (all[i].offsetParent !== null && !all[i].disabled && all[i].tabIndex >= 0) list.push(all[i]);
+    if (!list.length) return;
+    if (e.shiftKey && document.activeElement === list[0]) { e.preventDefault(); list[list.length - 1].focus(); }
+    else if (!e.shiftKey && document.activeElement === list[list.length - 1]) { e.preventDefault(); list[0].focus(); }
+  });
+  setTimeout(function () {
+    try {
+      var f = document.getElementById(focusId);
+      if (f) f.focus();
+    } catch (_eIrD) {}
+  }, 80);
+}
+
+/** P3-5D: "Record income received" / "Add income" — opens an empty record dialog. Nothing is offered while receipts can't be changed. */
+function geodeIncomeReceiptRecord(el) {
+  var model = geodeIncomeReceiptModel();
+  var today = geodeTodayLocalISO();
+  if (!model || !today) {
+    render();
+    return;
+  }
+  geodeIncomeReceiptRemember(el);
+  window._geodeReceiptForm = { mode: 'record', id: null, monthYm: today.slice(0, 7) };
+  openModal(geodeIncomeReceiptFormHtml({ mode: 'record', cur: S.cur && S.cur.code, planned: model.income.planned, amount: '', timing: '', date: '', label: '', monthYm: today.slice(0, 7), today: today }));
+  geodeIncomeReceiptDialogReady('geode-ir-amount');
+}
+
+/** P3-5D: Correct — the record dialog holding the receipt's own amount, timing and label. */
+function geodeIncomeReceiptCorrect(id, el) {
+  var model = geodeIncomeReceiptModel();
+  var r = geodeIncomeReceiptFind(model, id);
+  var today = geodeTodayLocalISO();
+  geodeIncomeReceiptRemember(el);
+  if (!r || !today) {
+    if (model && !r) toast(geodeIncomeReceiptOutcomeMessage('not_found'), 'warn');
+    render();
+    return;
+  }
+  window._geodeReceiptForm = { mode: 'correct', id: r.id, monthYm: r.ym, original: r };
+  openModal(geodeIncomeReceiptFormHtml({ mode: 'correct', cur: S.cur && S.cur.code, planned: 0, amount: String(r.amount), timing: r.date ? 'day' : 'month',
+    date: r.date || '', label: r.label || '', monthYm: r.ym, today: today }));
+  geodeIncomeReceiptDialogReady('geode-ir-amount');
+}
+
+/** P3-5D: Remove record — asks first; nothing changes until the user confirms. */
+function geodeIncomeReceiptRemove(id, el) {
+  var model = geodeIncomeReceiptModel();
+  var r = geodeIncomeReceiptFind(model, id);
+  geodeIncomeReceiptRemember(el);
+  if (!r) {
+    if (model) toast(geodeIncomeReceiptOutcomeMessage('not_found'), 'warn');
+    render();
+    return;
+  }
+  window._geodeReceiptForm = { mode: 'remove', id: r.id };
+  openModal(geodeIncomeReceiptRemoveHtml(r));
+  geodeIncomeReceiptDialogReady('geode-ir-keep');
+}
+
+function geodeIncomeReceiptFormRead() {
+  function val(id) {
+    var el = document.getElementById(id);
+    return el ? el.value : '';
+  }
+  var picked = document.querySelector('input[name="geode-ir-when"]:checked');
+  return { amount: val('geode-ir-amount'), timing: picked ? picked.value : '', date: val('geode-ir-date'), label: val('geode-ir-label') };
+}
+
+function geodeIncomeReceiptClearDuplicate() {
+  var w = document.getElementById('geode-ir-warning');
+  if (w) w.innerHTML = '';
+}
+
+/** P3-5D: shows one problem beside its field (announced, and tied to the field by aria-describedby), clearing the rest. */
+function geodeIncomeReceiptShowError(err) {
+  var fields = { amount: 'geode-ir-amount', date: 'geode-ir-date', label: 'geode-ir-label', when: '', message: '' };
+  Object.keys(fields).forEach(function (k) {
+    var box = document.getElementById('geode-ir-' + k + (k === 'message' ? '' : '-error'));
+    if (box) box.innerHTML = '';
+    var input = fields[k] && document.getElementById(fields[k]);
+    if (input) input.removeAttribute('aria-invalid');
+  });
+  geodeIncomeReceiptClearDuplicate();
+  if (!err) return;
+  var key = fields[err.field] !== undefined && err.field !== 'message' ? err.field : 'message';
+  var day = document.getElementById('geode-ir-day');
+  if (key === 'date' && (!day || day.hidden)) key = 'when';
+  if (key === 'label') {
+    var labelBox = document.getElementById('geode-ir-label-box');
+    if (labelBox) labelBox.open = true;
+  }
+  var target = document.getElementById('geode-ir-' + key + (key === 'message' ? '' : '-error'));
+  if (target) target.innerHTML = '<span role="alert">' + escHtmlLite(err.message) + '</span>';
+  var field = fields[key] ? document.getElementById(fields[key]) : key === 'when' ? document.querySelector('input[name="geode-ir-when"]') : null;
+  if (field) {
+    if (fields[key]) field.setAttribute('aria-invalid', 'true');
+    try { field.focus(); } catch (_eIrE) {}
+  }
+}
+
+function geodeIncomeReceiptAmountChanged() {
+  var ctx = window._geodeReceiptForm;
+  var btn = document.getElementById('geode-ir-submit');
+  var amount = document.getElementById('geode-ir-amount');
+  if (btn && ctx && amount) btn.textContent = geodeIncomeReceiptSubmitLabel(ctx.mode, amount.value);
+  geodeIncomeReceiptClearDuplicate();
+}
+
+/** P3-5D: "Use planned amount" — fills the field only when the user asks; recording still needs the confirm button. */
+function geodeIncomeReceiptUsePlanned(el) {
+  var amount = document.getElementById('geode-ir-amount');
+  if (!amount || !el) return;
+  amount.value = el.getAttribute('data-geode-ir-planned') || '';
+  geodeIncomeReceiptAmountChanged();
+  try { amount.focus(); } catch (_eIrP) {}
+}
+
+function geodeIncomeReceiptTimingChanged() {
+  var picked = document.querySelector('input[name="geode-ir-when"]:checked');
+  var day = document.getElementById('geode-ir-day');
+  if (day) day.hidden = !(picked && picked.value === 'day');
+  geodeIncomeReceiptClearDuplicate();
+}
+
+/** P3-5D: the duplicate prompt, in words (not colour): Cancel records nothing; Record another records this one as well. */
+function geodeIncomeReceiptShowDuplicate(r) {
+  var w = document.getElementById('geode-ir-warning');
+  if (!w) return;
+  w.innerHTML =
+    '<div role="alert" tabindex="-1" id="geode-ir-duplicate" data-geode-css="margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px solid var(--notice);overflow-wrap:anywhere">' +
+    '<div data-geode-css="font-size:13px;font-weight:700;color:var(--tx-1);line-height:1.4;margin-bottom:4px">Possible duplicate</div>' +
+    '<div data-geode-css="font-size:12px;color:var(--tx-2);line-height:1.5">' + escHtmlLite(geodeIncomeReceiptDuplicateText(r)) + '</div>' +
+    '<div data-geode-css="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">' +
+    '<button type="button" class="btn btn-s" data-geode-css="flex:1;margin-top:0;min-width:120px" onclick="geodeIncomeReceiptClose()">Cancel</button>' +
+    '<button type="button" class="btn btn-p" data-geode-css="flex:1;min-width:120px" onclick="geodeIncomeReceiptSubmit(true)">Record another</button>' +
+    '</div></div>';
+  try { document.getElementById('geode-ir-duplicate').focus(); } catch (_eIrW) {}
+}
+
+/** P3-5D: whether a correction would record exactly what the receipt already says. */
+function geodeIncomeReceiptUnchanged(original, input) {
+  return !!original && original.amount === input.amount && original.ym === input.ym && (original.date || '') === (input.date || '') &&
+    (original.label || '') === String(input.label || '').trim();
+}
+
+/**
+ * P3-5D: Record / Save correction. One writer call per confirmation: geodeRecordIncomeReceipt, or
+ * geodeCorrectIncomeReceipt for a correction (none when nothing was changed). A recording that looks like an existing
+ * receipt asks first; "Record another" confirms it.
+ */
+function geodeIncomeReceiptSubmit(confirmed) {
+  var ctx = window._geodeReceiptForm;
+  if (!ctx || (ctx.mode !== 'record' && ctx.mode !== 'correct') || !geodeModalCommitOpen()) return;
+  var form = geodeIncomeReceiptFormRead();
+  geodeIncomeReceiptShowError(null);
+  var built = geodeIncomeReceiptInput(form, { today: geodeTodayLocalISO(), monthYm: ctx.monthYm });
+  if (!built.input) {
+    geodeIncomeReceiptShowError(built);
+    return;
+  }
+  if (ctx.mode === 'correct' && geodeIncomeReceiptUnchanged(ctx.original, built.input)) {
+    geodeIncomeReceiptClose();
+    return;
+  }
+  if (ctx.mode === 'record' && confirmed !== true) {
+    var month = geodeLivingMonthReceipts(S, built.input.ym);
+    var twin = month ? geodeIncomeReceiptLikelyDuplicate(month.receipts, built.input) : null;
+    if (twin) {
+      geodeIncomeReceiptShowDuplicate(twin);
+      return;
+    }
+  }
+  var result = ctx.mode === 'correct' ? geodeCorrectIncomeReceipt(ctx.id, built.input) : geodeRecordIncomeReceipt(built.input);
+  geodeIncomeReceiptAfterWrite(result, ctx.mode === 'correct' ? 'Correction saved.' : 'Income recorded.', form.timing);
+}
+
+/** P3-5D: Remove record, confirmed — one geodeVoidIncomeReceipt call. */
+function geodeIncomeReceiptRemoveConfirm() {
+  var ctx = window._geodeReceiptForm;
+  if (!ctx || ctx.mode !== 'remove' || !geodeModalCommitOpen()) return;
+  geodeIncomeReceiptAfterWrite(geodeVoidIncomeReceipt(ctx.id), 'Income record removed.', '');
+}
+
+/**
+ * P3-5D: after a writer call. 'saved': the dialog closes and the page renders the committed receipts. 'invalid': the
+ * dialog stays open on the field to fix. Anything else ('refused', 'failed', 'unavailable', 'not_found',
+ * 'already_voided'): nothing was recorded — the dialog says so and the page renders from the committed state.
+ */
+function geodeIncomeReceiptAfterWrite(result, savedText, timing) {
+  var status = result && result.status;
+  if (status === 'invalid') {
+    geodeIncomeReceiptShowError(geodeIncomeReceiptReasonMessage(result.reason, timing));
+    return;
+  }
+  if (status === 'saved') {
+    var m = document.getElementById('modal');
+    if (m) m.setAttribute('data-geode-commit', '1');
+    closeModal();
+    render();
+    geodeSuccessToast(savedText);
+    geodeIncomeReceiptDismissed();
+    return;
+  }
+  geodeIncomeReceiptShowError({ field: 'message', message: geodeIncomeReceiptOutcomeMessage(status) });
+  render();
 }
 
 function rHome() {
@@ -39075,7 +39599,7 @@ function rHome() {
   h += '</div>';
   var _monthPulseHtml = '';
   try {
-    _monthPulseHtml = geodeHomeMonthPulseHtml(S, new Date(), { dueShownElsewhere: geodeHomeNeedsAttentionWouldShow(S) });
+    _monthPulseHtml = geodeHomeMonthPulseHtml(S, new Date(), { dueShownElsewhere: geodeHomeNeedsAttentionWouldShow(S), detailOpen: window._geodeMonthDetailOpen === true });
   } catch (_eMonthPulseRh) {
     _monthPulseHtml = '';
   }

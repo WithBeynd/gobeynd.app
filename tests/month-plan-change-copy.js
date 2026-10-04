@@ -318,7 +318,7 @@ function checksFor(src) {
     const none = (id, text, raw, reason) => {
       const html = pulse(raw);
       const c = model(raw).changes;
-      check(id, text, [c.available, c.reason, cueOf(html), changeSectionOf(html), summaryLabelOf(html), /\u00a30 (higher|lower)|no change|hasn/i.test(textOf(html)), ctx.geodeMonthChangeView(parse(c))],
+      check(id, text, [c.available, c.reason, cueOf(html), changeSectionOf(html), summaryLabelOf(html), /\u00a30 (higher|lower)|no change|hasn.t changed/i.test(textOf(html)), ctx.geodeMonthChangeView(parse(c))],
         [false, reason, '', null, LABEL_PLAIN, false, null]);
     };
     none('AD', 'AD. No baseline: nothing said about change — no £0, no "no change", no error or repair request', plan(), 'no_month_baseline');
@@ -407,7 +407,7 @@ const MUTANTS = {
   'empty baseline compared': [['  if (!planned || typeof changes.monthlyLeftDelta', '  if (typeof changes.monthlyLeftDelta']],
   'income label loses plan': [["['income', 'Planned income']", "['income', 'Income']"]],
   'expenses called spending': [["['expensesRegular', 'Regular expense plan']", "['expensesRegular', 'Regular spending']"]],
-  'change-only month hidden': [['|| d.earlierGapCount || changed)) return', '|| d.earlierGapCount)) return']],
+  'change-only month hidden': [['|| d.earlierGapCount || changed || d.income)) return', '|| d.earlierGapCount || d.income)) return']],
   'change view reads the record': [['    changes: geodeMonthChangeView(model.changes)', '    changes: geodeMonthChangeView(model.changes) || (model.monthBaseline ? null : null)']],
   'live setup raises the figure card': [["    sessionStorage.setItem('geode_post_qs_reality_prompt', '1');\n  } catch (_eQsPromptSs) {}", "    sessionStorage.setItem('geode_post_qs_reality_prompt', '1'); sessionStorage.setItem('geode_qs_just_finished', '1');\n  } catch (_eQsPromptSs) {}"]],
   'alerts back on confirmed-only': [['  syncRecurringPayments();\n  var left = calcMonthlyLeftover(S);\n  var inc = toNum(S.income);', '  syncRecurringPayments();\n  var left = calcMonthlyLeftoverConfirmedOnly(S);\n  var inc = toNum(S.income);']],

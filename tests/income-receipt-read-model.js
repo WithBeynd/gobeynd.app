@@ -13,7 +13,7 @@
  *   - one Happened item per active receipt of the model's month — no void, voided, other-month, unknown or future
  *     evidence; no day invented; no deduplication against payments, contributions or releases;
  *   - pure: the supplied state only (decoy S), deep-frozen states, no writes, fresh results;
- *   - the Pulse and detail surfaces show nothing new (P3-5D owns receipt wording).
+ *   - receipts reach the surfaces only as P3-5D's income line and Income part (tests/income-receipt-ux.js owns the wording).
  * Then each mutant of index.html must fail at least one check.
  * Exit code 0 when every check passes, 1 otherwise.
  */
@@ -276,19 +276,28 @@ function checksFor(src) {
   check('AM.isolation', 'AM. Repeated calls are equal and separate; no result object is part of the state; changing a result changes neither the state, its receipts nor the next result',
     [canon(m2) === canon(live), m1 !== m2, shared, canon(st2) === stText, canon(ctx.geodeLivingMonthModel(st2, vmDate(NOW))) === canon(m2)], [true, true, 0, true, true]);
 
-  section('P3-5C SURFACES — nothing new is shown before P3-5D');
-  const detailOf = m => canon(ctx.geodeMonthDetailView(parse(m)));
-  check('PD.detail', 'The detail beneath the Pulse is identical with or without receipts (receipt items stay in the model; they are not "also recorded" payments)',
+  // P3-5D gives receipts their surfaces: the Pulse's income line and the detail's Income part. Everything else stays.
+  section('P3-5C/P3-5D SURFACES — receipts change the income line and the Income part only');
+  const recordedNames = ['full', 'partial', 'above', 'corrected'];
+  const detailOf = m => { const d = JSON.parse(JSON.stringify(ctx.geodeMonthDetailView(parse(m)))); delete d.income; return canon(d); };
+  check('PD.detail', 'Beyond its Income part, the detail is identical with or without receipts (receipt items are never "also recorded" payments)',
     names.map((n, i) => [n, detailOf(models[i]) === detailOf(models[0])]), allTrue);
+  check('PD.detail-income', 'The detail has an Income part exactly when receipts are recorded this month',
+    names.map((n, i) => [n, !!ctx.geodeMonthDetailView(parse(models[i])).income]), names.map(n => [n, recordedNames.indexOf(n) >= 0]));
   check('PD.detail-release', 'Beside a release, the detail lists the release only', ctx.geodeMonthDetailView(parse(relAndReceipt)).also.map(e => e.id), ['rel_oct']);
   const html = m => ctx.geodeMonthPulseHtml(ctx.geodeMonthPulseView(parse(m)));
-  const noteRe = /<div data-geode-month-pulse-income="1"[^>]*>[^<]*<\/div>/;
+  const incomeRe = /<div data-geode-month-pulse-income="1"[\s\S]*?<\/button><\/div>/;
+  const glance = h => h.replace(/<details data-geode-month-detail="1"[\s\S]*<\/details>/, '').replace(incomeRe, '');
+  const incomeText = h => { const x = h.match(incomeRe); return x ? x[0].replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim() : ''; };
   const hNone = html(models[0]);
-  check('PD.pulse-none', 'With none recorded (and with unreadable evidence) the Pulse is unchanged, the not-tracked note included',
-    [noteRe.test(hNone), html(models[names.indexOf('empty')]) === hNone, html(models[names.indexOf('malformed')]) === hNone, html(models[names.indexOf('voided')]) === hNone], [true, true, true, true]);
-  check('PD.pulse-recorded', 'With receipts recorded the Pulse shows no received figure, coverage or receipt: only the not-tracked note is withdrawn',
-    ['full', 'partial', 'above', 'corrected'].map(n => { const h = html(models[names.indexOf(n)]); return [n, h === hNone.replace(noteRe, ''), /receiv|receipt|cover|3,200|2,900|2,500/i.test(h.replace(/<[^>]*>/g, ' '))]; }),
-    ['full', 'partial', 'above', 'corrected'].map(n => [n, true, false]));
+  check('PD.pulse-none', 'With none recorded the Pulse says so and offers recording; unreadable evidence leaves the line out; nothing else differs',
+    [incomeText(hNone), html(models[names.indexOf('empty')]) === hNone, html(models[names.indexOf('voided')]) === hNone,
+      incomeText(html(models[names.indexOf('malformed')])), html(models[names.indexOf('malformed')]) === hNone.replace(incomeRe, '')],
+    ['Income received hasn\u2019t been recorded this month. Record income received', true, true, '', true]);
+  check('PD.pulse-recorded', 'With receipts recorded the income line is the ledger\'s total as recorded evidence; the rest of the glance is unchanged; no coverage',
+    recordedNames.map(n => { const h = html(models[names.indexOf(n)]); return [n, glance(h) === glance(hNone), incomeText(h), /cover|outstanding|remain|\bof\b/i.test(incomeText(h))]; }),
+    [['full', true, '\u00a33,000 recorded as received this month. Add income', false], ['partial', true, '\u00a32,500 recorded as received this month. Add income', false],
+      ['above', true, '\u00a33,200 recorded as received this month. Add income', false], ['corrected', true, '\u00a32,900 recorded as received this month. Add income', false]]);
 
   return results;
 }

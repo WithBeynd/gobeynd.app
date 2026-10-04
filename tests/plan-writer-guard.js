@@ -592,7 +592,7 @@ function checksFor(src) {
     [callersOf('calcMonthlyLeftoverConfirmedOnly').slice().sort(), /(?:ls|base|prev|_pendingCompareBaseline)\s*\.\s*leftThisMonth/.test(M.noComments)],
     [['computeAffordabilityContext', 'extendLastSnapshotFigures'], false]);
 
-  section('INCOME RECEIPTS (P3-5B) — evidence beside the plan: written only by its admitted writers, read by nothing financial, reached by no UI');
+  section('INCOME RECEIPTS (P3-5B) — evidence beside the plan: written only by its admitted writers, read by nothing financial, reached only by the P3-5D receipt dialog');
   const RC_PURE = ['geodeIncomeReceiptAmountValid', 'geodeIncomeReceiptValid', 'geodeIncomeReceiptVoidValid', 'geodeIncomeReceiptLedger', 'geodeIncomeReceiptDraft', 'geodeIncomeReceiptTarget'];
   const RC_WRITERS = ['geodeRecordIncomeReceipt', 'geodeVoidIncomeReceipt', 'geodeCorrectIncomeReceipt'];
   const RC_ALL = RC_PURE.concat(['geodeIncomeReceiptId', 'geodeIncomeReceiptCommit'], RC_WRITERS);
@@ -602,9 +602,11 @@ function checksFor(src) {
   while ((rm = rcRe.exec(M.noComments))) rcNamed.push((M.ownerAt(rm.index) || { name: '(top level)' }).name);
   check('receipts.store', 'Only the three writers and the one Living Month reader (geodeLivingMonthReceipts) name incomeReceipts — besides Happened\'s evidenceSource label (read.happened): no default, load, boundary, render, engine or top-level code creates, reads or rewrites it',
     [...new Set(rcNamed)].sort(), RC_WRITERS.concat(['geodeLivingMonthReceipts', 'geodeLivingMonthHappened']).sort());
-  check('receipts.closed', 'Outside the receipt family only geodeLivingMonthReceipts calls into it (the ledger), and no handler, string or value reference reaches it: no plan, engine, position or screen can reach receipt evidence',
+  check('receipts.closed', 'Outside the receipt family only geodeLivingMonthReceipts (the ledger) and the P3-5D dialog call into it — its confirm label (the amount validator), its submit (record, correct) and its confirmed removal (void) — and no handler, string or value reference reaches it: no plan, engine, position or other screen can reach receipt evidence',
     [RC_ALL.map(n => [n, callersOf(n).filter(c => RC_ALL.indexOf(c) < 0)]).filter(x => x[1].length), RC_ALL.flatMap(n => refs.get(n).entry)],
-    [[['geodeIncomeReceiptLedger', ['geodeLivingMonthReceipts']]], []]);
+    [[['geodeIncomeReceiptAmountValid', ['geodeIncomeReceiptSubmitLabel']], ['geodeIncomeReceiptLedger', ['geodeLivingMonthReceipts']],
+      ['geodeRecordIncomeReceipt', ['geodeIncomeReceiptSubmit']], ['geodeVoidIncomeReceipt', ['geodeIncomeReceiptRemoveConfirm']],
+      ['geodeCorrectIncomeReceipt', ['geodeIncomeReceiptSubmit']]], []]);
   const RC_ROOTS = ['calcMonthlyLeftover', 'calcMonthlyLeftoverConfirmedOnly', 'sumPaymentsMonthlyOutflow', 'paymentCountsForMonthlyOutflow', 'sumExpensesMonthly',
     'geodeLivingMonthIncome', 'geodeLivingMonthComponents', 'geodeLivingMonthChanges', 'geodeMonthBaselineFromModel', 'geodeMonthBaselineCapture',
     'computeAffordabilityContext', 'geodeRecomputeBalancesFromPayments', 'geodeGoalEffectiveSavedFromState', 'geodeInvestmentPosition', 'geodeInvestmentValueEstimated',
@@ -634,18 +636,18 @@ function checksFor(src) {
   while ((fs2 = figureRe.exec(M.noComments))) {
     if (fs2[0].replace(/^[\w$]+\s*:\s*/, '').trim() !== 'null') figureSites.push([(M.ownerAt(fs2.index) || { name: '(top level)' }).name, fs2[0].replace(/\s+/g, ' ').trim()]);
   }
-  check('receipts.no-figure', 'No outstanding, coverage or available figure exists: outstanding and received coverage are null wherever they are built; the one non-null received is Living Month income\'s, the ledger\'s month total only when receipts are recorded (P3-5C)',
+  check('receipts.no-figure', 'No outstanding, coverage or available figure exists: outstanding and received coverage are null wherever they are built; the one non-null received is Living Month income\'s, the ledger\'s month total only when receipts are recorded (P3-5C), passed unchanged to the detail\'s Income part (P3-5D)',
     [figureSites, /outstandingIncome|incomeOutstanding|availableNow|receivedTotal|receiptsTotal|receivedCoverage\s*=(?!=)/.test(M.code)],
-    [[['geodeLivingMonthIncome', 'received: recorded ? receipts.total : null']], false]);
+    [[['geodeLivingMonthIncome', 'received: recorded ? receipts.total : null'], ['geodeMonthIncomeView', 'received: income.received']], false]);
 
   section('INCOME RECEIPT READ MODEL (P3-5C) — the Living Month presents the ledger\'s evidence for its month, beside the plan and never in it');
   const lmBody = body('geodeLivingMonthModel');
   const readerBody = body('geodeLivingMonthReceipts');
-  check('read.canonical', 'One reader: geodeLivingMonthReceipts reads the supplied state\'s list and returns the canonical ledger\'s month (no loop, filter, sum or void logic of its own); only the model calls it, with its state and its own month',
-    [callersOf('geodeLivingMonthReceipts'), refs.get('geodeLivingMonthReceipts').entry,
+  check('read.canonical', 'One reader: geodeLivingMonthReceipts reads the supplied state\'s list and returns the canonical ledger\'s month (no loop, filter, sum or void logic of its own); the model calls it with its state and its own month, and the P3-5D submit only for its duplicate prompt, with the page state and the new receipt\'s month',
+    [callersOf('geodeLivingMonthReceipts').slice().sort(), refs.get('geodeLivingMonthReceipts').entry,
       /^\s*var list = state\.incomeReceipts;\s*if \(list !== undefined && !Array\.isArray\(list\)\) return null;\s*return geodeIncomeReceiptLedger\(list, ym\)\.month;\s*\}\s*$/.test(readerBody.replace(/^function[^{]*\{/, '')),
-      (lmBody.match(/geodeLivingMonthReceipts\([^)]*\)/g) || [])],
-    [['geodeLivingMonthModel'], [], true, ['geodeLivingMonthReceipts(state, cal.ym)']]);
+      (lmBody.match(/geodeLivingMonthReceipts\([^)]*\)/g) || []), (body('geodeIncomeReceiptSubmit').match(/geodeLivingMonthReceipts\([^)]*\)/g) || [])],
+    [['geodeIncomeReceiptSubmit', 'geodeLivingMonthModel'], [], true, ['geodeLivingMonthReceipts(state, cal.ym)'], ['geodeLivingMonthReceipts(S, built.input.ym)']]);
   const lmReceiptUses = (lmBody.match(/[^\n]*(?<![\w$])receipts(?![\w$])[^\n]*/g) || []).map(s => s.trim());
   check('read.model-scope', 'In the model, receipt evidence goes only to income and Happened: the plan, available, payments (done and Still ahead), expenses, earlier gaps and changes are built without it; Still ahead holds payment items only',
     [lmReceiptUses, !/receipt|received/.test(/model\.plan = \{[^}]*\}/.exec(lmBody)[0]),
@@ -670,12 +672,38 @@ function checksFor(src) {
   const irRe = /'income_recorded'/g;
   let ir;
   while ((ir = irRe.exec(M.noComments))) incomeRecordedOwners.push((M.ownerAt(ir.index) || { name: '(top level)' }).name);
-  check('read.identity', 'Only receipts become income_recorded items (Happened), and the detail keeps them out of its list until P3-5D; its other deduplication is by evidence identity (source and id) only',
+  check('read.identity', 'Only receipts become income_recorded items (Happened); the detail keeps them out of its "also recorded" list and gives them to its Income part alone (P3-5D); its other deduplication is by evidence identity (source and id) only',
     [incomeRecordedOwners, /cited\[e\.evidenceSource \+ '\|' \+ e\.id\]/.test(body('geodeMonthDetailView')), /\.amount\s*===|eventDate\s*===|\.date\s*===/.test(body('geodeMonthDetailView'))],
-    [['geodeLivingMonthHappened', 'geodeMonthDetailView'], true, false]);
+    [['geodeLivingMonthHappened', 'geodeMonthDetailView', 'geodeMonthIncomeView'], true, false]);
   check('read.no-gap', 'No expectation gap comes from income: the gap capture, occurrences and the earlier-gap summary name no income or receipt',
     ['geodeCaptureExpectationGaps', 'geodeExpectationOccurrences', 'geodeExpectationOccurrenceStatus', 'geodeLivingMonthEarlierGaps']
       .filter(n => /income|receipt|received/i.test(body(n))), []);
+
+  section('INCOME RECEIPT EXPERIENCE (P3-5D) — the dialog reaches receipts only through the P3-5B writers, once per confirmation, and writes nothing else');
+  const UX_FNS = ['geodeMonthIncomeView', 'geodeIncomeReceiptParseAmount', 'geodeIncomeReceiptSubmitLabel', 'geodeIncomeReceiptInput', 'geodeIncomeReceiptReasonMessage',
+    'geodeIncomeReceiptOutcomeMessage', 'geodeIncomeReceiptLikelyDuplicate', 'geodeIncomeReceiptDuplicateText', 'geodeIncomeReceiptFormHtml', 'geodeIncomeReceiptRemoveHtml',
+    'geodeIncomeReceiptModel', 'geodeIncomeReceiptFind', 'geodeMonthDetailToggled', 'geodeIncomeReceiptRemember', 'geodeIncomeReceiptDismissed', 'geodeIncomeReceiptClose',
+    'geodeIncomeReceiptDialogReady', 'geodeIncomeReceiptRecord', 'geodeIncomeReceiptCorrect', 'geodeIncomeReceiptRemove', 'geodeIncomeReceiptFormRead',
+    'geodeIncomeReceiptClearDuplicate', 'geodeIncomeReceiptShowError', 'geodeIncomeReceiptAmountChanged', 'geodeIncomeReceiptUsePlanned', 'geodeIncomeReceiptTimingChanged',
+    'geodeIncomeReceiptShowDuplicate', 'geodeIncomeReceiptUnchanged', 'geodeIncomeReceiptSubmit', 'geodeIncomeReceiptRemoveConfirm', 'geodeIncomeReceiptAfterWrite'];
+  check('ux.declared', 'Each P3-5D function is declared once', UX_FNS.filter(n => M.defs.filter(d => d.name === n).length !== 1), []);
+  check('ux.writes-nothing', 'No P3-5D function names the receipt list, assigns to the page state, saves, persists, admits, logs activity, snapshots, raises plan alerts, captures a baseline or gap, syncs, or reads Monthly Left',
+    UX_FNS.filter(n => /incomeReceipts|(?<![\w$.])S\s*(?:\.\s*[\w$]+|\[[^\]]+\])+\s*(?:=(?!=)|\+\+|--|[-+*/]=)|(?<![\w$.])(?:save|persistGeodeToLocalStorage|geodeStoreFinancialState|geodePrepareFinancialMutation|geodeModalCommitBegin|appendActivityLog|setLastSnapshotBeforeChange|checkAlerts|syncRecurringPayments|geodeCaptureExpectationGaps|geodeMonthBaselineCapture|geodeMonthBaselineStage|calcMonthlyLeftover|calcMonthlyLeftoverConfirmedOnly)\s*\(|activityLog|localStorage|sessionStorage|monthlyLeft|planRemainder/.test(body(n))), []);
+  const uxCalls = name => { const out = []; const re = new RegExp('(?<![\\w$.])' + name + '\\s*\\(', 'g'); let x; while ((x = re.exec(M.code))) { const o = M.ownerAt(x.index); if (!o || o.name !== name || x.index - o.start > 12 + name.length) out.push(o ? o.name : '(top level)'); } return out.filter(o => o !== name); };
+  check('ux.writer-calls', 'Each writer is called exactly once, by the dialog action that confirms it: record and correct by the submit, void by the confirmed removal',
+    RC_WRITERS.map(n => [n, uxCalls(n)]),
+    [['geodeRecordIncomeReceipt', ['geodeIncomeReceiptSubmit']], ['geodeVoidIncomeReceipt', ['geodeIncomeReceiptRemoveConfirm']], ['geodeCorrectIncomeReceipt', ['geodeIncomeReceiptSubmit']]]);
+  const uxHandlerOwners = name => { const out = []; const re = new RegExp('(?<![\\w$.])' + name + '\\(', 'g'); let x; while ((x = re.exec(M.noComments))) if (M.code[x.index] !== name[0]) out.push((M.ownerAt(x.index) || { name: '(top level)' }).name); return out; };
+  check('ux.entry', 'The dialog opens only from the Month Pulse: record from the Pulse\'s income action, correct and remove from the detail\'s receipt items — markup handlers only, never a code call',
+    [['geodeIncomeReceiptRecord', 'geodeIncomeReceiptCorrect', 'geodeIncomeReceiptRemove'].map(n => [n, uxHandlerOwners(n), callersOf(n)])],
+    [[['geodeIncomeReceiptRecord', ['geodeMonthPulseHtml'], []], ['geodeIncomeReceiptCorrect', ['geodeMonthDetailHtml'], []], ['geodeIncomeReceiptRemove', ['geodeMonthDetailHtml'], []]]]);
+  const uxOwners = new Set();
+  UX_FNS.forEach(n => { const re = new RegExp('(?<![\\w$.])' + n + '(?![\\w$])', 'g'); let x; while ((x = re.exec(M.noComments))) uxOwners.add((M.ownerAt(x.index) || { name: '(top level)' }).name); });
+  check('ux.surface', 'Nothing outside the receipt experience and the Month Pulse / detail names it: no onboarding, Quick Setup, Smart Import, Reality Check, Plan or other screen',
+    [...uxOwners].filter(n => UX_FNS.indexOf(n) < 0).sort(), ['geodeMonthDetailHtml', 'geodeMonthDetailView', 'geodeMonthPulseHtml']);
+  check('ux.no-prefill', 'Recording opens empty: no amount and no timing chosen; the planned amount is only offered (a button), never put in the field',
+    [/amount: '', timing: '', date: '', label: ''/.test(body('geodeIncomeReceiptRecord')), /value="' \+ escHtmlLite\(cfg\.amount \|\| ''\)/.test(body('geodeIncomeReceiptFormHtml')),
+      /planned[^;\n]*value=|value="'\s*\+\s*[^;\n]*planned/.test(body('geodeIncomeReceiptFormHtml'))], [true, true, false]);
 
   section('HANDLERS AND PURE MODULES — no plan write outside the inline functions');
   const handlerWrites = [];
@@ -809,6 +837,12 @@ const MUTANTS = {
   'release read as a receipt': ["      id: String(r.id || ''), type: 'release',", "      id: String(r.id || ''), type: r.reason === 'income' ? 'income_recorded' : 'release',"],
   'receipt matched by amount': ['  (receipts ? receipts.receipts : []).forEach(function (r) {', '  (receipts ? receipts.receipts : []).filter(function (r) { return !out.some(function (e) { return e.amount === r.amount; }); }).forEach(function (r) {'],
   'detail lists receipts': ["return e && e.type !== 'income_recorded' && !cited[", 'return e && !cited['],
+  'receipt dialog saves itself': ['    geodeSuccessToast(savedText);\n    geodeIncomeReceiptDismissed();', '    save();\n    geodeSuccessToast(savedText);\n    geodeIncomeReceiptDismissed();'],
+  'receipt dialog edits the plan': ["  geodeIncomeReceiptRemember(el);\n  window._geodeReceiptForm = { mode: 'record'", "  geodeIncomeReceiptRemember(el);\n  S.income = model.income.planned;\n  window._geodeReceiptForm = { mode: 'record'"],
+  'receipt dialog appends itself': ["  window._geodeReceiptForm = { mode: 'remove', id: r.id };", "  window._geodeReceiptForm = { mode: 'remove', id: r.id };\n  S.incomeReceipts.push({ id: 'x', eventType: 'void', voidsId: r.id, recordedAt: 1, source: 'manual' });"],
+  'void called twice': ['geodeIncomeReceiptAfterWrite(geodeVoidIncomeReceipt(ctx.id),', 'geodeVoidIncomeReceipt(ctx.id); geodeIncomeReceiptAfterWrite(geodeVoidIncomeReceipt(ctx.id),'],
+  'receipt dialog in Quick Setup': ['function geodeQuickSetupExit() {\n  try {', 'function geodeQuickSetupExit() {\n  geodeIncomeReceiptRecord(null);\n  try {'],
+  'receipt dialog prefilled from the plan': ["amount: '', timing: '', date: '', label: '', monthYm", "amount: String(model.income.planned), timing: '', date: '', label: '', monthYm"],
   'another reader of the list': ['function geodeLivingMonthIncome(state, receipts) {\n', 'function geodeLivingMonthIncome(state, receipts) {\n  if (Array.isArray(state.incomeReceipts) && !receipts) receipts = geodeIncomeReceiptLedger(state.incomeReceipts, currentYM()).month;\n']
 };
 

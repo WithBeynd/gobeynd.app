@@ -208,8 +208,10 @@ function partOf(html, part) {
 
 const at = (y, m, d, h) => new Date(y, m - 1, d, h == null ? 12 : h).getTime();
 const NOW = at(2026, 10, 15);
-const INCOME_NOTE = 'Income received isn\u2019t tracked yet.';
-const IRREGULAR_NOTE = 'Planned income can vary. Income received isn\u2019t tracked yet.';
+// P3-5D: the income line says none has been recorded and carries its record action (the P3-2 "isn't tracked yet" note
+// became untrue once income received can be recorded).
+const INCOME_NOTE = 'Income received hasn\u2019t been recorded this month. Record income received';
+const IRREGULAR_NOTE = 'Planned income can vary. Income received hasn\u2019t been recorded this month. Record income received';
 const DUE_ONE = '1 scheduled item is due, with no outcome recorded.';
 const UNPLACED_ONE = '1 completed item has no known month.';
 const GBP = { sym: '\u00a3', code: 'GBP', loc: 'en-GB' };
@@ -331,7 +333,7 @@ function checksFor(src) {
   section('HOME — placement and the one presentation change');
   const rHome = extractFunction(src, 'rHome').text;
   const heroEnd = rHome.indexOf("'</details>';\n  h += '</div>';");
-  const pulseCall = rHome.indexOf("_monthPulseHtml = geodeHomeMonthPulseHtml(S, new Date(), { dueShownElsewhere: geodeHomeNeedsAttentionWouldShow(S) });");
+  const pulseCall = rHome.indexOf("_monthPulseHtml = geodeHomeMonthPulseHtml(S, new Date(), { dueShownElsewhere: geodeHomeNeedsAttentionWouldShow(S), detailOpen: window._geodeMonthDetailOpen === true });");
   const pulseAppend = rHome.indexOf('h += _monthPulseHtml;');
   const anticipatory = rHome.indexOf('h += geodeHomeAnticipatoryMaybeHtml(S);');
   check('home.placement', 'rHome builds the Pulse from the page state and the clock once, directly under the Net Worth hero and before every other Home surface',
@@ -386,10 +388,11 @@ function checksFor(src) {
   check('C.text', 'Zero remainder: £0 left if the month goes to plan, not "over"', [partOf(html, 'remainder'), m.plan.monthlyLeft], ['\u00a30 left if the month goes to plan', 0]);
 
   [html, m] = ready('D', FIXTURES['D.no-income']());
-  check('D.text', 'No income: the plan is £50 over; no income line (no planned income to receive)',
-    [partOf(html, 'remainder'), partOf(html, 'income'), m.income.planned], ['Your current plan is \u00a350 over', '', 0]);
+  // P3-5D: recording income received needs no plan, so the record line appears without planned income too.
+  check('D.text', 'No income: the plan is £50 over; the income line offers recording, and claims nothing is due',
+    [partOf(html, 'remainder'), partOf(html, 'income'), m.income.planned], ['Your current plan is \u00a350 over', INCOME_NOTE, 0]);
   [html, m] = ready('D.unset', FIXTURES['D.no-income-unset']());
-  check('D.unset.text', 'Income never set: the same plan statement, no income line', [partOf(html, 'remainder'), partOf(html, 'income')], ['Your current plan is \u00a350 over', '']);
+  check('D.unset.text', 'Income never set: the same plan statement and the same record line', [partOf(html, 'remainder'), partOf(html, 'income')], ['Your current plan is \u00a350 over', INCOME_NOTE]);
 
   [html, m] = ready('E', FIXTURES['E.irregular']());
   check('E.text', 'Irregular income: the remainder stays conditional, and planned income is said to vary — never guaranteed or received',
@@ -493,8 +496,20 @@ function checksFor(src) {
     [ctx.geodeMonthPulseView(parse(noRemainder)), ctx.geodeMonthPulseView(nanRemainder), ctx.geodeMonthPulseView(null), ctx.geodeMonthPulseHtml(null)], [null, null, null, '']);
   const receivedLater = synthetic('ready'); receivedLater.income.received = 500;
   const laterHtml = view(parse(receivedLater));
-  check('contract.received-later', 'Should a later stage evidence income received, P3-2 still shows no received figure or coverage',
+  check('contract.received-later', 'An income state the Pulse does not know (P3-2\'s not_tracked) shows no received figure, coverage or action',
     [/500|receiv|cover/i.test(textOf(laterHtml)), partOf(laterHtml, 'income')], [false, '']);
+  // P3-5D: the income line is the model's income state and received total, never a figure formed here.
+  const incomeAs = (state, received) => {
+    const x = synthetic('ready');
+    Object.assign(x.income, { state, received, reason: state === 'recorded' ? 'receipts_recorded' : state === 'unavailable' ? 'receipt_evidence_unreadable' : 'no_receipt_recorded' });
+    return view(parse(x));
+  };
+  check('contract.income-states', 'Recorded: the model\'s received total as recorded evidence with "Add income"; none: the record line; unreadable: nothing',
+    [partOf(incomeAs('recorded', 2500.5), 'income'), partOf(incomeAs('none_recorded', null), 'income'), partOf(incomeAs('unavailable', null), 'income'),
+      /data-geode-income-action/.test(incomeAs('unavailable', null))],
+    ['\u00a32,500.50 recorded as received this month. Add income', INCOME_NOTE, '', false]);
+  check('contract.no-equation', 'Received beside the plan is never combined: no "of", remaining, outstanding, share or difference',
+    /\bof\b|remain|outstanding|%|\u00a3500\b|\u00a3742 \u2212/i.test(partOf(incomeAs('recorded', 2500), 'income')), false);
   const badMonth = synthetic('ready'); badMonth.month.ym = '2026-13';
   const badMonthHtml = view(parse(badMonth));
   check('contract.month', 'An unrecognised month gives no month label rather than a wrong one',
@@ -512,8 +527,8 @@ const MUTANTS = {
     'done: { count: done.length + (model.payments.unplaced || []).length, total: model.payments.doneTotal }'],
   'due cue says overdue': ["'1 scheduled item is due, with no outcome recorded.'", "'1 payment is overdue.'"],
   'zero shown as over': ['var over = view.planRemainder < 0;', 'var over = view.planRemainder <= 0;'],
-  'received shown as zero': ['if (view.incomeReceived === null && view.incomePlanned > 0) {',
-    "if (view.incomePlanned > 0) { h += '<div>\u00a30 received</div>';"],
+  'received shown as zero': ["incomeText = (view.incomeType === 'irregular' ? 'Planned income can vary. ' : '') + 'Income received hasn\\u2019t been recorded this month.';",
+    "incomeText = fmExact(0) + ' received this month.';"],
   'over-budget card always skipped': ["!_monthPulseHtml &&\n      geodeHomeOrchSurfaceShowResolved('overBudget'", "geodeHomeOrchSurfaceShowResolved('overBudget'"],
   'pulse placed after other surfaces': ['  h += _monthPulseHtml;\n  h += geodeHomeAnticipatoryMaybeHtml(S);', '  h += geodeHomeAnticipatoryMaybeHtml(S);\n  h += _monthPulseHtml;']
 };
