@@ -666,4 +666,7 @@ function main() {
   process.exit(failed ? 1 : 0);
 }
 
-main();
+if (require.main === module) main();
+
+/** The deployed-runtime harness and the shared plan fixtures, for suites that build on them (tests/income-receipts.js). */
+module.exports = { OLD, OLD_REF, OLD_RUNTIME, OldPage, NEW, PLAN, september, oldWrite, pageOver, raw, stored, localNoon, at, ordinary, formIncome, call };

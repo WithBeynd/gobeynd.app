@@ -139,7 +139,10 @@ const PRODUCTION_FUNCTIONS = [
   'geodeLivingMonthCalendar', 'geodeLivingMonthIncome', 'geodeLivingMonthEvidenceIndex', 'geodeLivingMonthPaymentItem',
   'geodeLivingMonthExpenses', 'geodeLivingMonthHappened', 'geodeLivingMonthEarlierGaps', 'geodeLivingMonthPaymentEvidence',
   // plan changes (P3-4D): the one component derivation and the pure comparison with the month's record
-  'geodeLivingMonthComponents', 'geodeLivingMonthChanges'
+  'geodeLivingMonthComponents', 'geodeLivingMonthChanges',
+  // income receipt evidence (P3-5B): validators, the one ledger and its admitted writers; nothing financial reads it
+  'geodeIncomeReceiptAmountValid', 'geodeIncomeReceiptValid', 'geodeIncomeReceiptVoidValid', 'geodeIncomeReceiptLedger', 'geodeIncomeReceiptDraft',
+  'geodeIncomeReceiptId', 'geodeIncomeReceiptTarget', 'geodeIncomeReceiptCommit', 'geodeRecordIncomeReceipt', 'geodeVoidIncomeReceipt', 'geodeCorrectIncomeReceipt'
 ];
 
 /** Production top-level constants the extracted base functions read. */

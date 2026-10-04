@@ -1414,6 +1414,7 @@ var S = {
   contributionEvents: [],
   /** FA-3C-A: payment-level legacy carries and their resolutions (created only by the schema 1→2 transition; no engine reads this yet). */
   contributionCarry: [],
+  /** P3-5B: incomeReceipts — append-only income receipt evidence (receipt / void events). Omitted here: absent stays absent until the first receipt write. */
   /** Monthly totals keyed by YYYY-MM (one object per month, overwritten on update). */
   snapshots: {},
   /** Snapshot fields for “since last update” (totals + leftThisMonth); persisted on save. */
@@ -6027,7 +6028,7 @@ function geodeLivingMonthCalendar(now) {
 }
 
 /**
- * P3-1: the income plan only. Beynd records no receipts, so reality is not_tracked: received and outstanding stay
+ * P3-1: the income plan only. Receipt evidence (P3-5B, S.incomeReceipts) is not read here, so reality is not_tracked: received and outstanding stay
  * null (0 would claim evidence). type mirrors geodeGetIncomeContext without its in-place normalisation of S.
  */
 function geodeLivingMonthIncome(state) {
@@ -6449,6 +6450,215 @@ function geodeLivingMonthEarlierGaps(state, ym) {
     }
   });
   return { basis: 'evidence_only', gapCount: count, gapMonths: Object.keys(months).sort() };
+}
+
+/**
+ * P3-5B income receipt evidence: S.incomeReceipts, the explicit records that income arrived. It is never derived from
+ * planned income, income type, a due date, a month boundary, a completion, a balance, the activity log or an import.
+ * Optional: absent means no receipt evidence recorded (never £0 received); only the first receipt write creates it.
+ * Append-only: a receipt is never edited or removed. A void retires it; a correction is a void and its replacement in
+ * one write. Preservation-tolerant: an entry this runtime does not understand (another source, event type or field)
+ * is ignored by the ledger and stays in storage exactly as written. Nothing financial reads it: S.income, Monthly Left,
+ * the month baseline, plan changes, affordability and every position stay the plan's and their ledgers' own.
+ */
+
+/** P3-5B: a finite amount above 0 in whole pence (at most two decimal places). */
+function geodeIncomeReceiptAmountValid(n) {
+  return typeof n === 'number' && isFinite(n) && n > 0 && Math.round(n * 100) / 100 === n;
+}
+
+/**
+ * P3-5B: whether e is a receipt this runtime understands and counts: exactly the receipt fields, source 'manual'; date
+ * (when present) a real day in ym; label (when present) trimmed, 1–40 characters. Never changes e.
+ */
+function geodeIncomeReceiptValid(e) {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return false;
+  var allowed = { id: 1, eventType: 1, amount: 1, ym: 1, date: 1, recordedAt: 1, source: 1, label: 1 };
+  var keys = Object.keys(e);
+  for (var i = 0; i < keys.length; i++) if (!allowed[keys[i]]) return false;
+  if (e.eventType !== 'receipt' || e.source !== 'manual') return false;
+  if (typeof e.id !== 'string' || !e.id) return false;
+  if (!geodeIncomeReceiptAmountValid(e.amount) || !geodeContributionYmValid(e.ym)) return false;
+  if (typeof e.recordedAt !== 'number' || !isFinite(e.recordedAt) || e.recordedAt <= 0) return false;
+  if (Object.prototype.hasOwnProperty.call(e, 'date') && !(geodeInvestmentIsoDateValid(e.date) && e.date.slice(0, 7) === e.ym)) return false;
+  if (Object.prototype.hasOwnProperty.call(e, 'label') &&
+      !(typeof e.label === 'string' && e.label.length > 0 && e.label.length <= 40 && e.label === e.label.trim())) return false;
+  return true;
+}
+
+/**
+ * P3-5B: whether e is a void this runtime understands: exactly the void fields. Any recorded source is accepted — a void
+ * only ever retires evidence, so whoever recorded it, reading it can never add income. Never changes e.
+ */
+function geodeIncomeReceiptVoidValid(e) {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return false;
+  var keys = Object.keys(e);
+  if (keys.length !== 5) return false;
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i] !== 'id' && keys[i] !== 'eventType' && keys[i] !== 'voidsId' && keys[i] !== 'recordedAt' && keys[i] !== 'source') return false;
+  }
+  if (e.eventType !== 'void') return false;
+  if (typeof e.id !== 'string' || !e.id || typeof e.voidsId !== 'string' || !e.voidsId) return false;
+  if (typeof e.recordedAt !== 'number' || !isFinite(e.recordedAt) || e.recordedAt <= 0) return false;
+  return typeof e.source === 'string' && !!e.source;
+}
+
+/**
+ * P3-5B: the one receipt ledger. Pure: reads only `events` (anything but an array reads as empty) and `ym`, never S, a
+ * clock or storage, and changes nothing. An id belongs to the first understood event (receipt or void) holding it, in
+ * list order; any later event with that id is ignored. A void retires the understood receipt it names, whatever either
+ * one's source; when several name one receipt, the earliest recordedAt (then lowest id) is the effective one and the
+ * rest change nothing; a void naming anything else does nothing. A receipt's month is its ym, never recordedAt.
+ * Entries it does not understand are counted in `ignored`, never removed. Fresh containers and copies: receipts
+ * (understood), voids (effective), active, ignored, and month { ym, total, count, receipts } when ym is a valid month.
+ * A month with no active receipt has total null: no receipt evidence recorded, which is not £0 received.
+ */
+function geodeIncomeReceiptLedger(events, ym) {
+  var list = Array.isArray(events) ? events : [];
+  var owned = Object.create(null);
+  var receipts = [];
+  var voids = [];
+  var ignored = 0;
+  var i;
+  for (i = 0; i < list.length; i++) {
+    var e = list[i];
+    var receipt = geodeIncomeReceiptValid(e);
+    if ((!receipt && !geodeIncomeReceiptVoidValid(e)) || owned[e.id]) {
+      ignored++;
+      continue;
+    }
+    owned[e.id] = receipt ? 'receipt' : 'void';
+    (receipt ? receipts : voids).push(e);
+  }
+  var retiredBy = Object.create(null);
+  for (i = 0; i < voids.length; i++) {
+    var v = voids[i];
+    if (owned[v.voidsId] !== 'receipt') continue;
+    var prior = retiredBy[v.voidsId];
+    if (!prior || v.recordedAt < prior.recordedAt || (v.recordedAt === prior.recordedAt && v.id < prior.id)) retiredBy[v.voidsId] = v;
+  }
+  var out = { receipts: [], voids: [], active: [], ignored: ignored, month: null };
+  for (i = 0; i < receipts.length; i++) {
+    out.receipts.push(Object.assign({}, receipts[i]));
+    if (!retiredBy[receipts[i].id]) out.active.push(Object.assign({}, receipts[i]));
+  }
+  for (i = 0; i < voids.length; i++) if (retiredBy[voids[i].voidsId] === voids[i]) out.voids.push(Object.assign({}, voids[i]));
+  if (geodeContributionYmValid(ym)) {
+    var inMonth = out.active.filter(function (r) { return r.ym === ym; }).map(function (r) { return Object.assign({}, r); });
+    var total = 0;
+    for (i = 0; i < inMonth.length; i++) total += inMonth[i].amount;
+    out.month = { ym: ym, total: inMonth.length ? Math.round(total * 100) / 100 : null, count: inMonth.length, receipts: inMonth };
+  }
+  return out;
+}
+
+/**
+ * P3-5B: the fields of a manual receipt from explicit input { amount, ym, date?, label? }, judged against `today` (the
+ * local YYYY-MM-DD the caller supplies): { draft } or { reason }. Money cannot have arrived in a later month or on a
+ * later day. No date stays no date (month-only evidence): it is never defaulted. A blank label is no label. Pure.
+ */
+function geodeIncomeReceiptDraft(input, today) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { reason: 'invalid_input' };
+  if (!geodeIncomeReceiptAmountValid(input.amount)) return { reason: 'invalid_amount' };
+  if (!geodeContributionYmValid(input.ym)) return { reason: 'invalid_month' };
+  var draft = { amount: input.amount, ym: input.ym };
+  if (input.date !== undefined && input.date !== null && input.date !== '') {
+    if (!geodeInvestmentIsoDateValid(input.date) || input.date.slice(0, 7) !== input.ym) return { reason: 'invalid_date' };
+    draft.date = input.date;
+  }
+  if (input.label !== undefined && input.label !== null) {
+    if (typeof input.label !== 'string' || input.label.trim().length > 40) return { reason: 'invalid_label' };
+    if (input.label.trim()) draft.label = input.label.trim();
+  }
+  if (!geodeInvestmentIsoDateValid(today)) return { reason: 'invalid_clock' };
+  if (draft.ym > today.slice(0, 7)) return { reason: 'future_month' };
+  if (draft.date && draft.date > today) return { reason: 'future_date' };
+  return { draft: draft };
+}
+
+/** P3-5B: a random event id no entry of `list` holds. Never derived from the amount, month, date, label or source. */
+function geodeIncomeReceiptId(list) {
+  var taken = Object.create(null);
+  for (var i = 0; i < list.length; i++) if (list[i] && typeof list[i].id === 'string') taken[list[i].id] = true;
+  var id = 'inc_' + uid();
+  while (taken[id]) id = 'inc_' + uid();
+  return id;
+}
+
+/** P3-5B: whether receipt `id` is 'active', 'already_voided' or 'not_found' (including evidence this runtime does not understand). */
+function geodeIncomeReceiptTarget(events, id) {
+  var ledger = geodeIncomeReceiptLedger(events);
+  if (ledger.active.some(function (r) { return r.id === id; })) return 'active';
+  return ledger.receipts.some(function (r) { return r.id === id; }) ? 'already_voided' : 'not_found';
+}
+
+/**
+ * P3-5B: the one write of a receipt action, after its events are appended. Only 'saved' makes them evidence; on any
+ * other result S is the committed text again (geodeStoreFinancialState already restored it after 'failed').
+ */
+function geodeIncomeReceiptCommit(saved) {
+  var result = save();
+  if (result === 'saved') return saved;
+  if (result !== 'failed') geodeRestoreCommittedState();
+  return { status: result === 'refused' ? 'refused' : 'failed' };
+}
+
+/**
+ * P3-5B: records one manual receipt from explicit input { amount, ym, date?, label? }; the caller has said it is income.
+ * Admission and the boundary first (geodePrepareFinancialMutation), then one append and one save. Writes nothing else:
+ * no plan, no activity log. Returns { status: 'saved', id } or { status: 'invalid', reason } | 'unavailable' (the stored
+ * list is not a list, and is left as it is) | 'refused' (this page may not write) | 'failed' (the write did not land).
+ */
+function geodeRecordIncomeReceipt(input) {
+  var built = geodeIncomeReceiptDraft(input, geodeTodayLocalISO());
+  if (!built.draft) return { status: 'invalid', reason: built.reason };
+  if (S.incomeReceipts !== undefined && !Array.isArray(S.incomeReceipts)) return { status: 'unavailable', reason: 'store_unreadable' };
+  if (!geodePrepareFinancialMutation()) return { status: 'refused' };
+  if (!Array.isArray(S.incomeReceipts)) S.incomeReceipts = [];
+  var receipt = Object.assign({ id: geodeIncomeReceiptId(S.incomeReceipts), eventType: 'receipt' }, built.draft, { recordedAt: Date.now(), source: 'manual' });
+  S.incomeReceipts.push(receipt);
+  return geodeIncomeReceiptCommit({ status: 'saved', id: receipt.id });
+}
+
+/**
+ * P3-5B: retires one active receipt with a manual void, in one admitted write. A receipt already voided, or one this
+ * runtime does not hold or understand, is refused without a write ('already_voided', 'not_found').
+ */
+function geodeVoidIncomeReceipt(receiptId) {
+  if (typeof receiptId !== 'string' || !receiptId) return { status: 'invalid', reason: 'invalid_id' };
+  if (S.incomeReceipts !== undefined && !Array.isArray(S.incomeReceipts)) return { status: 'unavailable', reason: 'store_unreadable' };
+  if (!geodePrepareFinancialMutation()) return { status: 'refused' };
+  var target = geodeIncomeReceiptTarget(S.incomeReceipts, receiptId);
+  if (target !== 'active') {
+    geodeEndFinancialAction();
+    return { status: target };
+  }
+  var voidEvent = { id: geodeIncomeReceiptId(S.incomeReceipts), eventType: 'void', voidsId: receiptId, recordedAt: Date.now(), source: 'manual' };
+  S.incomeReceipts.push(voidEvent);
+  return geodeIncomeReceiptCommit({ status: 'saved', id: voidEvent.id });
+}
+
+/**
+ * P3-5B: corrects one active receipt — its void and a replacement from explicit input, appended together and stored by
+ * one save, so both become evidence or neither does. The original stays stored, retired. Results as the two writers'.
+ */
+function geodeCorrectIncomeReceipt(receiptId, input) {
+  if (typeof receiptId !== 'string' || !receiptId) return { status: 'invalid', reason: 'invalid_id' };
+  var built = geodeIncomeReceiptDraft(input, geodeTodayLocalISO());
+  if (!built.draft) return { status: 'invalid', reason: built.reason };
+  if (S.incomeReceipts !== undefined && !Array.isArray(S.incomeReceipts)) return { status: 'unavailable', reason: 'store_unreadable' };
+  if (!geodePrepareFinancialMutation()) return { status: 'refused' };
+  var target = geodeIncomeReceiptTarget(S.incomeReceipts, receiptId);
+  if (target !== 'active') {
+    geodeEndFinancialAction();
+    return { status: target };
+  }
+  var at = Date.now();
+  var voidEvent = { id: geodeIncomeReceiptId(S.incomeReceipts), eventType: 'void', voidsId: receiptId, recordedAt: at, source: 'manual' };
+  S.incomeReceipts.push(voidEvent);
+  var receipt = Object.assign({ id: geodeIncomeReceiptId(S.incomeReceipts), eventType: 'receipt' }, built.draft, { recordedAt: at, source: 'manual' });
+  S.incomeReceipts.push(receipt);
+  return geodeIncomeReceiptCommit({ status: 'saved', id: receipt.id, voidId: voidEvent.id });
 }
 
 /**

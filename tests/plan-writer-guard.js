@@ -592,6 +592,46 @@ function checksFor(src) {
     [callersOf('calcMonthlyLeftoverConfirmedOnly').slice().sort(), /(?:ls|base|prev|_pendingCompareBaseline)\s*\.\s*leftThisMonth/.test(M.noComments)],
     [['computeAffordabilityContext', 'extendLastSnapshotFigures'], false]);
 
+  section('INCOME RECEIPTS (P3-5B) — evidence beside the plan: written only by its admitted writers, read by nothing financial, reached by no UI');
+  const RC_PURE = ['geodeIncomeReceiptAmountValid', 'geodeIncomeReceiptValid', 'geodeIncomeReceiptVoidValid', 'geodeIncomeReceiptLedger', 'geodeIncomeReceiptDraft', 'geodeIncomeReceiptTarget'];
+  const RC_WRITERS = ['geodeRecordIncomeReceipt', 'geodeVoidIncomeReceipt', 'geodeCorrectIncomeReceipt'];
+  const RC_ALL = RC_PURE.concat(['geodeIncomeReceiptId', 'geodeIncomeReceiptCommit'], RC_WRITERS);
+  const rcNamed = [];
+  const rcRe = /incomeReceipts/g;
+  let rm;
+  while ((rm = rcRe.exec(M.noComments))) rcNamed.push((M.ownerAt(rm.index) || { name: '(top level)' }).name);
+  check('receipts.store', 'Only the three writers name incomeReceipts, in code or in a string: no default, load, boundary, render, engine or top-level code creates, reads or rewrites it',
+    [...new Set(rcNamed)].sort(), RC_WRITERS.slice().sort());
+  check('receipts.closed', 'Nothing outside the receipt family calls any of its functions, and no handler, string or value reference reaches them: no plan, engine, position or screen can reach receipt evidence',
+    [RC_ALL.map(n => [n, callersOf(n).filter(c => RC_ALL.indexOf(c) < 0)]).filter(x => x[1].length), RC_ALL.flatMap(n => refs.get(n).entry)], [[], []]);
+  const RC_ROOTS = ['calcMonthlyLeftover', 'calcMonthlyLeftoverConfirmedOnly', 'sumPaymentsMonthlyOutflow', 'paymentCountsForMonthlyOutflow', 'sumExpensesMonthly',
+    'geodeLivingMonthModel', 'geodeLivingMonthIncome', 'geodeLivingMonthComponents', 'geodeLivingMonthChanges', 'geodeMonthBaselineFromModel', 'geodeMonthBaselineCapture',
+    'computeAffordabilityContext', 'geodeRecomputeBalancesFromPayments', 'geodeGoalEffectiveSavedFromState', 'geodeInvestmentPosition', 'geodeInvestmentValueEstimated',
+    'geodeDebtPaymentSummary', 'geodeMonthDetailView', 'geodeMonthPulseView', 'load', 'syncRecurringPayments', 'geodePrepareFinancialMutation', 'save', 'persistGeodeToLocalStorage'];
+  check('receipts.authority', 'Monthly Left (both), the plan sums, the Living Month model, income and components, the baseline, plan changes, affordability, goal, investment and debt positions, the screens, load, the boundary and the write path name no receipt list or receipt function',
+    RC_ROOTS.filter(n => /incomeReceipts|geodeIncomeReceipt|geodeRecordIncomeReceipt|geodeVoidIncomeReceipt|geodeCorrectIncomeReceipt/.test(body(n))), []);
+  const rcAdmitted = RC_WRITERS.map(n => {
+    const c = body(n);
+    const prepAt = c.indexOf("if (!geodePrepareFinancialMutation()) return { status: 'refused' };");
+    const firstWrite = c.search(/S\.incomeReceipts\s*(?:=(?!=)|\.\s*push\s*\()/);
+    return [n, prepAt >= 0 && firstWrite > prepAt, /(?<![\w$.])(?:save|persistGeodeToLocalStorage|geodeStoreFinancialState|appendActivityLog|setLastSnapshotBeforeChange)\s*\(|localStorage|\.\s*income\b|\.\s*(?:payments|expenses|monthBaseline)\b|\.\s*(?:splice|pop|shift|fill|sort|reverse|copyWithin)\s*\(|\.\s*length\s*=(?!=)|delete\s/.test(c),
+      (c.match(/S\.incomeReceipts\s*(?:\[[^\]]*\]\s*)?=(?!=)[^;\n]*/g) || []), (c.match(/geodeIncomeReceiptCommit\s*\(/g) || []).length];
+  });
+  check('receipts.writers', 'Each writer admits (geodePrepareFinancialMutation) before its first append; none stores, logs, snapshots or touches income, payments, expenses or the baseline itself; the list is only ever appended to (the record writer alone creates it, empty, when absent) — nothing is removed, reordered or replaced; each ends in one commit',
+    rcAdmitted, RC_WRITERS.map(n => [n, true, false, n === 'geodeRecordIncomeReceipt' ? ['S.incomeReceipts = []'] : [], 1]));
+  const commitCode = body('geodeIncomeReceiptCommit');
+  check('receipts.one-save', 'The commit makes exactly one save() and no other storage write; only \'saved\' is success, and every other result leaves the committed text in memory',
+    [(commitCode.match(/(?<![\w$.])save\s*\(/g) || []).length, /persistGeodeToLocalStorage|geodeStoreFinancialState|localStorage/.test(commitCode),
+      /if \(result === 'saved'\) return saved;\s*if \(result !== 'failed'\) geodeRestoreCommittedState\(\);\s*return \{ status: result === 'refused' \? 'refused' : 'failed' \};/.test(commitCode)],
+    [1, false, true]);
+  check('receipts.pure', 'The validators, draft, target and ledger read no clock, page state or storage, call no writer, and write nothing into their inputs (the ledger returns copies)',
+    RC_PURE.map(n => [n, /Date\.now|new Date\(\)|currentYM\(|geodeTodayLocalISO\(|(?<![\w$.])S\s*[.[]|localStorage|document|(?<![\w$.])(?:save|persistGeodeToLocalStorage|geodeStoreFinancialState|uid)\s*\(|(?<![\w$.])(?:events|list|input|e|v|r|receipts\[i\]|voids\[i\])\s*(?:\.\s*[\w$]+|\[[^\]]+\])+\s*(?:=(?!=)|\+\+|--|[-+*/]=)/.test(body(n))]),
+    RC_PURE.map(n => [n, false]));
+  check('receipts.no-figure', 'No received, outstanding, coverage or available figure exists: income received and outstanding and received coverage are null wherever they are built',
+    [(M.noComments.match(/(?<![\w$])(?:received|outstanding|receivedCoverage)\s*:\s*[^,}\n]+/g) || []).filter(s => s.replace(/^[\w$]+\s*:\s*/, '').trim() !== 'null'),
+      /outstandingIncome|incomeOutstanding|availableNow|receivedTotal|receiptsTotal|receivedCoverage\s*=(?!=)/.test(M.code)],
+    [[], false]);
+
   section('HANDLERS AND PURE MODULES — no plan write outside the inline functions');
   const handlerWrites = [];
   const handlerRe = /\son[a-z]+\s*=\s*(\\?["'])([\s\S]*?)\1/g;
@@ -676,7 +716,38 @@ const MUTANTS = {
   'explanation rewrites the model': ['    if (c.baseline !== 0) planned = true;', '    if (c.baseline !== 0) planned = true;\n    c.changed = true;'],
   'explanation from the page state': ['    changes: geodeMonthChangeView(model.changes)', '    changes: geodeMonthChangeView(geodeLivingMonthModel(S, Date.now()).changes)'],
   'confirmed-only comparison returns': ['  var dn = geodeSnapshotFiguresSameVersion(ls, cur) ? cur.netWorth - ls.netWorth : 0;',
-    '  var dn = geodeSnapshotFiguresSameVersion(ls, cur) ? cur.netWorth - ls.netWorth : 0;\n  if (calcMonthlyLeftoverConfirmedOnly(S) < ls.leftThisMonth) return \'Less left this month.\';']
+    '  var dn = geodeSnapshotFiguresSameVersion(ls, cur) ? cur.netWorth - ls.netWorth : 0;\n  if (calcMonthlyLeftoverConfirmedOnly(S) < ls.leftThisMonth) return \'Less left this month.\';'],
+  'receipt raises income': ["  S.incomeReceipts.push(receipt);\n  return geodeIncomeReceiptCommit({ status: 'saved', id: receipt.id });",
+    "  S.incomeReceipts.push(receipt);\n  S.income = toNum(S.income) + receipt.amount;\n  return geodeIncomeReceiptCommit({ status: 'saved', id: receipt.id });"],
+  'receipts in Monthly Left': ['  var income = toNum(state.income);\n  // Plan: scheduled + completed outflows',
+    '  var income = toNum(state.income) + (geodeIncomeReceiptLedger(state.incomeReceipts, currentYM()).month.total || 0);\n  // Plan: scheduled + completed outflows'],
+  'receipts in baseline income': ['    observedAt: observedAt,\n    income: c.income,',
+    '    observedAt: observedAt,\n    income: c.income + (geodeIncomeReceiptLedger(S.incomeReceipts, model.month.ym).month.total || 0),'],
+  'receipts in P3-4 current income': ['    income: model.plan.incomePlanned,', '    income: model.plan.incomePlanned + (geodeIncomeReceiptLedger(S.incomeReceipts, model.month.ym).month.total || 0),'],
+  'affordability counts receipts': ['  var income = toNum(state.income);\n  var planRoom = calcMonthlyLeftover(state);',
+    '  var income = toNum(state.income) + (geodeIncomeReceiptLedger(state.incomeReceipts, currentYM()).month.total || 0);\n  var planRoom = calcMonthlyLeftover(state);'],
+  'receipt appended without admission': ["  if (!geodePrepareFinancialMutation()) return { status: 'refused' };\n  if (!Array.isArray(S.incomeReceipts)) S.incomeReceipts = [];",
+    '  if (!Array.isArray(S.incomeReceipts)) S.incomeReceipts = [];'],
+  'admission after the append': ["  if (!geodePrepareFinancialMutation()) return { status: 'refused' };\n  if (!Array.isArray(S.incomeReceipts)) S.incomeReceipts = [];",
+    "  if (!Array.isArray(S.incomeReceipts)) S.incomeReceipts = [];\n  if (!geodePrepareFinancialMutation()) return { status: 'refused' };"],
+  'receipt stored through persist': ["  var result = save();\n  if (result === 'saved') return saved;", "  var result = persistGeodeToLocalStorage();\n  if (result === 'saved') return saved;"],
+  'receipt stored directly': ["  var result = save();\n  if (result === 'saved') return saved;", "  localStorage.setItem(KEY, JSON.stringify(S));\n  var result = 'saved';\n  if (result === 'saved') return saved;"],
+  'refused write keeps the events': ["  if (result !== 'failed') geodeRestoreCommittedState();\n", ''],
+  'correction saves twice': ['  S.incomeReceipts.push(voidEvent);\n  var receipt', '  S.incomeReceipts.push(voidEvent);\n  save();\n  var receipt'],
+  'receipt writes the activity log': ["  S.incomeReceipts.push(receipt);\n  return geodeIncomeReceiptCommit({ status: 'saved', id: receipt.id });",
+    "  S.incomeReceipts.push(receipt);\n  appendActivityLog('income', 'Income received', receipt.amount);\n  return geodeIncomeReceiptCommit({ status: 'saved', id: receipt.id });"],
+  'void deletes the receipt': ['  S.incomeReceipts.push(voidEvent);\n  return', '  S.incomeReceipts = S.incomeReceipts.filter(function (r) { return r.id !== receiptId; });\n  return'],
+  'list created at load': ['      for (var k in p) S[k] = p[k];\n', '      for (var k in p) S[k] = p[k];\n      if (!Array.isArray(S.incomeReceipts)) S.incomeReceipts = [];\n'],
+  'boundary reads receipts': ['  geodeClearBoundaryHold();\n', '  geodeClearBoundaryHold();\n  if (crossing && Array.isArray(S.incomeReceipts)) S.incomeReceipts = S.incomeReceipts.filter(function (r) { return r.ym >= currentYM(); });\n'],
+  'ledger reads the page state': ['  var list = Array.isArray(events) ? events : [];', '  var list = Array.isArray(events) ? events : (S.incomeReceipts || []);'],
+  'ledger reads the clock': ['  var list = Array.isArray(events) ? events : [];', '  var list = Array.isArray(events) ? events : [];\n  if (!ym) ym = currentYM();'],
+  'ledger rewrites its input': ["    owned[e.id] = receipt ? 'receipt' : 'void';", "    owned[e.id] = receipt ? 'receipt' : 'void';\n    e.counted = true;"],
+  'draft defaults the day': ["  if (!geodeInvestmentIsoDateValid(today)) return { reason: 'invalid_clock' };", "  if (!geodeInvestmentIsoDateValid(today)) return { reason: 'invalid_clock' };\n  if (!draft.date) draft.date = geodeTodayLocalISO();"],
+  'receipt UI wired': ['onclick="openPayModal(null)">+ Schedule contribution', 'onclick="geodeRecordIncomeReceipt({ amount: 1, ym: currentYM() })">+ Schedule contribution'],
+  'outstanding figure': ["    outstanding: null,\n    reason: 'no_income_evidence'\n  };",
+    "    outstanding: Math.max(0, planned - (geodeIncomeReceiptLedger(state.incomeReceipts, currentYM()).month.total || 0)),\n    reason: 'no_income_evidence'\n  };"],
+  'received coverage figure': ["  model.available = { planRemainder: monthlyLeft, receivedCoverage: null, reason: 'no_income_evidence' };",
+    "  model.available = { planRemainder: monthlyLeft, receivedCoverage: model.income.planned ? 1 : null, reason: 'no_income_evidence' };"]
 };
 
 function main() {
