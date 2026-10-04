@@ -1618,8 +1618,12 @@ var _geodeFinancialKeySeen = false;
  */
 var _geodeKnownRaw = null;
 var _geodeKnownRev = null;
-/** P2-1: revision ids only. Kept off uid() so financial event ids stay on their own sequence. */
+/**
+ * P2-1: revision ids only. Kept off uid() so financial event ids stay on their own sequence. P2-10: an id is this page's
+ * writer token plus its counter; the token is new on every page load and is stored only inside the ids it mints.
+ */
 var _geodeRevN = 0;
+var _geodeRevWriter = geodeRevWriterToken();
 /** P2-2: how many times this page has held a month boundary while the investment transition is outstanding. */
 var _geodeBoundaryHoldAttempts = 0;
 var _geodeBoundaryHoldNotice = false;
@@ -1690,24 +1694,36 @@ function geodeFinancialRevFromRaw(raw) {
 /**
  * P2-1: how a stored KEY string that is not the text this page last observed should be treated, once schema
  * checks have already allowed it. 'fenced' — another copy of this fence wrote a new revision: refuse.
- * 'unfenced' — an older runtime wrote (no revision, the same revision id with different text, or an older seq).
+ * 'unfenced' — an older runtime wrote (no revision, an older seq, or this page's own revision carried over unchanged).
+ * P2-10: seq decides before identity — a higher seq is a newer write whatever its id, and at the same seq only the
+ * whole revision this page knows (id, by and at) counts as carried over.
  */
 function geodeClassifyFinancialRevision(raw) {
   var rev = geodeFinancialRevFromRaw(raw);
   if (!rev || !geodeFinancialRevValid(_geodeKnownRev)) return rev ? 'fenced' : 'unfenced';
-  if (rev.id === _geodeKnownRev.id) return 'unfenced';
-  if (rev.seq >= _geodeKnownRev.seq) return 'fenced';
-  return 'unfenced';
+  if (rev.seq > _geodeKnownRev.seq) return 'fenced';
+  if (rev.seq < _geodeKnownRev.seq) return 'unfenced';
+  return rev.id === _geodeKnownRev.id && rev.by === _geodeKnownRev.by && rev.at === _geodeKnownRev.at ? 'unfenced' : 'fenced';
+}
+
+/** P2-10: 16 hex characters for this page load — crypto randomness where the browser has it, Math.random otherwise. */
+function geodeRevWriterToken() {
+  var hex = '';
+  try {
+    if (typeof crypto !== 'undefined' && crypto && typeof crypto.getRandomValues === 'function') {
+      var bytes = crypto.getRandomValues(new Uint8Array(8));
+      for (var i = 0; i < bytes.length; i++) hex += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+    }
+  } catch (e) {
+    hex = '';
+  }
+  while (hex.length < 16) hex += ('000' + Math.floor(Math.random() * 65536).toString(16)).slice(-4);
+  return hex.slice(0, 16);
 }
 
 function geodeFinancialRevId() {
   _geodeRevN += 1;
-  var id = 'rev_' + _geodeRevN;
-  if (_geodeKnownRev && id === _geodeKnownRev.id) {
-    _geodeRevN += 1;
-    id = 'rev_' + _geodeRevN;
-  }
-  return id;
+  return 'rev_' + _geodeRevWriter + '_' + _geodeRevN;
 }
 
 /** Puts the next revision on S. Returns the previous _rev so a failed store can put it back. */

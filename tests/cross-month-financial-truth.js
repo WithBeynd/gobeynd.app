@@ -110,7 +110,7 @@ const PRODUCTION_FUNCTIONS = [
   'geodeSchema2CommitTransition', 'geodeSchema2Transition', 'geodeSchema2RecurringResetDue',
   // release safety: stale-runtime write guard, cross-window detection, shell readiness for the transition
   'geodeStoredSchemaVersion', 'geodeMarkRuntimeStale', 'geodeFinancialRevValid', 'geodeFinancialRevFromRaw',
-  'geodeClassifyFinancialRevision', 'geodeFinancialRevId', 'geodeStampFinancialRev', 'geodeFinancialJsonToStore', 'geodeAcceptFinancialWrite',
+  'geodeClassifyFinancialRevision', 'geodeRevWriterToken', 'geodeFinancialRevId', 'geodeStampFinancialRev', 'geodeFinancialJsonToStore', 'geodeAcceptFinancialWrite',
   // failed-persistence guard (P2-9): the one KEY write of save and persist; a failed write puts S back to the committed text
   'geodeStoreFinancialState', 'geodeNoteCommittedState', 'geodeRestoreCommittedState',
   'geodeNoteFinancialBoot', 'geodeFinancialWriteAllowed',
@@ -135,7 +135,7 @@ const PRODUCTION_FUNCTIONS = [
 
 /** Production top-level constants the extracted base functions read. */
 const BASE_CONSTANTS = ['GEODE_SCHEMA_VERSION', 'BEYND_RUNTIME_VERSION', '_geodeRuntimeStale', '_geodeFinancialKeySeen',
-  '_geodeKnownRaw', '_geodeKnownRev', '_geodeRevN', '_geodeBoundaryHoldAttempts', '_geodeBoundaryHoldNotice',
+  '_geodeKnownRaw', '_geodeKnownRev', '_geodeRevN', '_geodeRevWriter', '_geodeBoundaryHoldAttempts', '_geodeBoundaryHoldNotice',
   '_geodeBoundaryHoldReady', '_geodeFinancialActionOpen', '_geodeFinancialActionSeq', '_geodeBoundaryChangedRows',
   '_geodeCommittedText', '_geodeWriteFailedTask', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
 
@@ -282,6 +282,7 @@ function __reload() {
   _geodeRuntimeStale = ''; _geodeFinancialKeySeen = false; __staleGate = ''; // a reload is a new page
   _geodeBoundaryHoldAttempts = 0; _geodeBoundaryHoldNotice = false; _geodeBoundaryHoldReady = false;
   _geodeFinancialActionOpen = 0; _geodeBoundaryChangedRows = null; _geodeWriteFailedTask = false;
+  _geodeRevN = 0; _geodeRevWriter = geodeRevWriterToken(); // P2-10: a new page's revision counter and writer token
   geodeNoteFinancialBoot(__store);
   S = JSON.parse(__store);
   S._schemaVersion = geodePersistedSchemaVersion(S._schemaVersion);
@@ -816,6 +817,8 @@ const round = v => (typeof v === 'number' ? Math.round(v * 100) / 100 : v);
 const normalise = v => (Array.isArray(v) ? v.map(normalise) : v && typeof v === 'object'
   ? Object.keys(v).sort().reduce((o, k) => { o[k] = normalise(v[k]); return o; }, {}) : round(v));
 const same = (a, b) => JSON.stringify(normalise(a)) === JSON.stringify(normalise(b));
+/** P2-10: a state without its revision id — the writer identity two independently loaded pages never share. seq, by and at stay. */
+const withoutRevId = s => { const c = JSON.parse(JSON.stringify(s)); if (c && c._rev) delete c._rev.id; return c; };
 const show = v => (typeof v === 'number' ? '£' + round(v).toLocaleString('en-GB') : JSON.stringify(v));
 
 function record(status, id, text, detail) { results.push({ scenario: scenarioName, status, id, text, detail: detail || '' }); }
@@ -4056,7 +4059,7 @@ function fa3cb2Boundary() {
       [[[REFUSED_MOVE], true], 'iA', '', '', 0, 0, 0, 0, [1000, 1000, 5200], 3000]);
     amb.reload(); amb.reload(); ambControl.reload(); ambControl.reload();
     invariant('FA3CB2.inv-goal.reload', 'After the refusal and two reloads the state is identical to the same fixture never touched: nothing was stamped, so nothing is seeded',
-      [same(amb.state(), ambControl.state()), amb.events().length, b2View(amb)], [true, 0, [1000, 1000, 5200]]);
+      [same(withoutRevId(amb.state()), withoutRevId(ambControl.state())), amb.events().length, b2View(amb)], [true, 0, [1000, 1000, 5200]]);
 
     const fut = b2Ambiguous(); attempt(fut, b2ToGoal('im'));
     fut.contribute({ name: 'Holiday monthly', amount: 200, date: '2026-08-20', status: 'paid', rec: 'yes', goalId: 'gH' });
@@ -4647,7 +4650,7 @@ function fa3ccCrash() {
       const before = app.run('__store');
       app.run('__storageFault = ' + JSON.stringify(fault) + '; __toasts = [];');
       app.run('__reload()');
-      return { app, before, look: [transitionFailures(app), toasts(app), app.run('__store') === before, app.state()._schemaVersion, same(app.state(), legacy), app.snap().goal] };
+      return { app, before, look: [transitionFailures(app), toasts(app), app.run('__store') === before, app.state()._schemaVersion, same(withoutRevId(app.state()), withoutRevId(legacy)), app.snap().goal] };
     };
     const FAILED = [['storage'], [SAVE_FAILED], true, 1, true, { gH: 1450, gB: 540 }];
     const thrown = failing('throw'), lost = failing('lose');
@@ -6896,6 +6899,312 @@ function p2RevisionFence() {
   });
 }
 
+// P2-10: seq orders revisions before identity is consulted, and every page load mints ids under its own writer token.
+
+function p2RevisionIdentity() {
+  const UNFENCED_LOG = '? [geode] unfenced financial write observed; this write proceeds';
+  const FOREIGN = ['foreign', 'foreign'];
+  const ID = /^rev_([0-9a-f]{16})_(\d+)$/;
+  const pageOn = (raw, clock) => {
+    const app = new App(JSON.parse(raw), clock || '2026-06-05', undefined, { boot: false });
+    app.run('__store = ' + JSON.stringify(raw) + '; __reload();');
+    return app;
+  };
+  const known = app => JSON.parse(app.run('JSON.stringify(_geodeKnownRev)'));
+  const revOf = raw => JSON.parse(raw)._rev;
+  /** Stored schema-3 data whose revision a pre-P2-10 page minted (rev_4, seq 4): the R3 pages then write seq 5, 6 and 7. */
+  const PARENT = () => {
+    const p = JSON.parse(rawStore(schema2App()));
+    p._rev = { seq: 4, id: 'rev_4', by: 'v1.0.78', at: new Date(2026, 5, 4, 12).getTime() };
+    return JSON.stringify(p);
+  };
+  /** from with its revision replaced (null: removed) and income set. */
+  const text = (from, rev, income) => {
+    const p = JSON.parse(from);
+    if (rev === null) delete p._rev; else p._rev = rev;
+    p.income = income;
+    return JSON.stringify(p);
+  };
+  /** The pre-P2-10 classifier and id generator, for the mutation checks. */
+  const OLD_CLASSIFIER = `function (raw) {
+    var rev = geodeFinancialRevFromRaw(raw);
+    if (!rev || !geodeFinancialRevValid(_geodeKnownRev)) return rev ? 'fenced' : 'unfenced';
+    if (rev.id === _geodeKnownRev.id) return 'unfenced';
+    if (rev.seq >= _geodeKnownRev.seq) return 'fenced';
+    return 'unfenced';
+  }`;
+  const OLD_REV_ID = `function () {
+    _geodeRevN += 1;
+    var id = 'rev_' + _geodeRevN;
+    if (_geodeKnownRev && id === _geodeKnownRev.id) { _geodeRevN += 1; id = 'rev_' + _geodeRevN; }
+    return id;
+  }`;
+  const oldClassifier = app => app.run('geodeClassifyFinancialRevision = (' + OLD_CLASSIFIER + ');');
+  const oldRevId = app => app.run('geodeFinancialRevId = (' + OLD_REV_ID + ');');
+
+  /**
+   * The P2-CLOSE-R3 sequence. B writes (seq 5), then misses every storage event. A, loaded from B's text, records a
+   * confirmed £61 Holiday contribution (seq 6), reloads, and saves an income edit (seq 7). Then B saves.
+   * o.mut(app): alters each page. o.force: A's reloaded page takes B's writer token and counter, so its next id equals
+   * the id B knows. o.listen: B hears each of A's writes through the production storage listener.
+   */
+  const r3 = o => {
+    o = o || {};
+    const mut = o.mut || (() => {});
+    const B = pageOn(PARENT());
+    mut(B);
+    if (o.listen) relListen(B);
+    B.run('S.income = 3101; save()');
+    const bRev = known(B);
+    const A = pageOn(rawStore(B));
+    mut(A);
+    const paid = A.contribute({ name: 'Paid in A', amount: 61, date: '2026-06-05', status: 'paid', goalId: 'gH' });
+    const raw6 = rawStore(A);
+    if (o.listen) fireStorage(B, 'geode_v6', raw6);
+    A.run('__reload();');
+    if (o.force) {
+      const m = ID.exec(bRev.id);
+      A.run('_geodeRevWriter = ' + JSON.stringify(m[1]) + '; _geodeRevN = ' + (Number(m[2]) - 1) + ';');
+    }
+    A.run('S.income = 3456; save()');
+    const theirs = rawStore(A), rev7 = revOf(theirs);
+    if (o.listen) fireStorage(B, 'geode_v6', theirs);
+    const staleBefore = staleState(B)[0];
+    foreignStore(B, theirs);
+    const bSave = B.run('S.goals[0].baseSaved = 1700; save()');
+    const after = stored(B);
+    relWarnings(A);
+    return {
+      ids: [bRev.id, revOf(raw6).id, rev7.id], seqs: [bRev.seq, revOf(raw6).seq, rev7.seq], staleBefore,
+      outcome: [bSave, rawStore(B) === theirs, after.payments.some(p => p.id === paid && p.status === 'paid'),
+        (after.contributionEvents || []).filter(e => e.paymentId === paid).length, after.income, after._rev.seq, staleState(B), relWarnings(B)]
+    };
+  };
+  const REFUSED = [['refused', true, true, 1, 3456, 7, FOREIGN, ['stale:foreign']]];
+  const OVERWRITTEN = [['saved', false, false, 0, 3101, 6, ['', ''], [UNFENCED_LOG]]];
+
+  scenario('P2-10 REVISION ORDER — seq decides before identity: the classification truth table', () => {
+    const parent = PARENT();
+    const base = revOf(parent);
+    const legacy = text(parent, null, JSON.parse(parent).income);
+    const rev = o => Object.assign({}, base, o);
+    const CASES = [
+      ['A exact stored text', parent, parent],
+      ['B same id, same seq, by and at (this revision carried over), other text', parent, text(parent, rev({}), 2222)],
+      ['B2 same id, same seq, other at', parent, text(parent, rev({ at: base.at + 1 }), 2222)],
+      ['C same id, higher seq', parent, text(parent, rev({ seq: 7 }), 2222)],
+      ['D same id, lower seq', parent, text(parent, rev({ seq: 3 }), 2222)],
+      ['E other id, higher seq', parent, text(parent, rev({ seq: 5, id: 'rev_other_1' }), 2222)],
+      ['F other id, same seq', parent, text(parent, rev({ id: 'rev_other_1' }), 2222)],
+      ['G other id, lower seq', parent, text(parent, rev({ seq: 3, id: 'rev_other_1' }), 2222)],
+      ['H stored text without a revision', parent, text(parent, null, 2222)],
+      ['H2 page knows no revision, stored has one', legacy, text(legacy, rev({ seq: 1, id: 'rev_other_1' }), 2222)],
+      ['H3 neither has a revision', legacy, text(legacy, null, 2222)],
+      ['I newer schema, same revision', parent, withSchema(text(parent, rev({}), 2222), 4)],
+      ['I2 newer schema, higher seq', parent, withSchema(text(parent, rev({ seq: 9 }), 2222), 4)],
+      ['J KEY removed', parent, null]
+    ];
+    const decided = (page, raw) => raw === null || raw === rawStore(page) || JSON.parse(raw)._schemaVersion !== page.run('S._schemaVersion');
+    const table = CASES.map(([label, from, raw]) => {
+      const page = pageOn(from);
+      const cls = decided(page, raw) ? '-' : (foreignStore(page, raw), page.run('geodeClassifyFinancialRevision(__store)'));
+      foreignStore(page, raw);
+      const result = page.run('S.income = 4321; save()');
+      return [label, cls, result, rawStore(page) === raw, staleState(page)[0], relWarnings(page)];
+    });
+    const saved = l => [l, 'unfenced', 'saved', false, '', [UNFENCED_LOG]];
+    const refused = (l, cls, why) => [l, cls, 'refused', true, why || 'foreign', ['stale:' + (why || 'foreign')]];
+    const L = CASES.map(c => c[0]);
+    invariant('P2.rev.table', 'Exact text: written. A valid stored revision with a higher seq is refused whatever its id (C — the R3 blocker — and E). Same seq: refused unless it is the very revision this page knows, carried over by a writer without the fence (B written and logged, B2 and F refused). Lower seq, or no stored revision, keeps the P2-1 last-writer-wins policy for writers without the fence (D, G, H, H3 written and logged); a page that knows no revision refuses a stored one (H2). Newer schema and a removed KEY are refused before any revision check',
+      table, [[L[0], '-', 'saved', false, '', []], saved(L[1]), refused(L[2], 'fenced'), refused(L[3], 'fenced'), saved(L[4]), refused(L[5], 'fenced'),
+        refused(L[6], 'fenced'), saved(L[7]), saved(L[8]), refused(L[9], 'fenced'), saved(L[10]), refused(L[11], '-', 'newer'), refused(L[12], '-', 'newer'),
+        refused(L[13], '-', 'changed')]);
+
+    const events = CASES.map(([label, from, raw]) => {
+      const page = pageOn(from);
+      page.ctx.__raw = raw;
+      page.run('geodeOnForeignFinancialWrite(__raw)');
+      relWarnings(page);
+      return [label, staleState(page)[0]];
+    });
+    invariant('P2.rev.event', 'The storage listener uses the same classifier: each foreign text stops a page through the event exactly when the page\'s own next write would be refused',
+      events, table.map(r => [r[0], r[4]]));
+  });
+
+  scenario('P2-10 R3 — a page that missed storage events is not aliased by a reloaded writer', () => {
+    const run = r3();
+    const [b, a6, a7] = run.ids.map(id => ID.exec(id));
+    invariant('P2.rev.r3', 'B (seq 5) misses every event; A records the confirmed £61 Holiday contribution (seq 6), reloads and saves an income edit (seq 7) under a new writer token; B\'s save is refused: storage stays byte-identical to A\'s seq-7 text — the paid row, its one contribution event and the income edit kept, seq not moved back — and B shows the reload gate',
+      [run.seqs, !!(b && a6 && a7), a6 && a7 && a6[1] !== a7[1], new Set(run.ids).size, run.outcome], [[5, 6, 7], true, true, 3, REFUSED[0]]);
+
+    const forced = r3({ force: true });
+    invariant('P2.rev.forced', 'Forced collision: A\'s reloaded page is given B\'s writer token and counter, so storage holds the very id B knows at seq 7 against B\'s seq 5. B is still refused and A\'s text kept — the refusal rests on seq, not on ids being random',
+      [forced.seqs, forced.ids[2] === forced.ids[0], forced.outcome], [[5, 6, 7], true, REFUSED[0]]);
+
+    const heard = r3({ listen: true });
+    invariant('P2.rev.r3.event', 'With the storage events delivered, B already stops at A\'s first write; its save is refused the same way',
+      [heard.staleBefore, heard.outcome], ['foreign', REFUSED[0]]);
+  });
+
+  scenario('P2-10 MISSED EVENTS — the next write re-reads storage; the storage event is only a signal', () => {
+    const origin = schema2App();
+    const rent = origin.contribute({ name: 'Rent', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes' });
+    const parent = rawStore(origin);
+    const A = pageOn(parent), B1 = pageOn(parent), B2 = pageOn(parent);
+    A.at('2026-06-10'); A.toggle(rent);
+    A.run('__reload();'); A.run('S.income = 3456; save()');
+    const theirs = rawStore(A);
+    [B1, B2].forEach(b => { b.at('2026-06-10'); foreignStore(b, theirs); });
+    B1.toggle(rent);
+    B2.editPayment(rent, { amount: 120 });
+    const look = b => [rawStore(b) === theirs, staleState(b), relWarnings(b), b.state().payments.filter(p => p.id === rent).map(p => [p.status, p.amount])[0]];
+    invariant('P2.rev.missed', 'A completes Rent, reloads and edits income; neither B page hears it. B1\'s completion and B2\'s edit each re-read storage at admission, are refused before any change (Rent still upcoming £100 in their memory) and leave A\'s text byte-identical',
+      [look(B1), look(B2), stored(A).payments.filter(p => p.id === rent).map(p => p.status)[0], stored(A).income],
+      [[true, FOREIGN, ['stale:foreign'], ['upcoming', 100]], [true, FOREIGN, ['stale:foreign'], ['upcoming', 100]], 'paid', 3456]);
+    relWarnings(A);
+  });
+
+  scenario('P2-10 REVISION IDENTITY — every page load is a new writer; seq only moves forward', () => {
+    const page = pageOn(PARENT());
+    const ids = [], seqs = [];
+    const note = app => { const r = revOf(rawStore(app)); ids.push(r.id); seqs.push(r.seq); };
+    const write = (app, n) => { app.run('S.income = ' + n + '; save()'); note(app); };
+    write(page, 3001); write(page, 3002); write(page, 3003);
+    page.run('__reload();'); write(page, 3004); write(page, 3005);
+    page.run('__reload();'); write(page, 3006);
+    write(pageOn(rawStore(page)), 3007);
+    const parts = ids.map(id => ID.exec(id));
+    const tokens = parts.map(m => m && m[1]);
+    invariant('P2.rev.identity', 'Each new id is rev_<16-hex page token>_<counter>: one page\'s writes share its token and differ by counter; each reload, and another page loaded from the stored text, starts a new token at counter 1; no id repeats',
+      [parts.every(Boolean), parts.map(m => m && Number(m[2])), new Set(tokens).size, tokens[0] === tokens[2], tokens[2] !== tokens[3], tokens[4] !== tokens[5], new Set(ids).size],
+      [true, [1, 2, 3, 1, 2, 1, 1], 4, true, true, true, 7]);
+    invariant('P2.rev.monotonic', 'Seq rises by exactly one on every successful write — from the stored 4 through one page, across two reloads and in a second page that adopted the stored text; no successful write lowers it',
+      seqs, [5, 6, 7, 8, 9, 10, 11]);
+
+    const twins = [pageOn(rawStore(page)), pageOn(rawStore(page))];
+    const many = new Set(), cycler = pageOn(rawStore(page));
+    for (let i = 0; i < 200; i++) { cycler.run('__reload(); S.income = ' + (4000 + i) + '; save()'); many.add(revOf(rawStore(cycler)).id); }
+    invariant('P2.rev.unique', 'Two pages loaded from the same text at the same moment hold different writer tokens; 200 reload-and-write cycles mint 200 different ids',
+      [twins[0].run('_geodeRevWriter') !== twins[1].run('_geodeRevWriter'), many.size], [true, 200]);
+
+    const token = setup => { const t = pageOn(rawStore(page)); t.run(setup); return t.run('geodeRevWriterToken()'); };
+    invariant('P2.rev.token', 'The token is 16 hex characters from crypto.getRandomValues when the browser has it; Math.random fills it when crypto is missing or throws. Timestamps play no part',
+      [token('var crypto = { getRandomValues: function (a) { for (var i = 0; i < a.length; i++) a[i] = i * 17; return a; } };'),
+        token('var crypto = { getRandomValues: function () { throw new Error("no entropy"); } }; Math.random = function () { return 0.5; };'),
+        token('Math.random = function () { return 0.25; };'),
+        token('Math.random = function () { return 0.25; }; __nowMs += 86400000;')],
+      ['0011223344556677', '8000800080008000', '4000400040004000', '4000400040004000']);
+
+    invariant('P2.rev.fidelity', 'The harness runs production\'s token, generator, stamp and classifier unchanged; a page starts as production\'s does (counter 0, a fresh token) and the reload shim starts a new page the same way',
+      [['geodeRevWriterToken', 'geodeFinancialRevId', 'geodeStampFinancialRev', 'geodeClassifyFinancialRevision'].map(n => PROGRAM.extracted.some(f => f.name === n && f.text === extractFunction(PROGRAM.src, n).text)),
+        /var _geodeRevN = 0;\s*var _geodeRevWriter = geodeRevWriterToken\(\);/.test(PROGRAM.src), TEST_SHIMS.indexOf('_geodeRevN = 0; _geodeRevWriter = geodeRevWriterToken();') > 0],
+      [[true, true, true, true], true, true]);
+  });
+
+  scenario('P2-10 OLD REVISION IDS — pre-P2-10 rev_N ids stay readable and seq still orders them', () => {
+    const parent = PARENT();
+    const page = pageOn(parent);
+    const before = known(page);
+    page.run('S.income = 3001; save()');
+    const next = revOf(rawStore(page));
+    const base = revOf(parent);
+    const newer = pageOn(parent), carried = pageOn(parent);
+    foreignStore(newer, text(parent, Object.assign({}, base, { seq: 5 }), 2222)); newer.run('S.income = 1; save()');
+    foreignStore(carried, text(parent, base, 2222)); carried.run('S.income = 1; save()');
+    invariant('P2.rev.old', 'A page that loaded a rev_4 (seq 4) text knows it and writes seq 5 under a new-format id. Against a page that knows rev_4/4: rev_4 at seq 5 is newer and refused; rev_4/4 carried over with other text keeps the P2-1 legacy policy (written, logged). No migration, schema 3',
+      [[before.id, before.seq], [next.seq, ID.test(next.id)], [staleState(newer)[0], relWarnings(newer)], [staleState(carried)[0], relWarnings(carried), stored(carried).income], stored(page)._schemaVersion],
+      [['rev_4', 4], [5, true], ['foreign', ['stale:foreign']], ['', [UNFENCED_LOG], 1], 3]);
+  });
+
+  scenario('P2-10 RACE — localStorage has no compare-and-set; once storage settles the losing page is refused', () => {
+    const parent = PARENT();
+    const race = (forceSameId, listen) => {
+      const C = pageOn(parent), D = pageOn(parent);
+      if (forceSameId) D.run('_geodeRevWriter = ' + JSON.stringify(C.run('_geodeRevWriter')) + '; __nowMs += 1;');
+      if (listen) { relListen(D); relListen(C); }
+      // Both were admitted against the parent text before either write landed: D's setItem first, then C's.
+      const dResult = D.run('S.goals[0].baseSaved = 1300; save()');
+      const dRaw = rawStore(D);
+      const cResult = C.run('S.income = 3333; save()');
+      // As the browser delivers it: C hears D's write only after its own setItem.
+      if (listen) fireStorage(C, 'geode_v6', dRaw);
+      const settled = rawStore(C);
+      const dRev = known(D), cRev = revOf(settled);
+      if (listen) fireStorage(D, 'geode_v6', settled);
+      foreignStore(D, settled);
+      const dNext = D.run('S.income = 3444; save()');
+      const cNext = C.run('S.lastSeenAt = 7; save()');
+      const out = [[dResult, cResult], [dRev.seq, cRev.seq, dRev.id === cRev.id], stored(C).goals[0].baseSaved, dNext, rawStore(D) === settled,
+        stored(C).income, cNext, staleState(D), relWarnings(D), relWarnings(C)];
+      return out;
+    };
+    const plain = race(false), sameId = race(true), heard = race(false, true);
+    const LOST = plain[2];
+    current('P2.limit.race', 'Platform limitation, not repaired (no CAS in localStorage): two pages admitted against the same text before either write lands both write seq 5, and the later setItem (C\'s) replaces the earlier (D\'s Holiday base 1300 is gone from storage)',
+      [plain[0], plain[1].slice(0, 2), LOST], [['saved', 'saved'], [5, 5], 1000]);
+    const after = r => r.slice(3);
+    invariant('P2.rev.race', 'Once storage settles on C\'s text the loser D is refused on its next write (other id, same seq) and C\'s text stays; C keeps writing. With D forced onto C\'s writer token (the same id at the same seq, a different at) D is still refused. With the storage events delivered both pages stop — D on hearing C\'s write, C on hearing D\'s, which arrives after its own write and cannot be ordered against it — so C\'s stored text stays and both reload',
+      [after(plain), sameId[1][2], after(sameId), after(heard)],
+      [['refused', true, 3333, 'saved', FOREIGN, ['stale:foreign'], []], true, ['refused', true, 3333, 'saved', FOREIGN, ['stale:foreign'], []],
+        ['refused', true, 3333, 'refused', FOREIGN, ['stale:foreign'], ['stale:foreign']]]);
+  });
+
+  scenario('P2-10 STALE BEFORE THE BOUNDARY — a newer foreign revision is refused before any month boundary or change (P2-8)', () => {
+    const origin = new App(baseState(), '2026-06-01');
+    const rent = origin.contribute({ name: 'Rent', amount: 80, date: '2026-06-15', status: 'upcoming', rec: 'yes' });
+    origin.at('2026-06-15'); origin.toggle(rent);
+    const parent = rawStore(origin);
+    const foreign = JSON.parse(parent);
+    foreign._rev = Object.assign({}, foreign._rev, { seq: foreign._rev.seq + 2 });
+    foreign.income = 3999;
+    const theirs = JSON.stringify(foreign);
+    const MEM = 'JSON.stringify([S.payments, S.expectationGaps, S.billPaymentEvents, S.contributionEvents, S.income])';
+    const attempt = act => {
+      const page = pageOn(parent, '2026-06-20');
+      foreignStore(page, theirs);
+      page.at('2026-08-03');
+      const before = page.run(MEM);
+      act(page);
+      return [page.run(MEM) === before, rawStore(page) === theirs, staleState(page), relWarnings(page)];
+    };
+    const look = [true, true, FOREIGN, ['stale:foreign']];
+    invariant('P2.rev.boundary', 'A June page with June and July boundaries pending; storage holds the same revision id it knows at a higher seq. Its first act on 3 August — editing Rent, or completing it — is refused at admission: no boundary captured, no row rolled, no edit, storage byte-identical',
+      [attempt(p => p.editPayment(rent, { amount: 150 })), attempt(p => p.toggle(rent))], [look, look]);
+  });
+
+  scenario('P2-10 FAILED WRITES — rollback keeps the committed revision; nothing that failed is resurrected (P2-9)', () => {
+    const page = pageOn(PARENT());
+    page.run('S.income = 3001; save()');
+    const committed = rawStore(page), rev1 = revOf(committed);
+    const fail = fault => {
+      page.run('__storageFault = ' + JSON.stringify(fault) + '; S.income = 9999; S.goals[0].baseSaved = 7777;');
+      const r = page.run('save()');
+      const look = [r, rawStore(page) === committed, page.run('JSON.stringify(S._rev)') === JSON.stringify(rev1), page.run('S.income'),
+        page.run('_geodeKnownRaw === __store'), page.run('_geodeCommittedText') === committed];
+      page.run('__storageFault = ""; __runTimers(); __toasts = [];');
+      return look;
+    };
+    const thrown = fail('throw'), lost = fail('lose');
+    page.run('S.lastSeenAt = 5; save()');
+    const next = stored(page);
+    const FAILED = ['failed', true, true, 3001, true, true];
+    invariant('P2.rev.failed', 'A throwing setItem and a write that does not read back each leave storage, the in-memory revision, knownRaw and the committed text where they were; the next successful write is seq + 1 under a new id and carries neither failed change',
+      [thrown, lost, [next._rev.seq, next._rev.id !== rev1.id, next.income, next.goals[0].baseSaved !== 7777]], [FAILED, FAILED, [rev1.seq + 1, true, 3001, true]]);
+  });
+
+  scenario('P2-10 MUTATIONS — the seq-first classifier and the writer token are each load-bearing', () => {
+    const oldBoth = r3({ mut: app => { oldClassifier(app); oldRevId(app); } });
+    invariant('P2.rev.mut.r3', 'With the pre-P2-10 classifier and page-local rev_N ids together, the R3 sequence reproduces the defect: A\'s reloaded page re-mints the id B knows, B\'s stale save is written, the paid row, its event and the income edit are lost and seq moves back',
+      [oldBoth.ids[2] === oldBoth.ids[0], oldBoth.outcome], [true, OVERWRITTEN[0]]);
+    const oldCls = r3({ force: true, mut: oldClassifier });
+    invariant('P2.rev.mut.classifier', 'The pre-P2-10 classifier alone (matching id → unfenced before seq) loses the same data under the forced collision — the seq-first order is what refuses it',
+      [oldCls.ids[2] === oldCls.ids[0], oldCls.outcome], [true, OVERWRITTEN[0]]);
+    const oldIds = r3({ mut: oldRevId });
+    invariant('P2.rev.mut.ids', 'The pre-P2-10 generator alone collides on reload (the identity coverage catches it: A\'s seq-7 id equals B\'s), and the seq-first classifier still refuses B',
+      [oldIds.ids, oldIds.outcome], [['rev_1', 'rev_2', 'rev_1'], REFUSED[0]]);
+  });
+}
+
 function p1RelOldWriter() {
   scenario('P1-REL OLD WRITER — a v1.0.76 page can still write schema 2 (documented limitation)', () => {
     const f = p1rFixture('P2');
@@ -8519,7 +8828,7 @@ function main() {
   fa7dLinkedGoals();
   p1Close();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
-  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2DebtIdentity(); p2BillSettlement(); p2RevisionFence(); p1RelOldWriter(); p2Expectations();
+  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2DebtIdentity(); p2BillSettlement(); p2RevisionFence(); p2RevisionIdentity(); p1RelOldWriter(); p2Expectations();
   p2Continuity();
   p2ModalClose();
   migrationFixtures();
