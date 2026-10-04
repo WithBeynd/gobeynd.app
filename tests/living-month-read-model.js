@@ -137,12 +137,12 @@ function extractConstant(src, name) {
 }
 
 /** The shims, the foundation and the entry functions' dependency closure; a name nothing defines is an error. */
-function buildProgram(src) {
+function buildProgram(src, extraEntries) {
   const base = SHIMS + '\n' + FOUNDATION + '\n' + CONSTANTS.map(n => extractConstant(src, n)).join('\n') + '\n';
   const probe = vm.createContext({ console: { log() {}, info() {}, warn() {}, error() {} } });
   new vm.Script(base).runInContext(probe);
   const have = new Map();
-  const queue = ENTRY_FUNCTIONS.slice();
+  const queue = ENTRY_FUNCTIONS.concat(extraEntries || []);
   while (queue.length) {
     const n = queue.shift();
     if (have.has(n) || vm.runInContext('typeof ' + n, probe) !== 'undefined') continue;
@@ -332,7 +332,7 @@ function check(id, text, actual, expected) {
 function section(name) { group = name; }
 
 function main() {
-  const program = buildProgram(INDEX);
+  const program = buildProgram(INDEX, ['geodeMonthBaselineFromModel']);
   const ctx = newContext(program);
   const parse = obj => ctx.__parse(JSON.stringify(obj));
   const vmDate = ms => vm.runInContext('new Date(' + ms + ')', ctx);
@@ -348,7 +348,7 @@ function main() {
   const lmSources = INDEX.match(/\nfunction geodeLivingMonth\w+\([\s\S]*?\n\}/g) || [];
   check('static.functions', 'index.html declares the model and its helpers once each',
     lmSources.map(s => s.match(/function (\w+)/)[1]).sort(),
-    ['geodeLivingMonthCalendar', 'geodeLivingMonthEarlierGaps', 'geodeLivingMonthEvidenceIndex', 'geodeLivingMonthExpenses', 'geodeLivingMonthHappened',
+    ['geodeLivingMonthCalendar', 'geodeLivingMonthChanges', 'geodeLivingMonthComponents', 'geodeLivingMonthEarlierGaps', 'geodeLivingMonthEvidenceIndex', 'geodeLivingMonthExpenses', 'geodeLivingMonthHappened',
       'geodeLivingMonthIncome', 'geodeLivingMonthModel', 'geodeLivingMonthPaymentEvidence', 'geodeLivingMonthPaymentItem']);
   const lmText = lmSources.join('\n').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
   check('static.words', 'Model code names no storage, DOM, save, sync, snapshot, confirmed-only figure, activity log or wall clock',
@@ -707,6 +707,33 @@ function main() {
     return canon(model(freeze(fz))) === plain;
   })(), true);
 
+  // P3-4D: the change calculation reads only the supplied state's own month baseline.
+  const baselineOf = raw => JSON.parse(JSON.stringify(ctx.geodeMonthBaselineFromModel(model(parse(raw)), 'month_open', at(2026, 10, 3, 9))));
+  const blRaw = Object.assign(FIXTURES['A.fixed-income'](), { income: 3200, monthBaseline: baselineOf(FIXTURES['A.fixed-income']()) });
+  const blState = parse(blRaw);
+  const blBefore = canon(blState);
+  const blWrites = [];
+  const blModel = model(writeTrap(blState, blWrites));
+  check('purity.changes', 'With a month baseline in the state: changes available (income +£200), no write at any depth, no trap reached, the state and its record deep-equal after',
+    [blModel.changes.available, blModel.changes.components.income.delta, blWrites, trapLog(), canon(blState) === blBefore], [true, 200, [], [], true]);
+  const decoyBl = JSON.parse(JSON.parse(decoyText));
+  decoyBl.monthBaseline = Object.assign({}, blRaw.monthBaseline, { income: 9000, outgoings: 6040, observedAt: at(2026, 10, 2, 9) });
+  vm.runInContext('S = __parse(' + JSON.stringify(JSON.stringify(decoyBl)) + ');', ctx);
+  const blWithDecoy = canon(model(parse(blRaw)).changes);
+  vm.runInContext('S = {};', ctx);
+  check('purity.changes-S', 'The page state S holding another plan and another valid October record changes nothing: changes come from the supplied state\'s record',
+    [blWithDecoy === canon(model(parse(blRaw)).changes), blWithDecoy === canon(blModel.changes)], [true, true]);
+  check('purity.changes-frozen', 'A deep-frozen state and record give the same changes', (function () {
+    const freeze = o => { if (o && typeof o === 'object' && !Object.isFrozen(o)) { Object.freeze(o); Object.keys(o).forEach(k => freeze(o[k])); } return o; };
+    return canon(model(freeze(parse(blRaw))).changes) === canon(blModel.changes);
+  })(), true);
+  const c1 = model(blState).changes, c2 = model(blState).changes;
+  const recordObjects = objectsIn(blState.monthBaseline, new Set());
+  c1.components.income.delta = 0; c1.baseline.kind = 'x';
+  check('purity.changes-fresh', 'Repeated calls return equal, separate objects: mutating one result changes neither the next result nor the record; no result object is the record or part of it',
+    [c1 !== c2, c2.components.income.delta, c2.baseline.kind, canon(blState) === blBefore, [...objectsIn(c2, new Set())].filter(o => recordObjects.has(o)).length],
+    [true, 200, 'month_open', true, 0]);
+
   section('MUTANTS — each impurity is caught by at least one detector');
   const ANCHOR = '  for (var i = 0; i < list.length; i++) {\n    if (!paymentCountsForMonthlyOutflow(list[i])) {';
   if (INDEX.split(ANCHOR).length !== 2) throw new Error('mutant anchor must occur exactly once in index.html');
@@ -755,4 +782,6 @@ function main() {
   process.exit(failed ? 1 : 0);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { INDEX, buildProgram, newContext, extractFunction, calledNames, canon, writeTrap, objectsIn, words, base, bill, paidMonthly, billEvent, expense, at, NOW };

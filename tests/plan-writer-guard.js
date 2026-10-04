@@ -536,8 +536,8 @@ function checksFor(src) {
   const blOwnerOfWrite = [];
   const blWriteRe = /\.\s*monthBaseline\s*=(?!=)/g;
   while ((bm = blWriteRe.exec(M.code))) blOwnerOfWrite.push((M.ownerAt(bm.index) || { name: '(top level)' }).name);
-  check('baseline.readers', 'Only the capture lifecycle names monthBaseline: geodeMonthBaselinePrepare reads it, geodeMonthBaselineStage reads and writes it; no engine, render or top-level code does',
-    [...new Set(blRefs)].sort(), ['geodeMonthBaselinePrepare', 'geodeMonthBaselineStage']);
+  check('baseline.readers', 'Only the capture lifecycle and the change comparison name monthBaseline: geodeMonthBaselinePrepare reads it, geodeMonthBaselineStage reads and writes it, geodeLivingMonthModel hands its supplied state\'s record to the comparison; no engine, render or top-level code does',
+    [...new Set(blRefs)].sort(), ['geodeLivingMonthModel', 'geodeMonthBaselinePrepare', 'geodeMonthBaselineStage']);
   check('baseline.writes', 'One assignment, in geodeMonthBaselineStage; nothing deletes it or writes into it', [blOwnerOfWrite, blWrites], [['geodeMonthBaselineStage'], 1]);
   const body = name => M.noComments.slice(def(name).start, def(name).end);
   const saveCode = body('save'), persistCode = body('persistGeodeToLocalStorage'), prepCode = body('geodePrepareFinancialMutation');
@@ -563,6 +563,23 @@ function checksFor(src) {
   const blDocs = src.slice(src.indexOf('P3-4C month baseline: S.monthBaseline'), def('geodeMonthBaselineStage').end);
   check('baseline.wording', 'Its documentation describes plan figures only: never spent, spending, logged or transaction evidence',
     (blDocs.match(/\bspent\b|spending|\blogged\b|transaction/gi) || []), []);
+
+  section('PLAN CHANGES (P3-4D) — one component derivation; a pure, read-only comparison of the supplied state with its record');
+  const CH_PURE = ['geodeLivingMonthComponents', 'geodeLivingMonthChanges'];
+  check('changes.one-derivation', 'The component arithmetic exists once, in geodeLivingMonthComponents; the baseline constructor and the model both take their components from it',
+    [(M.noComments.match(/paymentsCountedTotal\s*-/g) || []).length, M.ownerAt(M.noComments.indexOf('paymentsCountedTotal - allocations - fromEarlier')).name,
+      (M.noComments.match(/budgetTotal\s*-/g) || []).length, callersOf('geodeLivingMonthComponents')],
+    [1, 'geodeLivingMonthComponents', 1, ['geodeLivingMonthModel', 'geodeMonthBaselineFromModel']]);
+  check('changes.state-argument', 'Only the model calls the comparison, with its own components and the supplied state\'s record — never the page state\'s',
+    [callersOf('geodeLivingMonthChanges'), /model\.changes = geodeLivingMonthChanges\(geodeLivingMonthComponents\(model\), state\.monthBaseline, cal\.ym\);/.test(body('geodeLivingMonthModel')),
+      /(?<![\w$.])S\s*\.\s*monthBaseline/.test(body('geodeLivingMonthModel'))],
+    [['geodeLivingMonthModel'], true, false]);
+  check('changes.pure', 'The derivation and the comparison read no clock, storage, DOM or page state, call no writer, and write nothing into the model, the components or the record',
+    CH_PURE.map(n => [n, /Date\.now|new Date\(|localStorage|document|(?<![\w$.])S\s*[.[]|currentYM\(|(?<![\w$.])(?:save|persistGeodeToLocalStorage|geodeStoreFinancialState|geodeMonthBaselineStage|geodeMonthBaselineCapture)\s*\(|(?:model|current|baseline)\s*(?:\.\s*[\w$]+|\[[^\]]+\])+\s*(?:=(?!=)|\+\+|--|[-+*/]=)/.test(body(n))]),
+    CH_PURE.map(n => [n, false]));
+  const chDocs = src.slice(src.indexOf('P3-4C/P3-4D: the one derivation'), def('geodeLivingMonthChanges').end);
+  check('changes.wording', 'Their documentation describes plan movement only: never spent, spending, logged, transaction, better or worse',
+    (chDocs.match(/\bspent\b|spending|\blogged\b|transaction|\bbetter\b|\bworse\b/gi) || []), []);
 
   section('HANDLERS AND PURE MODULES — no plan write outside the inline functions');
   const handlerWrites = [];
@@ -638,7 +655,11 @@ const MUTANTS = {
     '  geodeEndFinancialAction();\n  geodeMonthBaselineStage(false);\n  return geodeStoreFinancialState();'],
   'capture ignores the open action': ['if (!record && !actionWasOpen) record = geodeMonthBaselineCapture(S);', 'if (!record) record = geodeMonthBaselineCapture(S);'],
   'prepare reads the live state': ['var record = geodeMonthBaselineCapture(JSON.parse(_geodeCommittedText));', 'var record = geodeMonthBaselineCapture(S);'],
-  'constructor reads the clock': ['    observedAt: observedAt,\n    income: model.plan.incomePlanned,', '    observedAt: Date.now(),\n    income: model.plan.incomePlanned,'],
+  'constructor reads the clock': ['    observedAt: observedAt,\n    income: c.income,', '    observedAt: Date.now(),\n    income: c.income,'],
+  'changes read the page baseline': ['state.monthBaseline, cal.ym);', 'S.monthBaseline, cal.ym);'],
+  'changes repair the record': ["  if (!current) return { available: false, reason: 'plan_not_ready' };", "  if (!current) return { available: false, reason: 'plan_not_ready' };\n  baseline.kind = 'first_observed';"],
+  'second copy of the component math': ['    outgoings: c.outgoings,', '    outgoings: model.plan.paymentsCountedTotal - c.allocations - c.fromEarlier,'],
+  'comparison reads the clock': ['  var status = geodeMonthBaselineStatus(baseline, ym);', '  var status = geodeMonthBaselineStatus(baseline, currentYM());'],
   'prepare after the action opens': ['  geodeMonthBaselinePrepare();\n  var token = ++_geodeFinancialActionSeq;', '  var token = ++_geodeFinancialActionSeq;\n  geodeMonthBaselinePrepare();']
 };
 

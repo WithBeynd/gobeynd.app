@@ -298,9 +298,9 @@ function capture() {
     countWrites(page);
     const opened = [takeWrites(page), call(page, 'geodeMonthBaselineStatus(S.monthBaseline, currentYM())'), call(page, 'geodeLivingMonthModel(S, Date.now()).changes')];
     ordinary(page);
-    check('C.october-rev', 'C/D. v1.0.78 opened the September text on 3 October: its own sync rolled October and wrote (revision by v1.0.78, 3 October), carrying the September record unchanged. This runtime opening it on the 8th writes nothing, finds the record older (unused; changes stay no_month_baseline), and its first write records first_observed — the October revision proves nothing about the opening plan',
+    check('C.october-rev', 'C/D. v1.0.78 opened the September text on 3 October: its own sync rolled October and wrote (revision by v1.0.78, 3 October), carrying the September record unchanged. This runtime opening it on the 8th writes nothing, finds the record older (unused; changes unavailable, baseline_month_mismatch), and its first write records first_observed — the October revision proves nothing about the opening plan',
       [oct._rev.by, oct._rev.at === localNoon('2026-10-03'), look(oct.monthBaseline), opened, takeWrites(page), look(storedBl(page))],
-      [OLD_RUNTIME, true, ['2026-09', 'first_observed', SEP], [0, 'older', { available: false, reason: 'no_month_baseline' }], 1, ['2026-10', 'first_observed', OCT]]);
+      [OLD_RUNTIME, true, ['2026-09', 'first_observed', SEP], [0, 'older', { available: false, reason: 'baseline_month_mismatch' }], 1, ['2026-10', 'first_observed', OCT]]);
 
     const lastSept = oldWrite(raw(september()), '2026-09-28', 'S.lastSeenAt = Date.now(); persistGeodeToLocalStorage();');
     const late = pageOver(lastSept, '2026-10-08');
@@ -381,8 +381,8 @@ function capture() {
     ordinary(page); formIncome(page, 3100); page.reload(); page.render();
     const during = [JSON.stringify(storedBl(page)) === novText, call(page, 'geodeMonthBaselineStatus(S.monthBaseline, currentYM())'), call(page, 'geodeLivingMonthModel(S, Date.now()).changes.reason')];
     page.advance('2026-11-02', 'reload'); ordinary(page);
-    check('O.clock-rollback', 'O. Clock moved back: storage holds a November record while the clock says October. It is never used (status future; changes stay no_month_baseline) and never replaced — writes, an action, reload and render keep it byte-identical, and no October record is invented. Back in November it is that month\'s record, unchanged',
-      [during, JSON.stringify(storedBl(page)) === novText], [[true, 'future', 'no_month_baseline'], true]);
+    check('O.clock-rollback', 'O. Clock moved back: storage holds a November record while the clock says October. It is never used (status future; changes unavailable, baseline_month_mismatch) and never replaced — writes, an action, reload and render keep it byte-identical, and no October record is invented. Back in November it is that month\'s record, unchanged',
+      [during, JSON.stringify(storedBl(page)) === novText], [[true, 'future', 'baseline_month_mismatch'], true]);
   });
 
   scenario('P3-4C P/Q — six months away gives only the current month; a new user mid-month is first_observed', () => {
@@ -582,19 +582,22 @@ function exportAndRestore() {
       s._rev = { seq: 2, id: 'rev_z_2', by: OLD_RUNTIME, at: localNoon('2026-09-20') };
       const page = pageOver(JSON.stringify(s), '2026-09-20');
       page.run('S.monthBaseline = ' + (b === undefined ? 'undefined' : JSON.stringify(b)) + ';');
-      const sep = [JSON.parse(page.run('__snapshot()')), call(page, 'geodeLivingMonthModel(S, Date.now())')];
+      const modelApartFromChanges = () => { const m = call(page, 'geodeLivingMonthModel(S, Date.now())'); const c = m.changes; delete m.changes; return [m, c]; };
+      const [sepModel, sepChanges] = modelApartFromChanges();
+      const sep = [JSON.parse(page.run('__snapshot()')), sepModel];
       page.toggle('rent'); page.editPayment('hol', { amount: '150' });
       page.at('2026-10-08'); page.render();
       const st = page.state();
       delete st.monthBaseline; delete st._rev;
-      const model = call(page, 'geodeLivingMonthModel(S, Date.now())');
-      return JSON.stringify([sep, JSON.parse(page.run('__snapshot()')), model, call(page, 'geodeOverdueItems()'), st]);
+      const model = modelApartFromChanges()[0];
+      return { figures: JSON.stringify([sep, JSON.parse(page.run('__snapshot()')), model, call(page, 'geodeOverdueItems()'), st]), changes: sepChanges };
     };
     const all = Object.keys(variants).map(k => outcome(variants[k]));
-    check('Z.invariance', 'Z/§27. The same September state with no record, a valid one, one with different figures, a malformed, a future and an older one: Monthly Left, goals, investments, rows, overdue items, the Living Month model (changes still no_month_baseline), ledgers, expectation gaps and every stored field after a completion, an edit and the October roll are identical',
-      all.map(x => x === all[0]), all.map(() => true));
-    check('Z.changes', 'The model\'s change detection stays unavailable (P3-4D not started): changes = { available: false, reason: no_month_baseline } with a current record present',
-      JSON.parse(all[1])[0][1].changes, { available: false, reason: 'no_month_baseline' });
+    check('Z.invariance', 'Z/§27. The same September state with no record, a valid one, one with different figures, a malformed, a future and an older one: Monthly Left, goals, investments, rows, overdue items, the Living Month model apart from its change comparison, ledgers, expectation gaps and every stored field after a completion, an edit and the October roll are identical',
+      all.map(x => x.figures === all[0].figures), all.map(() => true));
+    check('Z.changes', 'Only the model\'s change comparison (P3-4D) reads the record, and only to compare: in September, none → no_month_baseline; October, changed-figure and December records → baseline_month_mismatch; malformed → invalid_month_baseline; a September record → available (plan movement against it)',
+      all.map(x => (x.changes.available ? 'available' : x.changes.reason)),
+      ['no_month_baseline', 'baseline_month_mismatch', 'baseline_month_mismatch', 'invalid_month_baseline', 'baseline_month_mismatch', 'available']);
   });
 }
 

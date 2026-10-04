@@ -6088,7 +6088,7 @@ function calcMonthlyLeftoverConfirmedOnly(state) {
  * Any status other than 'ready' returns the minimal safe model: calendar fields (when the clock is valid), the
  * structural unknowns (income received/outstanding, received coverage, change) and null for every financial section,
  * because figures read from a state whose boundary is unprocessed, or under another schema, would describe a month
- * that is not this one.
+ * that is not this one. P3-4D: changes compares the ready plan with the supplied state's own month baseline record.
  */
 function geodeLivingMonthModel(state, now) {
   var cal = geodeLivingMonthCalendar(now);
@@ -6113,6 +6113,7 @@ function geodeLivingMonthModel(state, now) {
     model.status = status;
     model.reason = status;
     model.available.reason = status;
+    model.changes.reason = status;
     return model;
   }
   if (!cal) return refuse('invalid_clock');
@@ -6165,6 +6166,7 @@ function geodeLivingMonthModel(state, now) {
   model.expenses = geodeLivingMonthExpenses(state);
   model.happened = geodeLivingMonthHappened(state, cal, index);
   model.earlier = geodeLivingMonthEarlierGaps(state, cal.ym);
+  model.changes = geodeLivingMonthChanges(geodeLivingMonthComponents(model), state.monthBaseline, cal.ym);
   return model;
 }
 
@@ -6309,6 +6311,76 @@ function geodeLivingMonthExpenses(state) {
 }
 
 /**
+ * P3-4C/P3-4D: the one derivation of the month's plan components from a ready Living Month model, used both for the
+ * baseline record and for the current plan it is compared with. income is planned income; fromEarlier the counted
+ * unpaid items due in earlier months; allocations the other counted goal and investment contributions; outgoings the
+ * rest of the counted payments; expensesOneOff the one-off expense plan counted this month; expensesRegular the rest of
+ * the expense plan. Plan figures only, unrounded, reconciling to monthlyLeft. Null unless the model is ready.
+ */
+function geodeLivingMonthComponents(model) {
+  if (!model || !model.month || !model.plan || !model.payments || !model.expenses || model.status !== 'ready') return null;
+  var allocations = 0, fromEarlier = 0, oneOff = 0;
+  model.payments.done.concat(model.payments.ahead).forEach(function (item) {
+    if (item.state === 'outstanding_from_earlier') fromEarlier += item.amount;
+    else if (item.nature === 'allocation') allocations += item.amount;
+  });
+  model.expenses.items.forEach(function (e) {
+    if (e.recurrence === 'one_off') oneOff += e.monthAmount;
+  });
+  return {
+    income: model.plan.incomePlanned,
+    outgoings: model.plan.paymentsCountedTotal - allocations - fromEarlier,
+    allocations: allocations,
+    fromEarlier: fromEarlier,
+    expensesRegular: model.plan.budgetTotal - oneOff,
+    expensesOneOff: oneOff,
+    monthlyLeft: model.plan.monthlyLeft
+  };
+}
+
+/**
+ * P3-4D: how the current month plan differs from the month's baseline record — plan movement only, never money
+ * received, paid out or held. Pure and read-only: `baseline` is the record of the state the model was given, used only
+ * when valid and for month ym; it is never repaired or replaced here. Each delta is current − baseline, unrounded. A
+ * movement under half a penny is no movement; direction describes the plan remainder (monthlyLeft) and nothing more.
+ * Unavailable, with a reason, when there is no record, it is malformed, it belongs to another month, or the deltas do
+ * not reconcile to the Monthly Left delta within £0.005 (no balancing figure is invented).
+ */
+function geodeLivingMonthChanges(current, baseline, ym) {
+  var status = geodeMonthBaselineStatus(baseline, ym);
+  if (status !== 'current') {
+    return { available: false, reason: status === 'absent' ? 'no_month_baseline' : status === 'malformed' ? 'invalid_month_baseline' : 'baseline_month_mismatch' };
+  }
+  if (!current) return { available: false, reason: 'plan_not_ready' };
+  function moved(d) {
+    return Math.abs(d) >= 0.005;
+  }
+  var names = ['income', 'outgoings', 'allocations', 'fromEarlier', 'expensesRegular', 'expensesOneOff'];
+  var components = {};
+  var anyMoved = false;
+  for (var i = 0; i < names.length; i++) {
+    var n = names[i];
+    var d = current[n] - baseline[n];
+    components[n] = { baseline: baseline[n], current: current[n], delta: d, changed: moved(d) };
+    if (components[n].changed) anyMoved = true;
+  }
+  var monthlyLeftDelta = current.monthlyLeft - baseline.monthlyLeft;
+  var implied = components.income.delta - components.outgoings.delta - components.allocations.delta - components.fromEarlier.delta -
+    components.expensesRegular.delta - components.expensesOneOff.delta;
+  if (!(Math.abs(monthlyLeftDelta - implied) <= 0.005)) return { available: false, reason: 'changes_not_reconciled' };
+  var direction = !moved(monthlyLeftDelta) ? 'unchanged' : monthlyLeftDelta > 0 ? 'higher' : 'lower';
+  return {
+    available: true,
+    basis: 'plan',
+    baseline: { kind: baseline.kind, ym: baseline.ym, observedAt: baseline.observedAt },
+    monthlyLeftDelta: monthlyLeftDelta,
+    direction: direction,
+    changed: anyMoved || direction !== 'unchanged',
+    components: components
+  };
+}
+
+/**
  * P3-4C month baseline: S.monthBaseline, the one record of the plan Beynd first recorded for the current month. It is
  * evidence for later change detection only: no financial figure reads it. Every value is the ready Living Month
  * model's own plan figure — income (planned), allocations (counted contributions), fromEarlier (counted unpaid items
@@ -6358,27 +6430,20 @@ function geodeMonthBaselineStatus(b, ym) {
 
 /** P3-4C: a fresh baseline record from a ready Living Month model, or null. Pure: kind and observedAt are given. */
 function geodeMonthBaselineFromModel(model, kind, observedAt) {
-  if (!model || !model.month || !model.plan || !model.payments || !model.expenses || model.status !== 'ready') return null;
-  var allocations = 0, fromEarlier = 0, oneOff = 0;
-  model.payments.done.concat(model.payments.ahead).forEach(function (item) {
-    if (item.state === 'outstanding_from_earlier') fromEarlier += item.amount;
-    else if (item.nature === 'allocation') allocations += item.amount;
-  });
-  model.expenses.items.forEach(function (e) {
-    if (e.recurrence === 'one_off') oneOff += e.monthAmount;
-  });
+  var c = geodeLivingMonthComponents(model);
+  if (!c) return null;
   var b = {
     v: 1,
     ym: model.month.ym,
     kind: kind,
     observedAt: observedAt,
-    income: model.plan.incomePlanned,
-    outgoings: model.plan.paymentsCountedTotal - allocations - fromEarlier,
-    allocations: allocations,
-    fromEarlier: fromEarlier,
-    expensesRegular: model.plan.budgetTotal - oneOff,
-    expensesOneOff: oneOff,
-    monthlyLeft: model.plan.monthlyLeft
+    income: c.income,
+    outgoings: c.outgoings,
+    allocations: c.allocations,
+    fromEarlier: c.fromEarlier,
+    expensesRegular: c.expensesRegular,
+    expensesOneOff: c.expensesOneOff,
+    monthlyLeft: c.monthlyLeft
   };
   return geodeMonthBaselineValid(b) ? b : null;
 }

@@ -137,7 +137,9 @@ const PRODUCTION_FUNCTIONS = [
   'geodeMonthBaselineMonthStart', 'geodeMonthBaselineValid', 'geodeMonthBaselineKind', 'geodeMonthBaselineStatus', 'geodeMonthBaselineFromModel',
   'geodeMonthBaselineCapture', 'geodeMonthBaselinePrepare', 'geodeMonthBaselineStage', 'geodeLivingMonthModel',
   'geodeLivingMonthCalendar', 'geodeLivingMonthIncome', 'geodeLivingMonthEvidenceIndex', 'geodeLivingMonthPaymentItem',
-  'geodeLivingMonthExpenses', 'geodeLivingMonthHappened', 'geodeLivingMonthEarlierGaps', 'geodeLivingMonthPaymentEvidence'
+  'geodeLivingMonthExpenses', 'geodeLivingMonthHappened', 'geodeLivingMonthEarlierGaps', 'geodeLivingMonthPaymentEvidence',
+  // plan changes (P3-4D): the one component derivation and the pure comparison with the month's record
+  'geodeLivingMonthComponents', 'geodeLivingMonthChanges'
 ];
 
 /** Production top-level constants the extracted base functions read. */
