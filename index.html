@@ -31089,7 +31089,7 @@ function geodeFormatAskBeyndContextPostureBlock() {
     lines.push('Context posture: ' + geodeContextPostureLabel(po.posture));
     lines.push('Tone: ' + (po.tone || 'calm'));
     lines.push('Plan strategy: ' + stratWord);
-    lines.push('Income type: ' + incWord);
+    lines.push('Planned income type: ' + incWord);
     lines.push('Income supports others: ' + supportWord);
     if (inputs.realityFeeling) {
       var feelMap = {
@@ -31148,8 +31148,9 @@ function geodeFormatAskBeyndPaoContextBlock(pao) {
 
   lines.push('This picture is built from what they entered; live bank data is not connected.');
 
+  // A passed date with no outcome recorded (including "Needs confirmation") is unknown, never proof of non-payment.
   if (hasOverdue && lines.length < 4) {
-    lines.push('Anything overdue may need attention before suggesting new commitments.');
+    lines.push('Some payments are past their date with no outcome recorded. Do not assume they were unpaid, missed or failed.');
   }
 
   if (lines.length < 4) {
@@ -35518,10 +35519,10 @@ function geodeFormatPlanRationaleContextBlock(snap, sym) {
   if (aff.suggestableRoom != null && isFinite(Number(aff.suggestableRoom))) {
     lines.push('Suggestable plan room: ' + sym + Math.round(toNum(aff.suggestableRoom)));
   }
-  var affCodes = Array.isArray(aff.reasonCodes) ? aff.reasonCodes.slice(0, 6) : [];
+  var affCodes = Array.isArray(aff.reasonCodes) ? aff.reasonCodes.slice(0, 6).map(geodeAskBeyndIncomeCode) : [];
   if (affCodes.length) lines.push('Affordability codes: ' + affCodes.join(', '));
 
-  var cautions = Array.isArray(snap.cautions) ? snap.cautions.slice(0, 8) : [];
+  var cautions = Array.isArray(snap.cautions) ? snap.cautions.slice(0, 8).map(geodeAskBeyndIncomeCode) : [];
   if (cautions.length) lines.push('Cautions: ' + cautions.join(', '));
 
   lines.push(
@@ -35560,9 +35561,28 @@ function geodeFormatPlanRationaleContextBlock(snap, sym) {
   return out;
 }
 
+/** Ask only: the engine's "no_income" covers both a plan income never set and an explicit £0, so say which. */
+function geodeAskBeyndIncomeCode(code) {
+  if (code !== 'no_income') return code;
+  return S.incomeExplicitlySet ? 'planned_income_zero' : 'planned_income_not_set';
+}
+
 /**
- * Stage 77C-B: bounded over-budget spending context for Ask Beynd when leftover is negative.
- * Read-only; uses same flexible category rules as Plan over-budget breakdown.
+ * Ask only: S.income is the plan, never a record of money received. An income never set is "not set", not £0.
+ * The income type is a plan attribute and is only named for a positive planned income.
+ */
+function geodeAskBeyndPlannedIncomeLine(state, sym) {
+  state = state || S;
+  sym = sym != null ? String(sym) : '£';
+  if (!state.incomeExplicitlySet) return 'Planned income: not set';
+  var amt = Math.round(toNum(state.income));
+  if (amt <= 0) return 'Planned income: ' + sym + amt + '/month';
+  return 'Planned income: ' + sym + amt + '/month \u00b7 ' + (state.incomeType === 'irregular' ? 'irregular' : 'stable');
+}
+
+/**
+ * Stage 77C-B: bounded over-budget context for Ask Beynd when the plan leftover is negative.
+ * Read-only; uses same flexible category rules as Plan over-budget breakdown. Every figure here is the plan.
  */
 function geodeFormatAskBeyndSpendingPressureContextBlock(state, sym) {
   state = state || S;
@@ -35577,7 +35597,6 @@ function geodeFormatAskBeyndSpendingPressureContextBlock(state, sym) {
 
   var MAX_BLOCK = 650;
   var over = Math.round(Math.abs(toNum(left)));
-  var income = Math.round(toNum(state.income));
   var expenses = 0;
   var payments = 0;
   try {
@@ -35595,15 +35614,15 @@ function geodeFormatAskBeyndSpendingPressureContextBlock(state, sym) {
   }
 
   var lines = [];
-  lines.push('SPENDING / OVER-BUDGET CONTEXT (read-only; coaching not advice)');
-  lines.push('Monthly income: ' + sym + income);
-  lines.push('Monthly expenses (entered): ' + sym + expenses);
-  lines.push('Monthly payments (scheduled/completed outflow): ' + sym + payments);
+  lines.push('OVER-PLAN CONTEXT (PLAN figures, read-only; coaching not advice)');
+  lines.push(geodeAskBeyndPlannedIncomeLine(state, sym));
+  lines.push('Planned monthly expenses: ' + sym + expenses);
+  lines.push('Planned monthly payments (scheduled and completed): ' + sym + payments);
   lines.push(
-    'Estimated monthly leftover: -' +
+    'Plan leftover this month (estimate): -' +
       sym +
       over +
-      ' (over budget by ' +
+      ' (the plan is over by ' +
       sym +
       over +
       ')'
@@ -35621,9 +35640,9 @@ function geodeFormatAskBeyndSpendingPressureContextBlock(state, sym) {
 
   var flexCats = geodeAskBeyndFlexibleSpendingCategories(state, 5);
   if (!flexCats.length) {
-    lines.push('Flexible spending by category (protected items excluded from this list): none listed');
+    lines.push('Planned flexible expenses by category (protected items excluded from this list): none listed');
   } else {
-    lines.push('Flexible spending by category (protected items excluded from this list):');
+    lines.push('Planned flexible expenses by category (protected items excluded from this list):');
     var ci;
     for (ci = 0; ci < flexCats.length; ci++) {
       lines.push(
@@ -35643,13 +35662,13 @@ function geodeFormatAskBeyndSpendingPressureContextBlock(state, sym) {
     'Assistant rules: Explain pressure using only figures above; do not shame the user.'
   );
   lines.push(
-    'Assistant rules: Do not call protected or "keep in mind" spending bad; suggest reviewing flexible categories first.'
+    'Assistant rules: Do not call protected or "keep in mind" expenses bad; suggest reviewing flexible categories first.'
   );
   lines.push(
     'Assistant rules: Do not invent category totals or merchant-level cuts not listed.'
   );
   lines.push(
-    'Assistant rules: Do not create a new budget; suggest reviewing Plan and Money spending, and refreshing Reality if useful.'
+    'Assistant rules: Do not create a new budget; suggest reviewing planned expenses in Plan and Money.'
   );
   lines.push(
     'Assistant rules: For "what to cut first", name the largest flexible category here gently — not as a command.'
@@ -35666,7 +35685,6 @@ function geodeFormatAskBeyndSpendingPressureContextBlock(state, sym) {
 /** Build a financial summary string for the AI system prompt. No raw transaction names. */
 function geodeBuildCoachingContext() {
   try {
-    var income = Number(S.income) || 0;
     var left   = calcMonthlyLeftover(S);
     var figC   = computeSnapshotFigures();
     var tDebt  = figC.totalDebt;
@@ -35676,7 +35694,6 @@ function geodeBuildCoachingContext() {
     var sym    = S.cur.sym || '£';
     var code   = S.cur.code || 'GBP';
     var net    = figC.netWorth;
-    var incType = S.incomeType === 'irregular' ? 'variable/irregular' : S.incomeType === 'none' ? 'none' : 'stable';
     var deps   = S.hasDependants ? 'Yes — plans for stability.' : 'No';
     var plan   = getMonthPlan();
     var planRationaleBlock = '';
@@ -35747,11 +35764,12 @@ function geodeBuildCoachingContext() {
 
     var ctx = [
       'BEYND USER FINANCIAL CONTEXT (' + code + ')',
+      'How to read this: PLAN is what the user expects or intends (planned income, planned expenses, scheduled payments, plan leftover), not proof that money moved. RECORDED is what the user recorded (completed payments, a balance snapshot they entered). Anything not recorded is UNKNOWN: a payment past its date with no outcome recorded is not unpaid, missed or failed.',
       '',
-      'Income: ' + sym + income + '/month (' + incType + ')',
+      geodeAskBeyndPlannedIncomeLine(S, sym),
       'Dependants: ' + deps,
       'Net worth: ' + sym + Math.round(net),
-      'Monthly spending total: ' + sym + Math.round(tSpend),
+      'Planned monthly expenses: ' + sym + Math.round(tSpend),
       'Plan leftover this month (estimate): ' + sym + Math.round(left),
       '',
       balanceBlock,
