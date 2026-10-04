@@ -600,16 +600,17 @@ function checksFor(src) {
   const rcRe = /incomeReceipts/g;
   let rm;
   while ((rm = rcRe.exec(M.noComments))) rcNamed.push((M.ownerAt(rm.index) || { name: '(top level)' }).name);
-  check('receipts.store', 'Only the three writers name incomeReceipts, in code or in a string: no default, load, boundary, render, engine or top-level code creates, reads or rewrites it',
-    [...new Set(rcNamed)].sort(), RC_WRITERS.slice().sort());
-  check('receipts.closed', 'Nothing outside the receipt family calls any of its functions, and no handler, string or value reference reaches them: no plan, engine, position or screen can reach receipt evidence',
-    [RC_ALL.map(n => [n, callersOf(n).filter(c => RC_ALL.indexOf(c) < 0)]).filter(x => x[1].length), RC_ALL.flatMap(n => refs.get(n).entry)], [[], []]);
+  check('receipts.store', 'Only the three writers and the one Living Month reader (geodeLivingMonthReceipts) name incomeReceipts — besides Happened\'s evidenceSource label (read.happened): no default, load, boundary, render, engine or top-level code creates, reads or rewrites it',
+    [...new Set(rcNamed)].sort(), RC_WRITERS.concat(['geodeLivingMonthReceipts', 'geodeLivingMonthHappened']).sort());
+  check('receipts.closed', 'Outside the receipt family only geodeLivingMonthReceipts calls into it (the ledger), and no handler, string or value reference reaches it: no plan, engine, position or screen can reach receipt evidence',
+    [RC_ALL.map(n => [n, callersOf(n).filter(c => RC_ALL.indexOf(c) < 0)]).filter(x => x[1].length), RC_ALL.flatMap(n => refs.get(n).entry)],
+    [[['geodeIncomeReceiptLedger', ['geodeLivingMonthReceipts']]], []]);
   const RC_ROOTS = ['calcMonthlyLeftover', 'calcMonthlyLeftoverConfirmedOnly', 'sumPaymentsMonthlyOutflow', 'paymentCountsForMonthlyOutflow', 'sumExpensesMonthly',
-    'geodeLivingMonthModel', 'geodeLivingMonthIncome', 'geodeLivingMonthComponents', 'geodeLivingMonthChanges', 'geodeMonthBaselineFromModel', 'geodeMonthBaselineCapture',
+    'geodeLivingMonthIncome', 'geodeLivingMonthComponents', 'geodeLivingMonthChanges', 'geodeMonthBaselineFromModel', 'geodeMonthBaselineCapture',
     'computeAffordabilityContext', 'geodeRecomputeBalancesFromPayments', 'geodeGoalEffectiveSavedFromState', 'geodeInvestmentPosition', 'geodeInvestmentValueEstimated',
     'geodeDebtPaymentSummary', 'geodeMonthDetailView', 'geodeMonthPulseView', 'load', 'syncRecurringPayments', 'geodePrepareFinancialMutation', 'save', 'persistGeodeToLocalStorage'];
-  check('receipts.authority', 'Monthly Left (both), the plan sums, the Living Month model, income and components, the baseline, plan changes, affordability, goal, investment and debt positions, the screens, load, the boundary and the write path name no receipt list or receipt function',
-    RC_ROOTS.filter(n => /incomeReceipts|geodeIncomeReceipt|geodeRecordIncomeReceipt|geodeVoidIncomeReceipt|geodeCorrectIncomeReceipt/.test(body(n))), []);
+  check('receipts.authority', 'Monthly Left (both), the plan sums, Living Month income and components, the baseline, plan changes, affordability, goal, investment and debt positions, the screens, load, the boundary and the write path name no receipt list, receipt function or receipt reader (the model alone calls the reader: P3-5C)',
+    RC_ROOTS.filter(n => /incomeReceipts|geodeIncomeReceipt|geodeRecordIncomeReceipt|geodeVoidIncomeReceipt|geodeCorrectIncomeReceipt|geodeLivingMonthReceipts/.test(body(n))), []);
   const rcAdmitted = RC_WRITERS.map(n => {
     const c = body(n);
     const prepAt = c.indexOf("if (!geodePrepareFinancialMutation()) return { status: 'refused' };");
@@ -627,10 +628,54 @@ function checksFor(src) {
   check('receipts.pure', 'The validators, draft, target and ledger read no clock, page state or storage, call no writer, and write nothing into their inputs (the ledger returns copies)',
     RC_PURE.map(n => [n, /Date\.now|new Date\(\)|currentYM\(|geodeTodayLocalISO\(|(?<![\w$.])S\s*[.[]|localStorage|document|(?<![\w$.])(?:save|persistGeodeToLocalStorage|geodeStoreFinancialState|uid)\s*\(|(?<![\w$.])(?:events|list|input|e|v|r|receipts\[i\]|voids\[i\])\s*(?:\.\s*[\w$]+|\[[^\]]+\])+\s*(?:=(?!=)|\+\+|--|[-+*/]=)/.test(body(n))]),
     RC_PURE.map(n => [n, false]));
-  check('receipts.no-figure', 'No received, outstanding, coverage or available figure exists: income received and outstanding and received coverage are null wherever they are built',
-    [(M.noComments.match(/(?<![\w$])(?:received|outstanding|receivedCoverage)\s*:\s*[^,}\n]+/g) || []).filter(s => s.replace(/^[\w$]+\s*:\s*/, '').trim() !== 'null'),
-      /outstandingIncome|incomeOutstanding|availableNow|receivedTotal|receiptsTotal|receivedCoverage\s*=(?!=)/.test(M.code)],
-    [[], false]);
+  const figureSites = [];
+  const figureRe = /(?<![\w$])(?:received|outstanding|receivedCoverage)\s*:\s*[^,}\n]+/g;
+  let fs2;
+  while ((fs2 = figureRe.exec(M.noComments))) {
+    if (fs2[0].replace(/^[\w$]+\s*:\s*/, '').trim() !== 'null') figureSites.push([(M.ownerAt(fs2.index) || { name: '(top level)' }).name, fs2[0].replace(/\s+/g, ' ').trim()]);
+  }
+  check('receipts.no-figure', 'No outstanding, coverage or available figure exists: outstanding and received coverage are null wherever they are built; the one non-null received is Living Month income\'s, the ledger\'s month total only when receipts are recorded (P3-5C)',
+    [figureSites, /outstandingIncome|incomeOutstanding|availableNow|receivedTotal|receiptsTotal|receivedCoverage\s*=(?!=)/.test(M.code)],
+    [[['geodeLivingMonthIncome', 'received: recorded ? receipts.total : null']], false]);
+
+  section('INCOME RECEIPT READ MODEL (P3-5C) — the Living Month presents the ledger\'s evidence for its month, beside the plan and never in it');
+  const lmBody = body('geodeLivingMonthModel');
+  const readerBody = body('geodeLivingMonthReceipts');
+  check('read.canonical', 'One reader: geodeLivingMonthReceipts reads the supplied state\'s list and returns the canonical ledger\'s month (no loop, filter, sum or void logic of its own); only the model calls it, with its state and its own month',
+    [callersOf('geodeLivingMonthReceipts'), refs.get('geodeLivingMonthReceipts').entry,
+      /^\s*var list = state\.incomeReceipts;\s*if \(list !== undefined && !Array\.isArray\(list\)\) return null;\s*return geodeIncomeReceiptLedger\(list, ym\)\.month;\s*\}\s*$/.test(readerBody.replace(/^function[^{]*\{/, '')),
+      (lmBody.match(/geodeLivingMonthReceipts\([^)]*\)/g) || [])],
+    [['geodeLivingMonthModel'], [], true, ['geodeLivingMonthReceipts(state, cal.ym)']]);
+  const lmReceiptUses = (lmBody.match(/[^\n]*(?<![\w$])receipts(?![\w$])[^\n]*/g) || []).map(s => s.trim());
+  check('read.model-scope', 'In the model, receipt evidence goes only to income and Happened: the plan, available, payments (done and Still ahead), expenses, earlier gaps and changes are built without it; Still ahead holds payment items only',
+    [lmReceiptUses, !/receipt|received/.test(/model\.plan = \{[^}]*\}/.exec(lmBody)[0]),
+      /model\.available = \{ planRemainder: monthlyLeft, receivedCoverage: null, reason: 'no_opening_position' \};/.test(lmBody), (lmBody.match(/ahead\.push\([^)]*\)/g) || []),
+      /received|receipt/.test(lmBody.slice(lmBody.indexOf('var index = '), lmBody.indexOf('model.happened ='))),
+      /model\.earlier = geodeLivingMonthEarlierGaps\(state, cal\.ym\);\s*model\.changes = geodeLivingMonthChanges\(geodeLivingMonthComponents\(model\), state\.monthBaseline, cal\.ym\);\s*return model;/.test(lmBody)],
+    [['var receipts = geodeLivingMonthReceipts(state, cal.ym);', 'model.income = geodeLivingMonthIncome(state, receipts);', 'model.happened = geodeLivingMonthHappened(state, cal, index, receipts);'],
+      true, true, ['ahead.push(item)'], false, true]);
+  check('read.components', 'The P3-4 components read planned income from the plan, never model.income, Happened or receipts',
+    /model\.income\b|happened|receipt|received/.test(body('geodeLivingMonthComponents')), false);
+  check('read.passed-state', 'The reader, income and Happened read the supplied state only — never the page state S, a clock or storage',
+    ['geodeLivingMonthReceipts', 'geodeLivingMonthIncome', 'geodeLivingMonthHappened'].map(n => [n, /(?<![\w$.])S\s*[.[]|Date\.now|new Date\(\)|currentYM\(|geodeTodayLocalISO\(|localStorage|document/.test(body(n))]),
+    ['geodeLivingMonthReceipts', 'geodeLivingMonthIncome', 'geodeLivingMonthHappened'].map(n => [n, false]));
+  const happenedBody = body('geodeLivingMonthHappened');
+  const receiptBlock = (happenedBody.match(/\(receipts \? receipts\.receipts : \[\]\)\.forEach\(function \(r\) \{[\s\S]*?\n {2}\}\);/) || [''])[0];
+  check('read.happened', 'Happened lists each active receipt of the month as it comes from the ledger — one item per receipt, no condition, filter or match against other events; its day is the receipt\'s own date, never recordedAt; it names the list only as its evidenceSource label, never reading it',
+    [!!receiptBlock, /\b(?:if|filter|some|indexOf|find|reduce)\b/.test(receiptBlock.replace(/^[^\n]*\n/, '')), (receiptBlock.match(/out\.push\(/g) || []).length,
+      /eventDate: r\.date \|\| null,/.test(receiptBlock), /(?:eventDate|timeBasis)\s*:[^,]*recordedAt/.test(happenedBody),
+      (happenedBody.match(/[^\s,{(]*incomeReceipts[^\s,})]*/g) || [])],
+    [true, false, 1, true, false, ["'incomeReceipts'"]]);
+  const incomeRecordedOwners = [];
+  const irRe = /'income_recorded'/g;
+  let ir;
+  while ((ir = irRe.exec(M.noComments))) incomeRecordedOwners.push((M.ownerAt(ir.index) || { name: '(top level)' }).name);
+  check('read.identity', 'Only receipts become income_recorded items (Happened), and the detail keeps them out of its list until P3-5D; its other deduplication is by evidence identity (source and id) only',
+    [incomeRecordedOwners, /cited\[e\.evidenceSource \+ '\|' \+ e\.id\]/.test(body('geodeMonthDetailView')), /\.amount\s*===|eventDate\s*===|\.date\s*===/.test(body('geodeMonthDetailView'))],
+    [['geodeLivingMonthHappened', 'geodeMonthDetailView'], true, false]);
+  check('read.no-gap', 'No expectation gap comes from income: the gap capture, occurrences and the earlier-gap summary name no income or receipt',
+    ['geodeCaptureExpectationGaps', 'geodeExpectationOccurrences', 'geodeExpectationOccurrenceStatus', 'geodeLivingMonthEarlierGaps']
+      .filter(n => /income|receipt|received/i.test(body(n))), []);
 
   section('HANDLERS AND PURE MODULES — no plan write outside the inline functions');
   const handlerWrites = [];
@@ -744,10 +789,27 @@ const MUTANTS = {
   'ledger rewrites its input': ["    owned[e.id] = receipt ? 'receipt' : 'void';", "    owned[e.id] = receipt ? 'receipt' : 'void';\n    e.counted = true;"],
   'draft defaults the day': ["  if (!geodeInvestmentIsoDateValid(today)) return { reason: 'invalid_clock' };", "  if (!geodeInvestmentIsoDateValid(today)) return { reason: 'invalid_clock' };\n  if (!draft.date) draft.date = geodeTodayLocalISO();"],
   'receipt UI wired': ['onclick="openPayModal(null)">+ Schedule contribution', 'onclick="geodeRecordIncomeReceipt({ amount: 1, ym: currentYM() })">+ Schedule contribution'],
-  'outstanding figure': ["    outstanding: null,\n    reason: 'no_income_evidence'\n  };",
-    "    outstanding: Math.max(0, planned - (geodeIncomeReceiptLedger(state.incomeReceipts, currentYM()).month.total || 0)),\n    reason: 'no_income_evidence'\n  };"],
-  'received coverage figure': ["  model.available = { planRemainder: monthlyLeft, receivedCoverage: null, reason: 'no_income_evidence' };",
-    "  model.available = { planRemainder: monthlyLeft, receivedCoverage: model.income.planned ? 1 : null, reason: 'no_income_evidence' };"]
+  'outstanding figure': ['    outstanding: null,\n    reason: !receipts', '    outstanding: Math.max(0, planned - (geodeIncomeReceiptLedger(state.incomeReceipts, currentYM()).month.total || 0)),\n    reason: !receipts'],
+  'received coverage figure': ["  model.available = { planRemainder: monthlyLeft, receivedCoverage: null, reason: 'no_opening_position' };",
+    "  model.available = { planRemainder: monthlyLeft, receivedCoverage: model.income.planned ? 1 : null, reason: 'no_opening_position' };"],
+  'received is planned income': ['    received: recorded ? receipts.total : null,', '    received: recorded ? toNum(S.income) : null,'],
+  'received 0 without evidence': ['    received: recorded ? receipts.total : null,', '    received: recorded ? receipts.total : 0,'],
+  'received is plan minus receipts': ['    received: recorded ? receipts.total : null,', '    received: recorded ? planned - receipts.total : null,'],
+  'receipts change Monthly Left': ['  var receipts = geodeLivingMonthReceipts(state, cal.ym);\n', '  var receipts = geodeLivingMonthReceipts(state, cal.ym);\n  if (receipts && receipts.count) monthlyLeft += receipts.total;\n'],
+  'receipts change the plan income': ['    incomePlanned: incomePlanned,\n    incomeType', '    incomePlanned: incomePlanned + (receipts && receipts.total || 0),\n    incomeType'],
+  'receipts in the components': ['    income: model.plan.incomePlanned,', '    income: model.income.received != null ? model.income.received : model.plan.incomePlanned,'],
+  'receipt in Still ahead': ['  model.payments = { countedTotal:', "  if (receipts) receipts.receipts.forEach(function (r) { ahead.push({ id: r.id, amount: r.amount, state: 'scheduled' }); });\n  model.payments = { countedTotal:"],
+  'planned income in Still ahead': ['  model.payments = { countedTotal:', "  if (incomePlanned > 0) ahead.push({ id: 'income', amount: incomePlanned, state: 'scheduled' });\n  model.payments = { countedTotal:"],
+  'income expectation gap': ['  return { basis: \'evidence_only\', gapCount: count, gapMonths: Object.keys(months).sort() };', "  if (toNum(state.income) > 0) { count++; months[ym] = true; }\n  return { basis: 'evidence_only', gapCount: count, gapMonths: Object.keys(months).sort() };"],
+  'void as negative income': ['  (receipts ? receipts.receipts : []).forEach(function (r) {', "  geodeIncomeReceiptLedger(state.incomeReceipts).voids.forEach(function (v) { out.push({ id: v.id, type: 'income_recorded', amount: -1, recordedAt: v.recordedAt }); });\n  (receipts ? receipts.receipts : []).forEach(function (r) {"],
+  'recordedAt as the receipt day': ['eventDate: r.date || null,', 'eventDate: r.date || geodeDateToLocalISO(new Date(r.recordedAt)),'],
+  'reader uses the page state': ['  var list = state.incomeReceipts;', '  var list = S.incomeReceipts;'],
+  'direct sum bypasses the ledger': ['  return geodeIncomeReceiptLedger(list, ym).month;', "  var rs = (list || []).filter(function (r) { return r && r.ym === ym; });\n  return { ym: ym, total: rs.reduce(function (t, r) { return t + r.amount; }, 0), count: rs.length, receipts: rs };"],
+  'Happened collapses receipts': ['  (receipts ? receipts.receipts : []).forEach(function (r) {', "  (receipts && receipts.count ? [{ id: 'income_' + receipts.ym, amount: receipts.total, recordedAt: 0, source: 'manual' }] : []).forEach(function (r) {"],
+  'release read as a receipt': ["      id: String(r.id || ''), type: 'release',", "      id: String(r.id || ''), type: r.reason === 'income' ? 'income_recorded' : 'release',"],
+  'receipt matched by amount': ['  (receipts ? receipts.receipts : []).forEach(function (r) {', '  (receipts ? receipts.receipts : []).filter(function (r) { return !out.some(function (e) { return e.amount === r.amount; }); }).forEach(function (r) {'],
+  'detail lists receipts': ["return e && e.type !== 'income_recorded' && !cited[", 'return e && !cited['],
+  'another reader of the list': ['function geodeLivingMonthIncome(state, receipts) {\n', 'function geodeLivingMonthIncome(state, receipts) {\n  if (Array.isArray(state.incomeReceipts) && !receipts) receipts = geodeIncomeReceiptLedger(state.incomeReceipts, currentYM()).month;\n']
 };
 
 function main() {

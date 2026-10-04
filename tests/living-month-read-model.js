@@ -349,7 +349,7 @@ function main() {
   check('static.functions', 'index.html declares the model and its helpers once each',
     lmSources.map(s => s.match(/function (\w+)/)[1]).sort(),
     ['geodeLivingMonthCalendar', 'geodeLivingMonthChanges', 'geodeLivingMonthComponents', 'geodeLivingMonthEarlierGaps', 'geodeLivingMonthEvidenceIndex', 'geodeLivingMonthExpenses', 'geodeLivingMonthHappened',
-      'geodeLivingMonthIncome', 'geodeLivingMonthModel', 'geodeLivingMonthPaymentEvidence', 'geodeLivingMonthPaymentItem']);
+      'geodeLivingMonthIncome', 'geodeLivingMonthModel', 'geodeLivingMonthPaymentEvidence', 'geodeLivingMonthPaymentItem', 'geodeLivingMonthReceipts']);
   const lmText = lmSources.join('\n').replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
   check('static.words', 'Model code names no storage, DOM, save, sync, snapshot, confirmed-only figure, activity log or wall clock',
     ['localStorage', 'sessionStorage', 'document', 'window', 'save(', 'persistGeodeToLocalStorage', 'syncRecurringPayments', 'lastSnapshot',
@@ -395,9 +395,9 @@ function main() {
     check(id + '.budget', 'Budget total === sumExpensesMonthly(state.expenses); every expense line is plan',
       [m.expenses.budgetTotal === ctx.sumExpensesMonthly(state.expenses), m.plan.budgetTotal === m.expenses.budgetTotal,
         m.expenses.items.every(e => e.basis === 'plan'), m.expenses.basis], [true, true, true, 'plan']);
-    check(id + '.unknowns', 'Income received / outstanding and received coverage are null (not 0); change has no baseline',
+    check(id + '.unknowns', 'No receipt recorded (none_recorded): income received / outstanding and received coverage are null (not 0) — coverage has no opening position; change has no baseline',
       [m.income.state, m.income.received, m.income.outstanding, m.available.receivedCoverage, m.available.reason, m.changes.available, m.changes.reason],
-      ['not_tracked', null, null, null, 'no_income_evidence', false, 'no_month_baseline']);
+      ['none_recorded', null, null, null, 'no_opening_position', false, 'no_month_baseline']);
     const noGaps = parse(Object.assign({}, raw, { expectationGaps: [] }));
     const mg = model(noGaps, opts.now);
     check(id + '.gaps-inert', 'Removing every expectation gap changes no figure, partition, budget or availability',
@@ -680,9 +680,9 @@ function main() {
       smartImportLearned: { lastIncomeAmount: inc.income, lastIncomeDate: '2026-10-01' },
       lastSnapshot: { leftThisMonth: 999, totalDebt: 0, totalSaved: 0, totalInvestments: 0, netWorth: 0 }
     }))));
-    check('income.' + id, 'Planned and type only; received, outstanding and received coverage null despite an income log entry and import history',
+    check('income.' + id, 'Planned and type only; an income log entry and import history are not receipts: none recorded, received, outstanding and received coverage null',
       [im.income.type, im.income.certainty, im.income.planned, im.income.received, im.income.outstanding, im.available.receivedCoverage, im.income.state],
-      exp.concat([null, null, null, 'not_tracked']));
+      exp.concat([null, null, null, 'none_recorded']));
   });
 
   section('PURITY — S, repeat calls, output independence');

@@ -5937,6 +5937,8 @@ function calcMonthlyLeftoverConfirmedOnly(state) {
  * structural unknowns (income received/outstanding, received coverage, change) and null for every financial section,
  * because figures read from a state whose boundary is unprocessed, or under another schema, would describe a month
  * that is not this one. P3-4D: changes compares the ready plan with the supplied state's own month baseline record.
+ * P3-5C: income and happened present the supplied state's receipt evidence for this month (geodeLivingMonthReceipts);
+ * evidence only — the plan, payments, expenses, available, the components and changes never read it.
  */
 function geodeLivingMonthModel(state, now) {
   var cal = geodeLivingMonthCalendar(now);
@@ -5950,7 +5952,7 @@ function geodeLivingMonthModel(state, now) {
       : null,
     plan: null,
     income: { state: 'not_tracked', planned: null, explicitlySet: null, type: null, certainty: null, received: null, outstanding: null, reason: 'no_income_evidence' },
-    available: { planRemainder: null, receivedCoverage: null, reason: 'no_income_evidence' },
+    available: { planRemainder: null, receivedCoverage: null, reason: 'no_opening_position' },
     payments: null,
     expenses: null,
     happened: null,
@@ -5975,7 +5977,8 @@ function geodeLivingMonthModel(state, now) {
   var paymentsCountedTotal = sumPaymentsMonthlyOutflow(state.payments || []);
   var budgetTotal = sumExpensesMonthly(state.expenses || []);
   var monthlyLeft = calcMonthlyLeftover(state);
-  model.income = geodeLivingMonthIncome(state);
+  var receipts = geodeLivingMonthReceipts(state, cal.ym);
+  model.income = geodeLivingMonthIncome(state, receipts);
   model.plan = {
     basis: 'plan',
     incomePlanned: incomePlanned,
@@ -5984,7 +5987,7 @@ function geodeLivingMonthModel(state, now) {
     budgetTotal: budgetTotal,
     monthlyLeft: monthlyLeft
   };
-  model.available = { planRemainder: monthlyLeft, receivedCoverage: null, reason: 'no_income_evidence' };
+  model.available = { planRemainder: monthlyLeft, receivedCoverage: null, reason: 'no_opening_position' };
 
   var index = geodeLivingMonthEvidenceIndex(state);
   var list = state.payments || [];
@@ -6012,7 +6015,7 @@ function geodeLivingMonthModel(state, now) {
   }
   model.payments = { countedTotal: paymentsCountedTotal, doneTotal: doneTotal, aheadTotal: aheadTotal, done: done, ahead: ahead, unplaced: unplaced };
   model.expenses = geodeLivingMonthExpenses(state);
-  model.happened = geodeLivingMonthHappened(state, cal, index);
+  model.happened = geodeLivingMonthHappened(state, cal, index, receipts);
   model.earlier = geodeLivingMonthEarlierGaps(state, cal.ym);
   model.changes = geodeLivingMonthChanges(geodeLivingMonthComponents(model), state.monthBaseline, cal.ym);
   return model;
@@ -6028,21 +6031,36 @@ function geodeLivingMonthCalendar(now) {
 }
 
 /**
- * P3-1: the income plan only. Receipt evidence (P3-5B, S.incomeReceipts) is not read here, so reality is not_tracked: received and outstanding stay
- * null (0 would claim evidence). type mirrors geodeGetIncomeContext without its in-place normalisation of S.
+ * P3-5C: this month's receipt evidence in the supplied state, as the one receipt ledger gives it ({ ym, total, count,
+ * receipts }: active receipts of month ym, copies), or null when the stored field exists but is not a list — unreadable,
+ * never repaired here and never read as "none recorded". Absent or empty is a month with no receipt recorded.
  */
-function geodeLivingMonthIncome(state) {
+function geodeLivingMonthReceipts(state, ym) {
+  var list = state.incomeReceipts;
+  if (list !== undefined && !Array.isArray(list)) return null;
+  return geodeIncomeReceiptLedger(list, ym).month;
+}
+
+/**
+ * P3-1: the income plan, beside P3-5C's receipt evidence for the month (`receipts`, from geodeLivingMonthReceipts).
+ * state: 'recorded' (received is the ledger's total of this month's active receipts), 'none_recorded' (Beynd holds no
+ * active receipt for this month — not £0 received, so received stays null) or 'unavailable' (the stored evidence is
+ * unreadable). Planned and received stay separate: outstanding is always null, because nothing says when or whether
+ * planned income will arrive. type mirrors geodeGetIncomeContext without its in-place normalisation of S.
+ */
+function geodeLivingMonthIncome(state, receipts) {
   var planned = toNum(state.income);
   var type = !state.incomeExplicitlySet || planned <= 0 ? 'none' : state.incomeType === 'irregular' ? 'irregular' : 'stable';
+  var recorded = !!receipts && receipts.count > 0;
   return {
-    state: 'not_tracked',
+    state: !receipts ? 'unavailable' : recorded ? 'recorded' : 'none_recorded',
     planned: planned,
     explicitlySet: !!state.incomeExplicitlySet,
     type: type,
     certainty: type === 'none' ? 'no_income_plan' : type + '_plan',
-    received: null,
+    received: recorded ? receipts.total : null,
     outstanding: null,
-    reason: 'no_income_evidence'
+    reason: !receipts ? 'receipt_evidence_unreadable' : recorded ? 'receipts_recorded' : 'no_receipt_recorded'
   };
 }
 
@@ -6364,8 +6382,11 @@ function geodeMonthBaselineStage(actionWasOpen) {
  * set only where the record carries a date of its own (a release's date, a valuation's as-of date).
  * P3-3: paymentName / entityName are display labels only — the row's or entity's current name, else the name the event
  * recorded, else null.
+ * P3-5C: each active receipt of this month (`receipts`, from geodeLivingMonthReceipts) is its own income_recorded item,
+ * identified by its receipt id — never merged with another receipt or matched to any other event. eventDate is the
+ * receipt's own date (timeBasis received_date), else null (received_month: no day is invented); label is display text.
  */
-function geodeLivingMonthHappened(state, cal, index) {
+function geodeLivingMonthHappened(state, cal, index, receipts) {
   var userSources = { mark_completed: true, payment_form: true, smart_import: true };
   var systemSources = { migration: true, rollover_safety_net: true };
   var out = [];
@@ -6421,6 +6442,15 @@ function geodeLivingMonthHappened(state, cal, index) {
         timeBasis: 'valuation_date', recordedBy: 'user', evidenceSource: 'valuations', origin: v.source,
         paymentName: null, entityName: String(inv.name || '') || null
       });
+    });
+  });
+
+  (receipts ? receipts.receipts : []).forEach(function (r) {
+    out.push({
+      id: r.id, type: 'income_recorded', domain: 'income', amount: r.amount, value: null, paymentId: null, entityId: null,
+      occurrenceYm: null, occurrenceInMonth: true, eventDate: r.date || null, recordedAt: r.recordedAt,
+      timeBasis: r.date ? 'received_date' : 'received_month', recordedBy: 'user', evidenceSource: 'incomeReceipts', origin: r.source,
+      paymentName: null, entityName: null, label: r.label || null
     });
   });
 
@@ -38676,6 +38706,7 @@ function geodeMonthChangeView(changes) {
  * evidenceSource and id) is that item and is not listed again — an event cited by an unplaced item stays with that
  * item. Releases and valuations are listed, never totalled. Still ahead is payments.ahead (totalling aheadTotal).
  * Payment items are ordered by the due date the model gives (none last); events keep the model's order.
+ * P3-5C: income receipt items stay in the model until P3-5D gives them their own wording; they are not listed here.
  */
 function geodeMonthDetailView(model) {
   if (!model || model.status !== 'ready' || !model.payments) return null;
@@ -38698,7 +38729,7 @@ function geodeMonthDetailView(model) {
   return {
     done: byDueDate(payments.done),
     doneTotal: payments.doneTotal,
-    also: (model.happened || []).filter(function (e) { return e && !cited[e.evidenceSource + '|' + e.id]; }),
+    also: (model.happened || []).filter(function (e) { return e && e.type !== 'income_recorded' && !cited[e.evidenceSource + '|' + e.id]; }),
     ahead: byDueDate(payments.ahead),
     aheadTotal: payments.aheadTotal,
     unplaced: (payments.unplaced || []).slice(),
@@ -38837,7 +38868,8 @@ function geodeMonthDetailHtml(d) {
 /**
  * P3-2: the Month Pulse surface, or '' without a view. The remainder is Monthly Left — a plan figure, never cash, a
  * balance or money that is safe to spend. Completed / still ahead are the model's done / ahead totals of scheduled
- * payments and contributions, not spending. Income received is not evidenced before P3-5, so no received figure is shown.
+ * payments and contributions, not spending. No received figure is shown: the not-tracked note appears only while the
+ * model has no received total (P3-5C: a recorded receipt withdraws it; P3-5D owns any receipt wording).
  * opts.dueShownElsewhere: Home's needs-attention card already lists the due items.
  * P3-4E: one plan-change cue when the remainder moved — the change view's, never a figure formed here.
  */

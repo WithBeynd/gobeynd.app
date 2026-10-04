@@ -138,6 +138,7 @@ const PRODUCTION_FUNCTIONS = [
   'geodeMonthBaselineCapture', 'geodeMonthBaselinePrepare', 'geodeMonthBaselineStage', 'geodeLivingMonthModel',
   'geodeLivingMonthCalendar', 'geodeLivingMonthIncome', 'geodeLivingMonthEvidenceIndex', 'geodeLivingMonthPaymentItem',
   'geodeLivingMonthExpenses', 'geodeLivingMonthHappened', 'geodeLivingMonthEarlierGaps', 'geodeLivingMonthPaymentEvidence',
+  'geodeLivingMonthReceipts',
   // plan changes (P3-4D): the one component derivation and the pure comparison with the month's record
   'geodeLivingMonthComponents', 'geodeLivingMonthChanges',
   // income receipt evidence (P3-5B): validators, the one ledger and its admitted writers; nothing financial reads it

@@ -512,7 +512,7 @@ function checksFor(src) {
 // ───────────────────────────── mutants ─────────────────────────────
 
 const MUTANTS = {
-  'no deduplication': ["return e && !cited[e.evidenceSource + '|' + e.id];", 'return !!e;'],
+  'no deduplication': ["return e && e.type !== 'income_recorded' && !cited[e.evidenceSource + '|' + e.id];", "return !!e && e.type !== 'income_recorded';"],
   'unplaced citations ignored': ['[payments.done || [], payments.unplaced || []].forEach', '[payments.done || []].forEach'],
   'release totalled in the column': ["meta(['release', day]), null);", "meta(['release', day]), e.amount);"],
   'valuation shown as a gain': ["' value recorded at ' + fm(e.value)", "' +' + fm(e.value)"],

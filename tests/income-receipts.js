@@ -495,18 +495,25 @@ const VARIANTS = {
   future: p => p.run('S.incomeReceipts = ' + J(FUTURE) + '; persistGeodeToLocalStorage();')
 };
 
-/** Everything financial the page shows or stores, apart from the receipt list and the revision stamp. */
+/**
+ * Everything financial the page shows or stores, apart from the receipt list and the revision stamp. P3-5C presents
+ * receipt evidence in the model (income state, received and reason; income_recorded items in happened): those parts
+ * are left out here and tested in tests/income-receipt-read-model.js. Everything else in the model must not move.
+ */
 function figures(page) {
   const st = page.state();
   delete st.incomeReceipts;
   delete st._rev;
+  const model = json(page, 'geodeLivingMonthModel(S, Date.now())');
+  if (model.income) { delete model.income.state; delete model.income.received; delete model.income.reason; }
+  if (Array.isArray(model.happened)) model.happened = model.happened.filter(e => e.type !== 'income_recorded');
   return J({
     state: st,
     left: json(page, 'calcMonthlyLeftover(S)'),
     confirmed: json(page, 'calcMonthlyLeftoverConfirmedOnly(S)'),
     payments: json(page, 'sumPaymentsMonthlyOutflow(S.payments)'),
     expenses: json(page, 'sumExpensesMonthly(S.expenses)'),
-    model: json(page, 'geodeLivingMonthModel(S, Date.now())'),
+    model,
     components: json(page, 'geodeLivingMonthComponents(geodeLivingMonthModel(S, Date.now()))'),
     snapshot: JSON.parse(page.run('__snapshot()')),
     debt: st.debts.map(d => d.balance),
@@ -536,7 +543,7 @@ function invariance() {
     const all = names.map(n => invarianceRun(n));
     const afford = JSON.parse(all[0][0]).afford;
     check('AP.reached', 'The affordability engine itself runs here (its real code, with every function it reaches): plan room £1,340 from income £3,000', [afford.planRoom, afford.income], [1340, 3000]);
-    check('AN-AQ.now', 'AN/AO/AP/AQ/§29. No receipts, one, several, a voided one, a corrected one, a past-month one, evidence from a later runtime: Monthly Left, the confirmed-only remainder, payment and expense totals, the Living Month model (its change comparison included), the P3-4 components and baseline, goals, investments, debts, affordability and every stored field but the receipt list are identical',
+    check('AN-AQ.now', 'AN/AO/AP/AQ/§29. No receipts, one, several, a voided one, a corrected one, a past-month one, evidence from a later runtime: Monthly Left, the confirmed-only remainder, payment and expense totals, the Living Month model apart from its receipt evidence (plan, available, payments, expenses, other events, outstanding and its change comparison included), the P3-4 components and baseline, goals, investments, debts, affordability and every stored field but the receipt list are identical',
       names.map((n, i) => [n, all[i][0] === all[0][0]]), names.map(n => [n, true]));
     check('AN-AQ.after', 'And after the same completion, edit and November reload', names.map((n, i) => [n, all[i][1] === all[0][1]]), names.map(n => [n, true]));
   });
