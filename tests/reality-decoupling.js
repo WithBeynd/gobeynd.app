@@ -259,7 +259,7 @@ function gate() {
     const run = v => JSON.parse(page(ML500(VARIANTS[v])).run('__gate()'));
     const none = run('none');
     check('O.opens', 'O. A gated step opens the check once, from the plan; nothing runs until the user continues', [none.first.ran, /Continue with this amount/.test(none.first.html), /This step comes from your monthly plan, not your bank\./.test(none.first.html)], [0, true, true]);
-    check('O.copy', 'O. The gate never asks for or mentions a balance', [/balance|reality check|add my/i.test(none.first.html)], [false]);
+    check('O.copy', 'O. The gate never asks for a balance, and with no Reality timing note (P3-6R, tests/reality-action-guidance.js) never mentions one', [/balance|reality check|add my/i.test(none.first.html)], [false]);
     check('O.yes', 'O. Continue runs the step once, remembers OK and closes the check', none.yes, { ran: 1, ok: '1', open: false });
     check('O.again', 'O. The remembered OK is trusted next time without reopening the check', none.again, { ran: 2, open: false });
     check('O.notSure', 'O. Not sure yet closes without running or remembering', none.notSure, { ran: 2, open: false, ok: null });

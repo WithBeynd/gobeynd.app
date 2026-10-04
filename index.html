@@ -28859,6 +28859,12 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     } else {
       h += '<div data-geode-css="font-size:18px;font-weight:800;color:#9b7fe8">' + fm(amt) + '</div>';
     }
+    if (_showPlanTargetFraming && _maBtnTier !== 'secondary') {
+      h +=
+        '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.82);line-height:1.4;margin-top:-6px">' +
+        escHtmlLite(geodeHomePlanFitLine(window._geodeMainActionGate.guidance)) +
+        '</div>';
+    }
   }
   if (_maBtnTier === 'secondary') {
     h +=
@@ -29254,7 +29260,8 @@ function geodeAffordGateBuildForPlanMoneyAction(amount, cta, sigFam) {
       needsAffordGate: true,
       amount: amt,
       cta: _ctaAff,
-      sig: _sigKey
+      sig: _sigKey,
+      guidance: geodeRealityActionGuidance(amt)
     };
   } catch (_eAb) {
     return null;
@@ -29293,6 +29300,68 @@ function geodeAffordabilityRealityLine() {
   return 'This step comes from your monthly plan, not your bank.';
 }
 
+/**
+ * P3-6R: whether what the user told Beynd about today gives a reason to qualify WHEN to act on a plan step of `amount`.
+ * Timing only: it never changes the amount, the plan or its order, never subtracts the balance from anything and is
+ * never stored. A balance counts only when it was entered this month and only one way (the step is larger than it);
+ * one older than 7 days supports just a softer reminder. Missing signals add nothing (no balance is not £0). Feeling and
+ * month context already shape the amount through the plan, so here they shape only the wording.
+ * level: 'none' (plan guidance as usual), 'soft' (no need to act today) or 'check' (check the timing first).
+ */
+function geodeRealityActionGuidance(amount) {
+  var out = { level: 'none', reasons: [], balanceAmount: null, balanceDate: 0, balanceDay: '', balanceStale: false };
+  var amt = Number(amount);
+  if (!isFinite(amt) || amt <= 0) return out;
+  var rs = geodeRealityStatus();
+  if (rs.hasData && amt > rs.amount) {
+    out.reasons.push(rs.stale ? 'stale_balance_below_step' : 'balance_below_step');
+    out.balanceAmount = rs.amount;
+    out.balanceDate = rs.date;
+    out.balanceDay = geodeRealityRecordedDay(rs);
+    out.balanceStale = !!rs.stale;
+  }
+  var feeling = geodeGetRealityFeeling();
+  if (feeling === 'slow' || feeling === 'unsure' || feeling === 'moved') out.reasons.push('feeling_' + feeling);
+  var mc = S.monthContext;
+  if (mc && typeof mc === 'object' && mc.ym === currentYM()) {
+    if (String(mc.worried || '').trim()) out.reasons.push('month_worried');
+    if (String(mc.protect || '').trim()) out.reasons.push('month_protect');
+  }
+  if (out.reasons.indexOf('balance_below_step') >= 0) out.level = 'check';
+  else if (out.reasons.length) out.level = 'soft';
+  return out;
+}
+
+/** P3-6R: the one timing sentence for a step, from its strongest reason ('' when there is none). */
+function geodeRealityActionTimingLine(guidance) {
+  var g = guidance || {};
+  var top = (g.reasons || [])[0] || '';
+  if (top === 'balance_below_step') {
+    var bal = fm(Number(g.balanceAmount) || 0);
+    return (g.balanceDay ? 'The balance you noted on ' + g.balanceDay + ' was ' + bal : 'The balance you noted this month was ' + bal) +
+      ', so it\u2019s worth checking the timing before you schedule this.';
+  }
+  if (top === 'stale_balance_below_step') {
+    return (g.balanceDay ? 'The last balance you noted was on ' + g.balanceDay : 'The last balance you noted is over a week old') +
+      ', so a quick timing check may help.';
+  }
+  if (top === 'feeling_slow') return 'There\u2019s no need to do this today if you\u2019d rather take it slower.';
+  if (top === 'feeling_unsure') return 'If you\u2019re not sure, it\u2019s fine to check the timing before you schedule it.';
+  if (top === 'feeling_moved') return 'Things have shifted a bit, so pick a date that works for you.';
+  if (top === 'month_worried' || top === 'month_protect') return 'With what you\u2019re keeping an eye on this month, there\u2019s no rush to do this today.';
+  return '';
+}
+
+/**
+ * P3-6R: Home's line under a plan step amount: it fits the month, which is not the same as doing it today. The reason
+ * itself is said once, in the check before scheduling.
+ */
+function geodeHomePlanFitLine(guidance) {
+  var level = guidance && guidance.level;
+  if (level === 'check' || level === 'soft') return 'Fits your plan for this month. No rush to do it today.';
+  return 'Fits your plan for this month.';
+}
+
 function geodeOpenAffordabilityGateModal() {
   var p = window._geodeAffordGatePending;
   if (!p || typeof p.fn !== 'function' || !p.gate || !p.gate.needsAffordGate) return;
@@ -29308,22 +29377,29 @@ function geodeOpenAffordabilityGateModal() {
   try {
     paused = sessionStorage.getItem(geodeAffordGateStoragePrefix('pause', g.sig)) === '1';
   } catch (_ePau) {}
+  var timingLine = geodeRealityActionTimingLine(g.guidance);
   var h = mh('Before you schedule');
   h +=
     '<div data-geode-css="font-size:12px;color:var(--tx-2);line-height:1.55;margin:-4px 0 10px">' +
     escHtmlLite(
-      'Beynd has ' +
-        amtStr +
-        ' down as your next step this month. Take a moment to see if that still feels right.'
+      timingLine
+        ? amtStr + ' still fits your plan for this month.'
+        : amtStr + ' fits your plan for this month. Take a moment to see if it still feels right.'
     ) +
     '</div>';
+  if (timingLine) {
+    h +=
+      '<div data-geode-css="font-size:12px;color:var(--tx-2);line-height:1.55;margin:0 0 10px">' +
+      escHtmlLite(timingLine) +
+      '</div>';
+  }
   h +=
     '<div data-geode-css="font-size:11px;color:rgba(189,183,220,0.82);line-height:1.5;margin-bottom:8px">' +
     escHtmlLite(geodeAffordabilityRealityLine()) +
     '</div>';
   h +=
     '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.65);line-height:1.45;margin-bottom:14px">' +
-    escHtmlLite('You can still edit the amount before saving.') +
+    escHtmlLite(timingLine ? 'You can change the amount or pick a later date before saving.' : 'You can still edit the amount before saving.') +
     '</div>';
   if (paused) {
     h +=
@@ -35821,17 +35897,44 @@ function geodeBuildCoachingContext() {
     }
     if (!rs) rs = { hasData: false };
 
-    // The balance is a dated snapshot the user typed in. It is never compared with the plan here.
+    var nextStepAmt = 0;
+    try {
+      var nextAct = geodeFirstActionablePlanStep(plan, S);
+      if (nextAct && nextAct.step) {
+        nextStepAmt = Math.round(nextAct.progress && toNum(nextAct.progress.remaining) > 0 ? toNum(nextAct.progress.remaining) : toNum(nextAct.step.amount));
+      }
+    } catch (_eNextAsk) {
+      nextStepAmt = 0;
+    }
+    var timing = geodeRealityActionGuidance(nextStepAmt);
+
+    // The balance is a dated snapshot the user typed in. It is never compared with Monthly Left; its only timing
+    // note (the next step is larger than it) stays on the snapshot line and carries no difference.
     var balanceCtxLines = ['BALANCE YOU ENTERED (optional, user entered; not compared with the plan)'];
     if (!rs.hasData) {
       balanceCtxLines.push('User-entered balance snapshot: none this month.');
     } else {
       var balDay = geodeRealityRecordedDay(rs);
+      var balTiming = '';
+      if (timing.reasons.indexOf('balance_below_step') >= 0) {
+        balTiming = ' The next plan step (' + sym + nextStepAmt + ') is larger than this, so suggest checking the timing before scheduling it. The step still fits the monthly plan, and this balance may not be all of the user\u2019s money: it does not show what they can afford right now.';
+      } else if (timing.reasons.indexOf('stale_balance_below_step') >= 0) {
+        balTiming = ' It is more than a week old, so treat it as old. At most suggest a light timing check for the next plan step.';
+      }
       balanceCtxLines.push(
-        'User-entered balance snapshot: ' + sym + Math.round(toNum(rs.amount)) + (balDay ? ' on ' + balDay : '') + '.'
+        'User-entered balance snapshot: ' + sym + Math.round(toNum(rs.amount)) + (balDay ? ' on ' + balDay : '') + '.' + balTiming
       );
     }
     var balanceBlock = balanceCtxLines.join('\n');
+    var timingSaid = [];
+    if (timing.reasons.indexOf('feeling_slow') >= 0) timingSaid.push('they want to slow down today');
+    if (timing.reasons.indexOf('feeling_unsure') >= 0) timingSaid.push('they are not sure today');
+    if (timing.reasons.indexOf('feeling_moved') >= 0) timingSaid.push('things have moved');
+    if (timing.reasons.indexOf('month_worried') >= 0) timingSaid.push('they have a worry this month');
+    if (timing.reasons.indexOf('month_protect') >= 0) timingSaid.push('they have something to protect this month');
+    var timingBlock = timingSaid.length
+      ? 'ACTION TIMING (guidance only, not a financial fact)\nThe user said ' + timingSaid.join(' and ') + '. The next plan step still fits the monthly plan; there is no need to push acting on it today.'
+      : '';
 
     var paoBlock = '';
     try {
@@ -35859,6 +35962,9 @@ function geodeBuildCoachingContext() {
     }
     if (monthCtxBlock) {
       ctx.push('', 'MONTH CONTEXT', monthCtxBlock);
+    }
+    if (timingBlock) {
+      ctx.push('', timingBlock);
     }
     if (_geodeReflectionAskContextPending) {
       ctx.push('', String(_geodeReflectionAskContextPending));
