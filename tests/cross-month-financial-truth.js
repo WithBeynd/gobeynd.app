@@ -44,6 +44,8 @@ const PRODUCTION_FUNCTIONS = [
   'geodePaymentEffectiveStatus', 'advancePaymentDueDateOneMonth', 'migratePaymentFlowFields',
   // recurring occurrence lifecycle (FA-4B): calendar-safe advance, undo inverse, paid-occurrence month, annual reset
   'geodeIsoDateAddMonths', 'geodeIsoDateMonthsBehind', 'geodePaymentUndoDueDate', 'geodePaymentPaidOccurrenceInMonth',
+  // paid one-off occurrence month (P3-1B)
+  'geodePaymentOneOffOccurrenceYm',
   'geodeAnnualPaymentNextOccurrenceDue',
   // completed occurrence amount (FA-4C), and the payment form's Monthly Left preview
   'geodePaymentMonthAmount', 'geodePayModalImpactRefresh', 'geodeRenderModalImpactBlock', 'geodeCoachingLineForDelta', 'geodeCloneStateForUiCalc',
@@ -8808,6 +8810,162 @@ function p2ModalClose() {
   });
 }
 
+// ───────────────────────────── P3-1B paid one-off occurrence ─────────────────────────────
+
+const P31B_MONTHS = ['2026-10-15', '2026-11-15', '2026-12-15', '2027-01-15'];
+const p31bRow = (id, extra) => Object.assign({ id, name: id, amount: 100, date: '', status: 'paid', rec: 'no', lastPaidYM: '', goalId: '', investId: '',
+  debtId: '', payKind: 'bill', createdAt: 1 }, extra || {});
+const p31bState = extra => Object.assign(baseState(), { _schemaVersion: 3, contributionEvents: [], contributionCarry: [], billPaymentEvents: [] }, extra || {});
+const P31B_DEBT = () => ({ id: 'dA', name: 'Card', balance: 1000, baseBalance: 1000, apr: 20, minp: 50 });
+/** [Monthly Left, confirmed-only Monthly Left] in October, November, December and January; the clock starts on 15 October. */
+function p31bMonths(app, mode) {
+  return P31B_MONTHS.map((d, i) => {
+    if (i) app.advance(d, mode);
+    const s = app.snap(d.slice(0, 7));
+    return [s.left, s.leftConfirmed];
+  });
+}
+const p31bRowState = (app, id) => { const p = app.state().payments.filter(x => x.id === id)[0]; return p ? [p.status, p.date === undefined ? 'missing' : p.date, p.lastPaidYM || ''] : null; };
+/** Goal Saved, investment balances and debt balances recomputed on a copy — as stored, and with every lastPaidYM removed from one-off rows. */
+const p31bAuthority = app => JSON.parse(app.run(`(function () {
+  function look(strip) {
+    var keep = S;
+    try {
+      S = JSON.parse(JSON.stringify(keep));
+      if (strip) S.payments.forEach(function (p) { if (p.rec !== 'yes' && p.rec !== 'annual') p.lastPaidYM = ''; });
+      geodeRecomputeBalancesFromPayments();
+      return [S.goals.map(function (g) { return geodeGoalEffectiveSavedFromState(S, g); }), S.investments.map(function (i) { return toNum(i.balance); }),
+        (S.debts || []).map(function (d) { return toNum(d.balance); })];
+    } finally { S = keep; }
+  }
+  return JSON.stringify([look(false), look(true)]);
+})()`));
+
+function p31bOccurrence() {
+  const F = (left, conf) => left.map((l, i) => [l, conf[i]]);
+  const MATRIX = [
+    ['A unpaid undated', { status: 'upcoming' }, F([2900, 2900, 2900, 2900], [3000, 3000, 3000, 3000])],
+    ['B paid undated, no stamp', {}, F([3000, 3000, 3000, 3000], [3000, 3000, 3000, 3000])],
+    ['C paid undated, stamped October', { lastPaidYM: '2026-10' }, F([2900, 3000, 3000, 3000], [2900, 3000, 3000, 3000])],
+    ['D paid, valid date October', { date: '2026-10-05' }, F([2900, 3000, 3000, 3000], [2900, 3000, 3000, 3000])],
+    ['E paid, valid date September', { date: '2026-09-05' }, F([3000, 3000, 3000, 3000], [3000, 3000, 3000, 3000])],
+    ['F paid, date null', { date: null }, F([3000, 3000, 3000, 3000], [3000, 3000, 3000, 3000])],
+    ['F paid, no date key', { date: undefined }, F([3000, 3000, 3000, 3000], [3000, 3000, 3000, 3000])],
+    ['F paid, "garbage"', { date: 'garbage' }, F([3000, 3000, 3000, 3000], [3000, 3000, 3000, 3000])],
+    ['F paid, full timestamp', { date: '2026-10-05T09:00:00Z' }, F([3000, 3000, 3000, 3000], [3000, 3000, 3000, 3000])],
+    ['F paid, "2026/10/05"', { date: '2026/10/05' }, F([3000, 3000, 3000, 3000], [3000, 3000, 3000, 3000])],
+    ['F paid, "05/10/2026"', { date: '05/10/2026' }, F([3000, 3000, 3000, 3000], [3000, 3000, 3000, 3000])],
+    ['F paid, "2026-13-01"', { date: '2026-13-01' }, F([3000, 3000, 3000, 3000], [3000, 3000, 3000, 3000])],
+    ['F paid, "2026-10" (month only)', { date: '2026-10' }, F([3000, 3000, 3000, 3000], [3000, 3000, 3000, 3000])],
+    ['F unpaid, full timestamp (unchanged rule)', { status: 'upcoming', date: '2026-10-05T09:00:00Z' }, F([2900, 2900, 2900, 2900], [3000, 3000, 3000, 3000])]
+  ];
+  const matrix = {};
+  MODES.forEach(mode => scenario('P3-1B MATRIX — one £100 one-off row, Monthly Left and confirmed-only across Oct / Nov / Dec / Jan [' + mode + ']', () => {
+    const seen = [], kept = [];
+    MATRIX.forEach(([label, extra]) => {
+      const row = p31bRow('r', extra);
+      if (extra.date === undefined && 'date' in extra) delete row.date;
+      const app = new App(p31bState({ payments: [row] }), P31B_MONTHS[0]);
+      const before = p31bRowState(app, 'r');
+      seen.push([label, p31bMonths(app, mode)]);
+      kept.push([label, same(p31bRowState(app, 'r'), before)]);
+    });
+    invariant('P31B.matrix', 'Unpaid undated keeps today\'s rule; a paid one-off counts only in its known month (valid date or completion stamp); unknown or malformed counts in no month',
+      seen, MATRIX.map(([label, , exp]) => [label, exp]));
+    invariant('P31B.matrix.stored', 'No row is re-dated, re-stamped or changed by four months of loads and renders', kept, MATRIX.map(([label]) => [label, true]));
+    matrix[mode] = seen;
+  }));
+  scenario('P3-1B MATRIX — same-session vs reload', () => invariant('P31B.matrix.parity', 'Session renders and reloads give the same figures', same(matrix.session, matrix.reload), true));
+
+  const KINDS = [['bill', {}, null], ['goal', { goalId: 'gH', payKind: 'goal' }, 'goal'], ['investment', { investId: 'iA', payKind: 'invest' }, 'investment'],
+    ['debt', { debtId: 'dA', payKind: 'debt' }, null]];
+  MODES.forEach(mode => scenario('P3-1B TOGGLE — an undated unpaid one-off marked paid on 15 October, and the same tap undone [' + mode + ']', () => {
+    const done = [], undone = [], authority = [];
+    KINDS.forEach(([kind, extra, entity]) => {
+      const st = () => p31bState({ debts: kind === 'debt' ? [P31B_DEBT()] : [], payments: [p31bRow('t', Object.assign({ status: 'upcoming' }, extra))] });
+      const app = new App(st(), P31B_MONTHS[0]);
+      app.toggle('t'); if (mode === 'reload') app.reload();
+      const row = p31bRowState(app, 't');
+      const events = app.state().contributionEvents.map(e => e.eventType + ' ' + e.occurrenceYm + ' ' + e.entityType);
+      const ledgers = [app.state().billPaymentEvents.length, (app.state().debtPaymentEvents || []).length];
+      const auth = p31bAuthority(app);
+      authority.push([kind, same(auth[0], auth[1])]);
+      done.push([kind, row, events, ledgers, p31bMonths(app, mode)]);
+      const app2 = new App(st(), P31B_MONTHS[0]);
+      app2.toggle('t'); app2.toggle('t'); if (mode === 'reload') app2.reload();
+      undone.push([kind, p31bRowState(app2, 't'), app2.state().contributionEvents.map(e => e.eventType + ' ' + e.occurrenceYm), p31bMonths(app2, mode)]);
+    });
+    const OCT_ONLY = F([2900, 3000, 3000, 3000], [2900, 3000, 3000, 3000]);
+    invariant('P31B.toggle', 'Marked paid: date stays blank, lastPaidYM = 2026-10 (the action month); a goal or investment row records its October completion, bills and debts record none; counted in October only',
+      done, KINDS.map(([kind, , entity]) => [kind, ['paid', '', '2026-10'], entity ? ['completion 2026-10 ' + entity] : [], [0, 0], OCT_ONLY]));
+    invariant('P31B.toggle.undo', 'Undone: upcoming, undated, stamp cleared (a reversal for the contribution); unpaid undated again counts every month as before',
+      undone, KINDS.map(([kind, , entity]) => [kind, ['upcoming', '', ''], entity ? ['completion 2026-10', 'reversal 2026-10'] : [],
+        F([2900, 2900, 2900, 2900], [3000, 3000, 3000, 3000])]));
+    invariant('P31B.toggle.authority', 'The stamp moves no authority: goal Saved, investment and debt balances recompute identically with every one-off stamp removed',
+      authority, KINDS.map(([kind]) => [kind, true]));
+
+    const dated = new App(p31bState({ payments: [p31bRow('d', { status: 'upcoming', date: '2026-10-20' })] }), P31B_MONTHS[0]);
+    dated.toggle('d'); if (mode === 'reload') dated.reload();
+    const datedDone = p31bRowState(dated, 'd');
+    dated.toggle('d');
+    invariant('P31B.toggle.dated', 'A one-off with a valid date is not stamped: its date names the occurrence; undo leaves it as it was',
+      [datedDone, p31bRowState(dated, 'd')], [['paid', '2026-10-20', ''], ['upcoming', '2026-10-20', '']]);
+  }));
+
+  MODES.forEach(mode => scenario('P3-1B LEGACY — carried, restored and legacy undated paid rows [' + mode + ']', () => {
+    const g1 = new App(baseState({ payments: [p31bRow('g1', { goalId: 'gH', payKind: 'goal' })] }), P31B_MONTHS[0]);
+    const carryBefore = g1.state().contributionCarry.map(c => [c.kind, c.amount, c.paymentId]);
+    const g1Saved = [];
+    const g1Left = P31B_MONTHS.map((d, i) => { if (i) g1.advance(d, mode); g1Saved.push(g1.snap().goal.gH); return g1.snap().left; });
+    invariant('P31B.legacy.carry', 'Schema-1 goal row, paid and undated: the transition\'s undated carry stays the goal\'s (Holiday £1,100 every month, as before P3-1B), it is never dated, and no month\'s Monthly Left subtracts it',
+      [carryBefore, g1.state().contributionCarry.map(c => [c.kind, c.amount, c.paymentId]), g1.state().contributionEvents.length, g1Saved, g1Left],
+      [[['undated_contribution', 100, 'g1']], [['undated_contribution', 100, 'g1']], 0, [1100, 1100, 1100, 1100], [3000, 3000, 3000, 3000]]);
+
+    const h = new App(p31bState({ payments: [p31bRow('h', { goalId: 'gH', payKind: 'goal' })] }), P31B_MONTHS[0]);
+    const hSaved = [];
+    const hLeft = P31B_MONTHS.map((d, i) => { if (i) h.advance(d, mode); hSaved.push(h.snap().goal.gH); return h.snap().left; });
+    invariant('P31B.legacy.restored', 'Restored schema-3 goal row, paid and undated, with no completion or carry: Holiday stays £1,000 (as before P3-1B), the integrity report still flags it, and no month subtracts it',
+      [hSaved, hLeft, flagged(h)], [[1000, 1000, 1000, 1000], [3000, 3000, 3000, 3000], true]);
+
+    const others = [['investment', { investId: 'iA', payKind: 'invest' }], ['bill', {}]].map(([kind, extra]) => {
+      const app = new App(baseState({ payments: [p31bRow('o', extra)] }), P31B_MONTHS[0]);
+      return [kind, P31B_MONTHS.map((d, i) => { if (i) app.advance(d, mode); return app.snap().left; })];
+    });
+    invariant('P31B.legacy.others', 'Schema-1 investment and bill rows, paid and undated: no month subtracts them', others,
+      [['investment', [3000, 3000, 3000, 3000]], ['bill', [3000, 3000, 3000, 3000]]]);
+  }));
+
+  scenario('P3-1B READ MODELS — dashboard, posture, affordability and the display / confirmed rules apply the same occurrence rule', () => {
+    const rm = buildEntryProgram(PROGRAM.src, readSource(FOUNDATION_JS), PROGRAM.extracted, '', [], ['geodeDashboardSnapshot', 'geodeFinancialPosture',
+      'geodeAffordabilitySnapshot', 'paymentCountsForMonthlyOutflowDisplay'], 'p31b-read-models');
+    const LOOK = `JSON.stringify((function () {
+      var o = { monthKey: '2026-10', today: '2026-10-15' }, d = geodeDashboardSnapshot(S, o), f = geodeFinancialPosture(S, o), a = geodeAffordabilitySnapshot(S, o);
+      return [calcMonthlyLeftover(S), d.leftThisMonth, f.sourceSignals.unresolvedDebtMinimums, a.paymentOutflow, a.confirmedPaymentOutflow,
+        calcMonthlyLeftoverConfirmedOnly(S), paymentCountsForMonthlyOutflowDisplay(S.payments[0])];
+    })())`;
+    const ROWS = [
+      ['paid undated, no stamp', {}, [3000, 3000, 100, 0, 0, 3000, false]],
+      ['paid undated, stamped October', { lastPaidYM: '2026-10' }, [2900, 2900, 0, 100, 100, 2900, true]],
+      ['paid undated, stamped September', { lastPaidYM: '2026-09' }, [3000, 3000, 100, 0, 0, 3000, false]],
+      ['paid, timestamp date', { date: '2026-10-05T09:00:00Z' }, [3000, 3000, 100, 0, 0, 3000, false]],
+      ['paid, valid date October', { date: '2026-10-05' }, [2900, 2900, 0, 100, 100, 2900, true]],
+      ['unpaid undated', { status: 'upcoming' }, [2900, 2900, 0, 100, 0, 3000, true]]
+    ];
+    const seen = ROWS.map(([label, extra]) => {
+      const app = new App(p31bState({ debts: [{ id: 'dA', name: 'Card', balance: 1000, minp: 100 }],
+        payments: [p31bRow('r', Object.assign({ debtId: 'dA', payKind: 'debt' }, extra))] }), P31B_MONTHS[0], rm, { boot: false });
+      return [label, JSON.parse(app.run(LOOK))];
+    });
+    invariant('P31B.readers', '[Monthly Left, dashboard left, posture unresolved debt minimum, affordability outflow, affordability confirmed outflow, confirmed-only Monthly Left, display rule] agree for each row',
+      seen, ROWS.map(([label, , exp]) => [label, exp]));
+    const lines = PROGRAM.src.split('\n');
+    const noDate = lines.map((l, i) => [l, i]).filter(([l]) => l.trim() === 'if (!p.date) return true;');
+    const prev = i => { let j = i - 1; while (j >= 0 && !lines[j].trim()) j--; return lines[j] || ''; };
+    invariant('P31B.readers.source', 'Every one-off "no date counts" rule in index.html is preceded by the paid one-off occurrence rule (seven copies, one helper)',
+      [noDate.length, noDate.filter(([, i]) => prev(i).indexOf('geodePaymentOneOffOccurrenceYm(p) ===') >= 0).length], [7, 7]);
+  });
+}
+
 let PROGRAM;
 function main() {
   try {
@@ -8834,6 +8992,7 @@ function main() {
   p2Continuity();
   p2ModalClose();
   migrationFixtures();
+  p31bOccurrence();
 
   console.log('Beynd cross-month financial truth harness');
   console.log('production: ' + path.relative(process.cwd(), INDEX_HTML) + ' (' + PROGRAM.extracted.length + ' functions) + ' + path.relative(process.cwd(), FOUNDATION_JS));

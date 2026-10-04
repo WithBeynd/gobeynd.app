@@ -2584,6 +2584,7 @@ function geodeDashboardSnapshot(state, opts) {
       if (status === 'paid') return String(p.lastPaidYM || '') === monthKey;
       return true;
     }
+    if (p.status === 'paid' && p.rec !== 'annual') return geodePaymentOneOffOccurrenceYm(p) === monthKey;
     if (!p.date) return true;
     return pDate.slice(0, 7) === monthKey;
   }
@@ -2828,6 +2829,7 @@ function geodeFinancialPosture(state, opts) {
       if (status === 'paid') return String(p.lastPaidYM || '') === monthKey;
       return true;
     }
+    if (p.status === 'paid' && p.rec !== 'annual') return geodePaymentOneOffOccurrenceYm(p) === monthKey;
     if (!p.date) return true;
     return pDate.slice(0, 7) === monthKey;
   }
@@ -3327,6 +3329,7 @@ function geodeAffordabilitySnapshot(state, opts) {
       if (rawStatus === 'paid') return String(p.lastPaidYM || '') === monthKey;
       return true;
     }
+    if (p.status === 'paid' && p.rec !== 'annual') return geodePaymentOneOffOccurrenceYm(p) === monthKey;
     if (!p.date) return true;
     return monthMatchesDate(p.date, monthKey);
   }
@@ -3334,6 +3337,7 @@ function geodeAffordabilitySnapshot(state, opts) {
     if (!p) return false;
     if (String(p.status || '').toLowerCase() !== 'paid') return false;
     if (String(p.rec || '').toLowerCase() === 'yes') return String(p.lastPaidYM || '') === monthKey;
+    if (p.status === 'paid' && p.rec !== 'annual') return geodePaymentOneOffOccurrenceYm(p) === monthKey;
     if (!p.date) return true;
     return monthMatchesDate(p.date, monthKey);
   }
@@ -5356,6 +5360,22 @@ function geodePaymentPaidOccurrenceInMonth(p, ym) {
 }
 
 /**
+ * P3-1B: the month a paid one-off's single occurrence is known to fall in, or '' when it is not known. A valid
+ * YYYY-MM-DD due date names it (one-off dates never advance); without one, only the completion month togglePay stamps on
+ * the row (lastPaidYM). Nothing else dates it: not a ledger event or carry, createdAt, the activity log, a restore or
+ * migration time, the month it is viewed in, or a date that is not a real calendar day. A paid one-off with no known
+ * month was completed at an unknown time and counts in no month's outflow; compared for equality, a stamp counts in one
+ * month at most.
+ */
+function geodePaymentOneOffOccurrenceYm(p) {
+  if (!p || p.status !== 'paid' || p.rec === 'yes' || p.rec === 'annual') return '';
+  var date = String(p.date || '');
+  if (geodeInvestmentIsoDateValid(date)) return date.slice(0, 7);
+  var stamp = String(p.lastPaidYM || '');
+  return geodeContributionYmValid(stamp) ? stamp : '';
+}
+
+/**
  * FA-4C: the amount a row stands for this month. This month's paid monthly or annual occurrence keeps the amount it was
  * completed at (lastPaidAmount): editing the row while it is paid changes the template for later occurrences only.
  * Otherwise (unpaid, one-off, or no usable lastPaidAmount on an older row) the row amount. Never read for balances.
@@ -5371,6 +5391,7 @@ function geodePaymentMonthAmount(p) {
  * FLOW: scheduled payments that affect “left this month”.
  * — Recurring (repeat monthly): counts as this month’s outflow until marked paid; once paid, counts if paid this month.
  * — One-time: counts if due this calendar month (or overdue / no date, same as before).
+ * — Paid one-time: counts only in the month its occurrence is known to fall in (geodePaymentOneOffOccurrenceYm).
  * — Lapsed voluntary one-offs (geodePaymentIsLapsedVoluntaryOneOff) never count.
  */
 function paymentCountsForMonthlyOutflow(p) {
@@ -5383,6 +5404,7 @@ function paymentCountsForMonthlyOutflow(p) {
     return true;
   }
   if (geodePaymentPaidOccurrenceInMonth(p, currentYM())) return true;
+  if (p.status === 'paid' && p.rec !== 'annual') return geodePaymentOneOffOccurrenceYm(p) === currentYM();
   if (!p.date) return true;
   try {
     var d = new Date(p.date + 'T12:00:00');
@@ -5723,6 +5745,7 @@ function paymentCountsForMonthlyOutflowDisplay(p) {
     return true;
   }
   if (geodePaymentPaidOccurrenceInMonth(p, currentYM())) return true;
+  if (p.status === 'paid' && p.rec !== 'annual') return geodePaymentOneOffOccurrenceYm(p) === currentYM();
   if (!p.date) return true;
   try {
     var d = new Date(String(p.date).slice(0, 10) + 'T12:00:00');
@@ -5854,6 +5877,7 @@ function paymentCountsForMonthlyOutflowConfirmedOnly(p) {
   if (String(p.status || '') !== 'paid') return false;
   if (p.rec === 'yes') return geodePaymentPaidOccurrenceInMonth(p, currentYM());
   if (geodePaymentPaidOccurrenceInMonth(p, currentYM())) return true;
+  if (p.rec !== 'annual') return geodePaymentOneOffOccurrenceYm(p) === currentYM();
   if (!p.date) return true;
   try {
     var d = new Date(String(p.date).slice(0, 10) + 'T12:00:00');
@@ -6105,10 +6129,19 @@ function geodeLivingMonthModel(state, now) {
 
   var index = geodeLivingMonthEvidenceIndex(state);
   var list = state.payments || [];
-  var done = [], ahead = [], doneTotal = 0, aheadTotal = 0;
+  var done = [], ahead = [], unplaced = [], doneTotal = 0, aheadTotal = 0;
   for (var i = 0; i < list.length; i++) {
-    if (!paymentCountsForMonthlyOutflow(list[i])) continue;
-    var item = geodeLivingMonthPaymentItem(list[i], cal, index);
+    if (!paymentCountsForMonthlyOutflow(list[i])) {
+      // P3-1B: a paid one-off whose occurrence month is unknown belongs to no month; listed, never in a total.
+      var p = list[i];
+      if (p && p.status === 'paid' && p.rec !== 'yes' && p.rec !== 'annual' && !geodePaymentOneOffOccurrenceYm(p)) {
+        var unknown = geodeLivingMonthPaymentItem(p, cal, index, state);
+        delete unknown.done;
+        unplaced.push(unknown);
+      }
+      continue;
+    }
+    var item = geodeLivingMonthPaymentItem(list[i], cal, index, state);
     if (item.done) {
       done.push(item);
       doneTotal += item.amount;
@@ -6118,7 +6151,7 @@ function geodeLivingMonthModel(state, now) {
     }
     delete item.done;
   }
-  model.payments = { countedTotal: paymentsCountedTotal, doneTotal: doneTotal, aheadTotal: aheadTotal, done: done, ahead: ahead };
+  model.payments = { countedTotal: paymentsCountedTotal, doneTotal: doneTotal, aheadTotal: aheadTotal, done: done, ahead: ahead, unplaced: unplaced };
   model.expenses = geodeLivingMonthExpenses(state);
   model.happened = geodeLivingMonthHappened(state, cal, index);
   model.earlier = geodeLivingMonthEarlierGaps(state, cal.ym);
@@ -6170,11 +6203,12 @@ function geodeLivingMonthEvidenceIndex(state) {
  * P3-1: one payment Monthly Left counts, at the amount it counts it for. A paid row is done; its evidence is a ledger
  * completion for the occurrence the ledgers key it by, else status_only. An unpaid row is ahead: scheduled,
  * due_no_outcome_recorded (due earlier this month, nothing recorded — not "missed"), undated, or
- * outstanding_from_earlier. Contributions are allocations the user scheduled, not obligations.
+ * outstanding_from_earlier. Contributions are allocations the user scheduled, not obligations. P3-1B: also describes a
+ * paid one-off no month counts (completed_month_unknown). Due dates are payment dates only when strictly YYYY-MM-DD.
  */
-function geodeLivingMonthPaymentItem(p, cal, index) {
+function geodeLivingMonthPaymentItem(p, cal, index, state) {
   var kind = p.debtId ? 'debt' : p.goalId ? 'goal_contribution' : p.investId ? 'investment_contribution' : 'bill';
-  var rowDate = String(p.date || '').slice(0, 10);
+  var rowDate = String(p.date || '');
   var item = {
     id: String(p.id || ''),
     name: String(p.name || ''),
@@ -6192,12 +6226,13 @@ function geodeLivingMonthPaymentItem(p, cal, index) {
   };
   if (item.done) {
     var paidThisMonth = geodePaymentPaidOccurrenceInMonth(p, cal.ym);
-    var occDue = String(p.lastPaidDueDate || '').slice(0, 10);
+    var occDue = String(p.lastPaidDueDate || '');
     // A completed recurring row's date already names its next occurrence.
     item.dueDate = geodeInvestmentIsoDateValid(occDue) ? occDue : paidThisMonth ? null : item.dueDate;
     item.dueYm = item.dueDate ? item.dueDate.slice(0, 7) : null;
-    item.state = paidThisMonth || item.dueYm === cal.ym ? 'completed_this_month' : 'completed_month_unknown';
-    item.evidenceRef = geodeLivingMonthPaymentEvidence(p, index);
+    item.state = paidThisMonth || item.dueYm === cal.ym || geodePaymentOneOffOccurrenceYm(p) === cal.ym
+      ? 'completed_this_month' : 'completed_month_unknown';
+    item.evidenceRef = geodeLivingMonthPaymentEvidence(p, index, state);
     item.evidence = item.evidenceRef ? 'ledger' : 'status_only';
     return item;
   }
@@ -6209,16 +6244,32 @@ function geodeLivingMonthPaymentItem(p, cal, index) {
   return item;
 }
 
-/** P3-1: the ledger completion that records a paid row's occurrence, keyed as each ledger keys it, or null. Never created here. */
-function geodeLivingMonthPaymentEvidence(p, index) {
+/**
+ * P3-1: the ledger completion that records a paid row's occurrence, found as each ledger finds it, or null. Never
+ * created here. P3-1B: bills by the due month of the occurrence (the key the bill recorder and its reversal use); debts
+ * by the row's completion pointer, else the occurrence key (as the debt reversal does); contributions by the
+ * contribution ledger's own rule (geodeContributionPriorCompletion), because a one-off's completion records the month
+ * it was completed in, which its due date need not name.
+ */
+function geodeLivingMonthPaymentEvidence(p, index, state) {
   var id = String(p.id || '');
-  var checks = [];
-  if (p.debtId) checks.push(['debtPaymentEvents', index.debtBy, geodeDebtPaymentOccurrenceYm(p)]);
-  if (p.goalId || p.investId) checks.push(['contributionEvents', index.contributionBy, geodeContributionOccurrenceYm(p)]);
-  if (geodePaymentIsBill(p)) checks.push(['billPaymentEvents', index.billBy, geodeBillPaidOccurrenceYm(p)]);
-  for (var i = 0; i < checks.length; i++) {
-    var ev = checks[i][2] ? checks[i][1][id + '|' + checks[i][2]] : null;
-    if (ev) return { source: checks[i][0], eventId: ev.id, occurrenceYm: ev.occurrenceYm, recordedAt: ev.recordedAt };
+  var ev = null;
+  if (p.debtId) {
+    var pointer = String(p.debtPaymentCompletionEventId || '');
+    ev = pointer ? index.debt.filter(function (e) { return e.id === pointer && e.paymentId === id; })[0] || null : null;
+    var debtYm = ev ? '' : geodeDebtPaymentOccurrenceYm(p);
+    if (debtYm) ev = index.debtBy[id + '|' + debtYm] || null;
+    if (ev) return { source: 'debtPaymentEvents', eventId: ev.id, occurrenceYm: ev.occurrenceYm, recordedAt: ev.recordedAt };
+  }
+  if (p.goalId || p.investId) {
+    ev = geodeContributionPriorCompletion(state, { id: id, rec: String(p.rec || ''), date: String(p.date || ''),
+      lastPaidYM: String(p.lastPaidYM || ''), eventId: String(p.contributionEventId || '') });
+    if (ev) return { source: 'contributionEvents', eventId: ev.id, occurrenceYm: ev.occurrenceYm, recordedAt: ev.recordedAt };
+  }
+  if (geodePaymentIsBill(p)) {
+    var billYm = geodeBillPaidOccurrenceYm(p);
+    ev = billYm ? index.billBy[id + '|' + billYm] : null;
+    if (ev) return { source: 'billPaymentEvents', eventId: ev.id, occurrenceYm: ev.occurrenceYm, recordedAt: ev.recordedAt };
   }
   return null;
 }
@@ -41809,6 +41860,9 @@ function togglePay(id){
       p.lastPaidYM=currentYM();
       var _annualNext = geodeIsoDateAddMonths(p.date, 12);
       if (_annualNext) { p.lastPaidDueDate = p.date; p.date = _annualNext; }
+    } else if (!geodeInvestmentIsoDateValid(String(p.date || ''))) {
+      // P3-1B: no due date names this one-off's occurrence, so record the month it was completed in.
+      p.lastPaidYM = currentYM();
     }
     if (!p.createdAt) p.createdAt = Date.now();
     evaluatePaymentFollowthrough(p);

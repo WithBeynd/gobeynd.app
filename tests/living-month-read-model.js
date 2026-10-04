@@ -387,6 +387,11 @@ function main() {
       m.payments.done.concat(m.payments.ahead).map(x => x.id).sort(), pool);
     check(id + '.amounts', 'Each item\'s amount is exactly geodePaymentMonthAmount(row), the amount Monthly Left counts',
       m.payments.done.concat(m.payments.ahead).filter(x => x.amount !== ctx.geodePaymentMonthAmount(state.payments.filter(p => p.id === x.id)[0])).map(x => x.id), []);
+    const unplacedRows = state.payments.filter(p => p.status === 'paid' && p.rec !== 'yes' && p.rec !== 'annual' &&
+      !ctx.paymentCountsForMonthlyOutflow(p) && !ctx.geodePaymentOneOffOccurrenceYm(p)).map(p => p.id).sort();
+    check(id + '.unplaced', 'Unplaced lists exactly the paid one-offs with no known month (none counted), each completed_month_unknown, outside done / ahead',
+      [m.payments.unplaced.map(x => x.id).sort(), m.payments.unplaced.every(x => x.state === 'completed_month_unknown'),
+        m.payments.unplaced.filter(x => pool.indexOf(x.id) >= 0).length], [unplacedRows, true, 0]);
     check(id + '.budget', 'Budget total === sumExpensesMonthly(state.expenses); every expense line is plan',
       [m.expenses.budgetTotal === ctx.sumExpensesMonthly(state.expenses), m.plan.budgetTotal === m.expenses.budgetTotal,
         m.expenses.items.every(e => e.basis === 'plan'), m.expenses.basis], [true, true, true, 'plan']);
@@ -473,8 +478,9 @@ function main() {
   check('N.items', 'Lapsed voluntary one-off: Monthly Left does not count it, so the model does not list it', [byId(m, 'one-off-save'), m.plan.monthlyLeft], [undefined, 2960]);
 
   m = invariants('O', FIXTURES['O.undated']());
-  check('O.items', 'Undated counted rows: unpaid is undated; paid is completed_month_unknown with status_only',
-    [brief(byId(m, 'streaming')), brief(byId(m, 'gift'))], [['bill', 'scheduled_outgoing', 'undated', 25, null], ['bill', 'scheduled_outgoing', 'completed_month_unknown', 30, 'status_only']]);
+  check('O.items', 'Undated rows (P3-1B): unpaid is counted and undated; paid with no known month is not counted — unplaced, completed_month_unknown, status_only',
+    [brief(byId(m, 'streaming')), brief(byId(m, 'gift')), m.payments.unplaced.map(brief), m.plan.monthlyLeft],
+    [['bill', 'scheduled_outgoing', 'undated', 25, null], null, [['bill', 'scheduled_outgoing', 'completed_month_unknown', 30, 'status_only']], 2975]);
 
   m = invariants('P', FIXTURES['P.release']());
   const pNoRelease = model(parse(Object.assign(FIXTURES['P.release'](), { savingsReleases: [] })));
@@ -497,6 +503,94 @@ function main() {
   check('S.earlier', 'Eleven months × three rows are summarised as evidence only', [m.earlier.gapCount, m.earlier.gapMonths.length, m.earlier.gapMonths[0], m.earlier.gapMonths[10]],
     [33, 11, '2025-11', '2026-09']);
   check('S.no-catch-up', 'This month counts each row once: 3000 − (1200 + 40 + 150) − 400 = 1210', [m.plan.monthlyLeft, m.payments.aheadTotal, m.month.boundaryPending], [1210, 1390, false]);
+
+  section('P3-1B — paid one-off occurrence month and evidence by each ledger\'s own key');
+  const NOV = at(2026, 11, 15);
+  const G1 = () => [{ id: 'g1', name: 'Holiday', target: 2000, saved: 0, baseSaved: 0 }];
+  const D1 = () => [{ id: 'd1', name: 'Card', balance: 5000, apr: 20, minp: 150 }];
+  const I1 = () => [{ id: 'i1', name: 'ISA', balance: 5000, baseBalance: 5000,
+    valuations: [{ id: 'val_1', value: 5000, date: '2026-09-01', recordedAt: at(2026, 9, 1, 9), source: 'manual' }] }];
+  const cev = (pid, entityType, entityId, occ, due) => ({ id: 'ce_' + pid, eventType: 'completion', paymentId: pid, entityType, entityId,
+    occurrenceYm: occ, amount: 100, recurrence: 'one_off', dueDateSnapshot: due, recordedAt: at(2026, 10, 3, 9), source: 'mark_completed' });
+  const dpe = (pid, occ, due) => ({ id: 'dpe_' + pid, eventType: 'completion', paymentId: pid, debtId: 'd1', amount: 100, occurrenceYm: occ,
+    recordedAt: at(2026, 10, 3, 9), dueDateSnapshot: due, debtNameSnapshot: 'Card', paymentNameSnapshot: pid, recurrenceSnapshot: 'one_off', source: 'mark_completed' });
+  const oneOff = (id, date, extra) => bill(id, 100, date, Object.assign({ rec: 'no', status: 'paid' }, extra || {}));
+  const where = (m, pid) => ['done', 'ahead', 'unplaced'].filter(k => m.payments[k].some(x => x.id === pid))[0] || 'absent';
+  const anyItem = (m, pid) => m.payments.done.concat(m.payments.ahead, m.payments.unplaced).filter(x => x.id === pid)[0];
+  const evid = (m, pid) => { const x = anyItem(m, pid); return x ? [where(m, pid), x.state, x.evidence, x.evidenceRef && x.evidenceRef.source, x.evidenceRef && x.evidenceRef.occurrenceYm] : ['absent']; };
+
+  const sepOct = base({ goals: G1(), payments: [oneOff('trip', '2026-09-20', { goalId: 'g1', contributionEventId: 'ce_trip' })],
+    contributionEvents: [cev('trip', 'goal', 'g1', '2026-10', '2026-09-20')] });
+  m = invariants('P31B.due-sep-done-oct', sepOct);
+  const sepState = parse(sepOct);
+  const sepRow = sepState.payments[0];
+  check('P31B.due-sep-done-oct', 'Due September, completed October: the October completion is found by the contribution ledger\'s own rule (a due-month key would ask for September and find nothing); Monthly Left still follows the due date, so October does not count it, and October\'s happened lists the completion',
+    [ctx.geodeContributionOccurrenceYm(sepRow), (ctx.geodeLivingMonthPaymentEvidence(sepRow, ctx.geodeLivingMonthEvidenceIndex(sepState), sepState) || {}).occurrenceYm,
+      where(m, 'trip'), m.plan.monthlyLeft, m.happened.map(e => [e.id, e.occurrenceYm, e.occurrenceInMonth])],
+    ['2026-09', '2026-10', 'absent', 3000, [['ce_trip', '2026-10', true]]]);
+
+  m = invariants('P31B.due-nov-done-oct', base({ goals: G1(), payments: [oneOff('trip', '2026-11-20', { goalId: 'g1', contributionEventId: 'ce_trip' })],
+    contributionEvents: [cev('trip', 'goal', 'g1', '2026-10', '2026-11-20')] }), { clock: NOV, now: NOV });
+  check('P31B.due-nov-done-oct', 'Due November, completed early in October, viewed in November: counted in November by its due date, and its evidence is the October ledger completion — not status_only',
+    [evid(m, 'trip'), m.plan.monthlyLeft], [['done', 'completed_this_month', 'ledger', 'contributionEvents', '2026-10'], 2900]);
+
+  m = invariants('P31B.due-oct-done-oct', base({ goals: G1(), payments: [oneOff('trip', '2026-10-05', { goalId: 'g1', contributionEventId: 'ce_trip' })],
+    contributionEvents: [cev('trip', 'goal', 'g1', '2026-10', '2026-10-05')] }));
+  check('P31B.due-oct-done-oct', 'Due and completed in October: done this month with the October completion', [evid(m, 'trip'), m.plan.monthlyLeft],
+    [['done', 'completed_this_month', 'ledger', 'contributionEvents', '2026-10'], 2900]);
+
+  const stamped = base({ goals: G1(), payments: [oneOff('trip', '', { goalId: 'g1', lastPaidYM: '2026-10', contributionEventId: 'ce_trip' })],
+    contributionEvents: [cev('trip', 'goal', 'g1', '2026-10', '')] });
+  m = invariants('P31B.undated-stamped-oct', stamped);
+  check('P31B.undated-stamped-oct', 'Undated, completed in October (stamped): done this month with its October completion', [evid(m, 'trip'), m.plan.monthlyLeft],
+    [['done', 'completed_this_month', 'ledger', 'contributionEvents', '2026-10'], 2900]);
+  m = invariants('P31B.undated-stamped-oct.nov', stamped, { clock: NOV, now: NOV });
+  check('P31B.undated-stamped-oct.nov', 'The same row in November: its month is known and is not November — not counted, not unplaced',
+    [where(m, 'trip'), m.plan.monthlyLeft], ['absent', 3000]);
+
+  m = invariants('P31B.undated-unstamped-evidence', base({ goals: G1(), payments: [oneOff('trip', '', { goalId: 'g1', contributionEventId: 'ce_trip' })],
+    contributionEvents: [cev('trip', 'goal', 'g1', '2026-10', '')] }));
+  check('P31B.undated-unstamped-evidence', 'Undated, no stamp (completed before P3-1B) but an October completion exists: evidence is recognised, counting is not changed by it — unplaced, not in Monthly Left',
+    [evid(m, 'trip'), m.plan.monthlyLeft], [['unplaced', 'completed_month_unknown', 'ledger', 'contributionEvents', '2026-10'], 3000]);
+
+  const carryRaw = base({ goals: G1(), payments: [oneOff('lc', '', { goalId: 'g1' })],
+    contributionCarry: [{ id: 'carry_lc', paymentId: 'lc', entityType: 'goal', entityId: 'g1', kind: 'undated_contribution', amount: 100,
+      recurrence: 'one_off', dueDateSnapshot: '', createdAt: at(2026, 6, 1, 9), source: 'schema2_transition' }] });
+  m = invariants('P31B.legacy-carry', carryRaw);
+  check('P31B.legacy-carry', 'Legacy undated carry: known effect, unknown month — unplaced, status_only, never dated; the carry is untouched (purity checks) and no month counts it',
+    [evid(m, 'lc'), m.plan.monthlyLeft, m.happened.length], [['unplaced', 'completed_month_unknown', 'status_only', null, null], 3000, 0]);
+
+  m = invariants('P31B.bill-undated-restored-event', base({ payments: [oneOff('gift', '')],
+    billPaymentEvents: [billEvent('gift', 100, '2026-10', at(2026, 10, 3, 9), { recurrenceSnapshot: 'one_off' })] }));
+  check('P31B.bill-undated-restored-event', 'Undated bill with a restored October bill event: the bill ledger keys by the due month and the row names none — status_only, unplaced, not counted',
+    [evid(m, 'gift'), m.plan.monthlyLeft], [['unplaced', 'completed_month_unknown', 'status_only', null, null], 3000]);
+
+  m = invariants('P31B.bill-undated-stamped', base({ payments: [oneOff('gift', '', { lastPaidYM: '2026-10' })] }));
+  check('P31B.bill-undated-stamped', 'Undated bill completed in October (stamped): counted in October; no bill evidence can exist — status_only',
+    [evid(m, 'gift'), m.plan.monthlyLeft], [['done', 'completed_this_month', 'status_only', null, null], 2900]);
+
+  m = invariants('P31B.debt-undated-stamped', base({ debts: D1(), payments: [oneOff('extra', '', { debtId: 'd1', lastPaidYM: '2026-10' })] }));
+  check('P31B.debt-undated-stamped', 'Undated debt payment completed in October (stamped): counted in October; the debt ledger records no undated occurrence — status_only',
+    [evid(m, 'extra'), m.plan.monthlyLeft], [['done', 'completed_this_month', 'status_only', null, null], 2900]);
+
+  m = invariants('P31B.debt-pointer', base({ debts: D1(), payments: [oneOff('extra', '2026-11-20', { debtId: 'd1', debtPaymentCompletionEventId: 'dpe_extra' })],
+    debtPaymentEvents: [dpe('extra', '2026-10', '2026-10-20')] }), { clock: NOV, now: NOV });
+  check('P31B.debt-pointer', 'Debt one-off completed in October, date later edited to November: found by its completion pointer, as the debt reversal finds it',
+    [evid(m, 'extra'), m.plan.monthlyLeft], [['done', 'completed_this_month', 'ledger', 'debtPaymentEvents', '2026-10'], 2900]);
+
+  m = invariants('P31B.investment-undated-stamped', base({ investments: I1(), payments: [oneOff('isa', '', { investId: 'i1', lastPaidYM: '2026-10', contributionEventId: 'ce_isa' })],
+    contributionEvents: [cev('isa', 'investment', 'i1', '2026-10', '')] }));
+  check('P31B.investment-undated-stamped', 'Undated investment contribution completed in October: done this month with its October completion',
+    [evid(m, 'isa'), m.plan.monthlyLeft], [['done', 'completed_this_month', 'ledger', 'contributionEvents', '2026-10'], 2900]);
+
+  m = invariants('P31B.stamp-earlier', base({ payments: [oneOff('gift', '', { lastPaidYM: '2026-09' })] }));
+  check('P31B.stamp-earlier', 'Undated, completed in September (stamped), viewed in October: not counted and not unplaced', [where(m, 'gift'), m.plan.monthlyLeft], ['absent', 3000]);
+
+  m = invariants('P31B.parser', base({ payments: [bill('ts-open', 25, '2026-10-05T09:00:00Z', { rec: 'no' }), oneOff('ts', '2026-10-05T09:00:00Z'),
+    oneOff('slash', '2026/10/05'), oneOff('month', '2026-10'), oneOff('nul', null), oneOff('junk', 'garbage'), oneOff('feb30', '2026-02-30'), oneOff('ok', '2026-10-05')] }));
+  check('P31B.parser', 'Payment dates are strictly YYYY-MM-DD calendar days: an unpaid timestamp row stays counted and reads undated (as Monthly Left treats it); every malformed paid row is unplaced; only the valid date counts',
+    [['ts-open', 'ts', 'slash', 'month', 'nul', 'junk', 'feb30', 'ok'].map(pid => where(m, pid)), anyItem(m, 'ts-open').state, anyItem(m, 'ts-open').dueDate, m.plan.monthlyLeft],
+    [['ahead', 'unplaced', 'unplaced', 'unplaced', 'unplaced', 'unplaced', 'unplaced', 'done'], 'undated', null, 2875]);
 
   section('BOUNDARY — a state the boundary has not processed returns the minimal safe model');
   const minimalKeys = ['kind', 'authoritative', 'status', 'reason', 'month', 'plan', 'income', 'available', 'payments', 'expenses', 'happened', 'earlier', 'changes'];
@@ -614,7 +708,7 @@ function main() {
   })(), true);
 
   section('MUTANTS — each impurity is caught by at least one detector');
-  const ANCHOR = '  for (var i = 0; i < list.length; i++) {\n    if (!paymentCountsForMonthlyOutflow(list[i])) continue;';
+  const ANCHOR = '  for (var i = 0; i < list.length; i++) {\n    if (!paymentCountsForMonthlyOutflow(list[i])) {';
   if (INDEX.split(ANCHOR).length !== 2) throw new Error('mutant anchor must occur exactly once in index.html');
   const INCOME_LINE = '  var incomePlanned = toNum(state.income);\n  var paymentsCountedTotal';
   if (INDEX.split(INCOME_LINE).length !== 2) throw new Error('mutant income anchor must occur exactly once in index.html');
