@@ -18974,7 +18974,7 @@ function geodeHomeSoftPriorityContext(state) {
     String(hmCtx.mainActionTitle || '') + ' ' + String(hmCtx.mainActionSub || '')
   );
   var mainActionOverdue =
-    maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('clear overdue') >= 0;
+    maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('confirm due payments') >= 0;
   var left = calcMonthlyLeftover(state);
   var inc = toNum(state.income);
   var pressure = 'ok';
@@ -19179,7 +19179,7 @@ function geodeOrchestrationSnapshot(state) {
         snap.primaryFocus = { type: 'setup', label: 'Set income' };
         pushReason('income_none');
       } else if (softPri && (softPri.needsAttentionVisible || softPri.mainActionOverdue || softPri.hasOverdue)) {
-        snap.primaryFocus = { type: 'overdue', label: 'Clear overdue items first' };
+        snap.primaryFocus = { type: 'overdue', label: 'Confirm due payments first' };
       } else if (
         left < 0 &&
         state.hasOnboarded &&
@@ -19224,7 +19224,7 @@ function geodeOrchestrationSnapshot(state) {
     pushDisclosure(
       'defer_subscription',
       'home_main_action',
-      'Subscription renewal can wait until overdue items are cleared.'
+      'Subscription renewal can wait until due payments are confirmed.'
     );
   }
 
@@ -19942,7 +19942,7 @@ function geodeOrchestrationSnapshotV2(state, opts) {
     }
     if (flags.hasOverdue) {
       out.show = true;
-      out.title = 'Clear overdue items first';
+      out.title = 'Confirm due payments first';
       out.cta = 'Go to Money';
       out.kind = 'overdue';
       out.runIntent = v2MainActionIntent('money', 'payments');
@@ -20127,10 +20127,10 @@ function geodeOrchestrationSnapshotV2(state, opts) {
   var pressure = 'ok';
   if (left < T.homeStrongLeftBelow) pressure = 'strong';
   else if (income > 0 && left < Math.max(T.homeMildMinLeftAbsolute, income * T.incomeRatioHigh)) pressure = 'mild';
-  var mainActionTitle = hasOverdue ? 'Clear overdue items first' : '';
+  var mainActionTitle = hasOverdue ? 'Confirm due payments first' : '';
   var mainActionSub = '';
   var maNorm = v2NormMaText(mainActionTitle + ' ' + mainActionSub);
-  var mainActionOverdue = maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('clear overdue') >= 0;
+  var mainActionOverdue = maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('confirm due payments') >= 0;
   var contribReviewNeeded =
     v2HasPastDueUnconfirmedContributions(st, todayKey) ||
     v2HasScheduledContributionsNeedingReview(st, todayKey, monthKey);
@@ -20215,7 +20215,7 @@ function geodeOrchestrationSnapshotV2(state, opts) {
     primaryFocus = { type: 'setup', label: 'Set income' };
     pushReason('income_none');
   } else if (needsAttentionVisible || mainActionOverdue || hasOverdue) {
-    primaryFocus = { type: 'overdue', label: 'Clear overdue items first' };
+    primaryFocus = { type: 'overdue', label: 'Confirm due payments first' };
   } else if (overBudgetPersistent) {
     primaryFocus = { type: 'over_budget', label: 'Over budget' };
   } else if (resolvedPlanStep && resolvedPlanStep.label) {
@@ -20257,7 +20257,7 @@ function geodeOrchestrationSnapshotV2(state, opts) {
     pushDisclosure(
       'defer_subscription',
       'home_main_action',
-      'Subscription renewal can wait until overdue items are cleared.'
+      'Subscription renewal can wait until due payments are confirmed.'
     );
   }
   if (contribReviewNeeded && homeBand === 'critical') {
@@ -20576,7 +20576,7 @@ function geodeOrchestrationSnapshotV2(state, opts) {
 
   if (homeBand === 'critical' && subsDueVisible) {
     surfaces.mutedLines.push({
-      text: 'Subscription renewal can wait until overdue items are cleared.',
+      text: 'Subscription renewal can wait until due payments are confirmed.',
       onClickRoute: null,
       kind: 'subscription',
       reason: 'home_band_critical'
@@ -20756,7 +20756,7 @@ function geodeDeferredQueueSnapshot(state) {
         targetSurface: 'home_muted_line',
         priority: 10,
         visibilityPolicy: 'mute',
-        humanCopy: 'Subscription renewal can wait until overdue items are cleared.',
+        humanCopy: 'Subscription renewal can wait until due payments are confirmed.',
         onClickRoute: subOnClick
       })
     );
@@ -20764,7 +20764,7 @@ function geodeDeferredQueueSnapshot(state) {
     pushDisclosure(
       'defer_subscription',
       'home_main_action',
-      'Subscription renewal can wait until overdue items are cleared.'
+      'Subscription renewal can wait until due payments are confirmed.'
     );
   }
 
@@ -21152,7 +21152,7 @@ function geodeDeferredQueueSnapshot(state) {
     }
     if (subsDueVisible) {
       snap.activeHomeSurfaces.mutedLines.push(
-        'Subscription renewal can wait until overdue items are cleared.'
+        'Subscription renewal can wait until due payments are confirmed.'
       );
     }
   }
@@ -21252,7 +21252,7 @@ function geodeHomeLegacyCriticalDeferLinesHtml(state) {
           ')'
         : "msub='expenses';goTab('money')";
     h += geodeHomeSoftDeferLineHtml(
-      'Subscription renewal can wait until overdue items are cleared.',
+      'Subscription renewal can wait until due payments are confirmed.',
       _subOn
     );
   }
@@ -21328,7 +21328,7 @@ function geodeHomeMainActionAlertDedupContext(state, action) {
   }
   var title = action && action.title ? String(action.title).toLowerCase() : '';
   var maIsOverduePath =
-    title.indexOf('clear overdue') >= 0 ||
+    title.indexOf('confirm due payments') >= 0 ||
     title.indexOf('overdue items') >= 0 ||
     (title.indexOf('overdue') >= 0 && title.indexOf('over budget') < 0);
   return {
@@ -21502,7 +21502,7 @@ function geodeHomeOrchestrationResolve(state) {
       pushDisclosureResolve(
         'dedup_over_budget_needs_attention',
         'home_over_budget',
-        'Over-budget summary withheld while overdue items need attention first.'
+        'Over-budget summary withheld while due payments need confirming first.'
       );
     } else if (_alertDedup.maIsSpendRecovery) {
       resolve.surfaces.overBudget.show = false;
@@ -21842,7 +21842,7 @@ function geodeHumanMomentShouldSuppress(ctx, state, opts) {
     }
   } catch (_eHmRpaSup) {}
   var maNorm = geodeNormalizeHomeMainActionText(ctx.mainActionTitle + ' ' + ctx.mainActionSub);
-  if (maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('clear overdue') >= 0) return true;
+  if (maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('confirm due payments') >= 0) return true;
   return false;
 }
 
@@ -25111,7 +25111,7 @@ function geodeFormatPlanPagePacingNote(pao, rs, opts) {
   }
 
   if (hasOverdue) {
-    return 'If something is overdue, handle that before adding new commitments this month.';
+    return 'If a payment is due with no outcome recorded, confirm it before adding new commitments this month.';
   }
 
   if (recoveryPhase === 'emerging') {
@@ -28303,7 +28303,7 @@ function geodeGetMainAction(state) {
 
   if (geodeHasOverdue(state)) {
     return {
-      title: 'Clear overdue items first',
+      title: 'Confirm due payments first',
       amount: null,
       cta: 'Go to Money',
       sub: '',
@@ -29599,7 +29599,7 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
 
       if (hasOverdue) {
         h2 += '<div data-geode-css="margin-top:8px;font-size:11px;color:var(--tx-3)">';
-        h2 += 'Overdue items stay out of this sketch until cleared';
+        h2 += 'Due payments with no outcome recorded stay out of this sketch until confirmed';
         h2 += '</div>';
       } else if (!window.geodeShowDelayBreakdown && showMsg) {
         h2 += '<div data-geode-css="margin-top:8px;font-size:11px;color:var(--tx-3)">';
@@ -32767,7 +32767,7 @@ function geodeOverdueCardHtml() {
     h += '<div data-geode-css="display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--vi-review-border)">';
     h += '<div data-geode-css="font-size:12px;color:var(--tx-1);font-weight:600">' + escHtmlLite(item.name) + '</div>';
     if (item.kind === 'payment') {
-      h += '<div data-geode-css="font-size:11px;color:var(--notice)">' + item.daysLate + ' day' + (item.daysLate===1?'':'s') + ' overdue</div>';
+      h += '<div data-geode-css="font-size:11px;color:var(--notice)">Due ' + item.daysLate + ' day' + (item.daysLate===1?'':'s') + ' ago \u00b7 no outcome recorded</div>';
     } else {
       h += '<div data-geode-css="font-size:11px;color:var(--notice)">' + fm(item.remaining) + ' remaining — deadline passed</div>';
     }
@@ -38744,7 +38744,8 @@ function geodeMonthDetailView(model) {
  * P3-5D: the detail's Income part — the month's income receipts (the model's income_recorded items) beside the plan's
  * income, never combined with it: no difference, share or amount still due is formed. Null unless income received is
  * recorded this month. Dated receipts come first, by the day received; month-only receipts follow in the model's order,
- * with no day invented. recordedAt never dates or orders a receipt here.
+ * with no day invented. recordedAt never dates or orders a receipt here. P3-5E: planSet tells an income plan of £0
+ * the user entered from one never entered — no planned income versus not known.
  */
 function geodeMonthIncomeView(model) {
   var income = model && model.income;
@@ -38759,7 +38760,8 @@ function geodeMonthIncomeView(model) {
   if (!items.length) return null;
   return {
     received: income.received,
-    planned: typeof income.planned === 'number' && income.planned > 0 ? income.planned : 0,
+    planSet: income.explicitlySet === true,
+    planned: income.explicitlySet === true && typeof income.planned === 'number' && income.planned > 0 ? income.planned : 0,
     irregular: income.type === 'irregular',
     receipts: items.map(function (x) {
       return { id: x.id, amount: x.amount, date: x.date, ym: x.date ? x.date.slice(0, 7) : String(model.month.ym || ''), label: x.label };
@@ -38878,7 +38880,8 @@ function geodeMonthDetailHtml(d) {
   if (d.income) {
     h += heading('Income', fmExact(d.income.received) + ' recorded as received');
     h += list('income', d.income.receipts.map(incomeRow));
-    h += note(d.income.planned > 0 ? 'Planned income ' + fmExact(d.income.planned) + (d.income.irregular ? ' \u00b7 irregular' : '') : 'No planned income this month.');
+    h += note(d.income.planned > 0 ? 'Planned income ' + fmExact(d.income.planned) + (d.income.irregular ? ' \u00b7 irregular' : '')
+      : d.income.planSet ? 'No planned income this month.' : 'Planned income hasn\u2019t been set.');
   }
   if (d.done.length || d.also.length || d.ahead.length) {
     h += heading('Happened', d.done.length ? fm(d.doneTotal) + ' completed' : '');
@@ -39056,34 +39059,50 @@ function geodeHomeMonthPulseHtml(state, now, opts) {
  * geodeLivingMonthReceipts. Form state lives in the open dialog: nothing here is persisted.
  */
 
-/** P3-5D: the typed amount as a number — '' when blank, NaN when not a number. Spaces, commas and a leading currency sign are ignored. */
+/**
+ * P3-5D: the typed amount as a number — '' when blank, NaN when not a number. Spaces and a leading currency sign are
+ * ignored; a comma is only ever a thousands separator in whole groups (1,000 or 12,500.50), so 2,50 is not a number
+ * rather than 250.
+ */
 function geodeIncomeReceiptParseAmount(text) {
-  var s = String(text == null ? '' : text).replace(/[\s,]/g, '').replace(/^[^\da-zA-Z.+\-]/, '');
+  var s = String(text == null ? '' : text).replace(/\s/g, '').replace(/^[^\da-zA-Z.,+\-]/, '');
   if (!s) return '';
-  return /^[+\-]?(\d+\.?\d*|\.\d+)$/.test(s) ? Number(s) : NaN;
+  if (!/\d/.test(s) || !/^[+\-]?(\d{1,3}(,\d{3})+|\d+)?(\.\d*)?$/.test(s)) return NaN;
+  return Number(s.replace(/,/g, ''));
+}
+
+/** P3-5E: an amount too large to be held to the penny (from £1,000,000,000,000), so never recorded as typed. */
+function geodeIncomeReceiptAmountTooLarge(n) {
+  return typeof n === 'number' && n >= 1e12;
 }
 
 /** P3-5D: the dialog's confirm text — the amount it will record once the writer would accept it. */
 function geodeIncomeReceiptSubmitLabel(mode, amountText) {
   if (mode === 'correct') return 'Save correction';
   var n = geodeIncomeReceiptParseAmount(amountText);
-  return geodeIncomeReceiptAmountValid(n) ? 'Record ' + fmExact(n) + ' received' : 'Record income received';
+  return geodeIncomeReceiptAmountValid(n) && !geodeIncomeReceiptAmountTooLarge(n) ? 'Record ' + fmExact(n) + ' received' : 'Record income received';
 }
 
 /**
  * P3-5D: the writer input from the dialog's fields — { input } or { field, message }. Pure. When it was received is
  * the user's explicit choice: Today (today's date), Another day (that date) or the month with no day (ctx.monthYm, no
  * date). With no choice made nothing is built: a missing choice never becomes month-only or today. Amount and date
- * rules beyond "a number" and "a choice" are the writer's.
+ * rules beyond "a number" and "a choice" are the writer's. P3-5E: another day must be in ctx.monthYm, the month the
+ * dialog records for — the only month whose receipts Beynd can show, correct and remove — so no receipt is recorded
+ * (or corrected) into a month the user cannot reach again.
  */
 function geodeIncomeReceiptInput(form, ctx) {
   var amount = geodeIncomeReceiptParseAmount(form.amount);
   if (amount === '') return { field: 'amount', message: 'Enter the amount you received.' };
   if (typeof amount !== 'number' || !isFinite(amount)) return { field: 'amount', message: 'Enter the amount in numbers, like 2500 or 2500.50.' };
+  if (geodeIncomeReceiptAmountTooLarge(amount)) return { field: 'amount', message: 'That amount is too large to record.' };
   var input;
   if (form.timing === 'today') input = { amount: amount, ym: String(ctx.today || '').slice(0, 7), date: ctx.today };
   else if (form.timing === 'day') {
     if (!form.date) return { field: 'date', message: 'Choose the day you received it.' };
+    if (String(form.date).slice(0, 7) !== ctx.monthYm) {
+      return { field: 'date', message: 'Choose a day in ' + (geodeMonthPulseMonthName(ctx.monthYm) || 'this month') + '. Beynd can only show this month\u2019s income records for now.' };
+    }
     input = { amount: amount, ym: String(form.date).slice(0, 7), date: form.date };
   } else if (form.timing === 'month') input = { amount: amount, ym: ctx.monthYm };
   else return { field: 'when', message: 'Choose when you received it.' };
@@ -39173,7 +39192,7 @@ function geodeIncomeReceiptFormHtml(cfg) {
     choice('today', 'Today (' + geodeMonthPulseDay(today) + ')') + choice('day', 'Another day') +
     '<div id="geode-ir-day"' + (cfg.timing === 'day' ? '' : ' hidden') + ' data-geode-css="margin:2px 0 8px 28px">' +
     '<label for="geode-ir-date" data-geode-css="' + labelCss + '">Day received</label>' +
-    '<input type="date" id="geode-ir-date" class="fi" max="' + escHtmlLite(today) + '" value="' + escHtmlLite(cfg.date || '') +
+    '<input type="date" id="geode-ir-date" class="fi" min="' + escHtmlLite(String(cfg.monthYm || '') + '-01') + '" max="' + escHtmlLite(today) + '" value="' + escHtmlLite(cfg.date || '') +
     '" aria-describedby="geode-ir-date-error" onchange="geodeIncomeReceiptTimingChanged()">' + error('geode-ir-date-error') + '</div>' +
     choice('month', monthText) + error('geode-ir-when-error') + '</fieldset>';
   h += '<details id="geode-ir-label-box"' + (cfg.label ? ' open' : '') + ' data-geode-css="margin:0 0 14px">' +
@@ -39312,7 +39331,7 @@ function geodeIncomeReceiptRecord(el) {
     return;
   }
   geodeIncomeReceiptRemember(el);
-  window._geodeReceiptForm = { mode: 'record', id: null, monthYm: today.slice(0, 7) };
+  window._geodeReceiptForm = { mode: 'record', id: null, monthYm: today.slice(0, 7), today: today };
   openModal(geodeIncomeReceiptFormHtml({ mode: 'record', cur: S.cur && S.cur.code, planned: model.income.planned, amount: '', timing: '', date: '', label: '', monthYm: today.slice(0, 7), today: today }));
   geodeIncomeReceiptDialogReady('geode-ir-amount');
 }
@@ -39328,7 +39347,7 @@ function geodeIncomeReceiptCorrect(id, el) {
     render();
     return;
   }
-  window._geodeReceiptForm = { mode: 'correct', id: r.id, monthYm: r.ym, original: r };
+  window._geodeReceiptForm = { mode: 'correct', id: r.id, monthYm: r.ym, original: r, today: today };
   openModal(geodeIncomeReceiptFormHtml({ mode: 'correct', cur: S.cur && S.cur.code, planned: 0, amount: String(r.amount), timing: r.date ? 'day' : 'month',
     date: r.date || '', label: r.label || '', monthYm: r.ym, today: today }));
   geodeIncomeReceiptDialogReady('geode-ir-amount');
@@ -39438,14 +39457,23 @@ function geodeIncomeReceiptUnchanged(original, input) {
 /**
  * P3-5D: Record / Save correction. One writer call per confirmation: geodeRecordIncomeReceipt, or
  * geodeCorrectIncomeReceipt for a correction (none when nothing was changed). A recording that looks like an existing
- * receipt asks first; "Record another" confirms it.
+ * receipt asks first; "Record another" confirms it. P3-5E: the dialog's words (Today (31 Oct), this month, the days
+ * offered) are fixed when it opens, so once the day has changed nothing is written — "Today" never becomes a day
+ * the dialog did not show.
  */
 function geodeIncomeReceiptSubmit(confirmed) {
   var ctx = window._geodeReceiptForm;
   if (!ctx || (ctx.mode !== 'record' && ctx.mode !== 'correct') || !geodeModalCommitOpen()) return;
+  var today = geodeTodayLocalISO();
+  if (!today || today !== ctx.today) {
+    geodeIncomeReceiptClose();
+    render();
+    toast('The date changed while this was open, so nothing was saved. Please try again.', 'warn');
+    return;
+  }
   var form = geodeIncomeReceiptFormRead();
   geodeIncomeReceiptShowError(null);
-  var built = geodeIncomeReceiptInput(form, { today: geodeTodayLocalISO(), monthYm: ctx.monthYm });
+  var built = geodeIncomeReceiptInput(form, { today: today, monthYm: ctx.monthYm });
   if (!built.input) {
     geodeIncomeReceiptShowError(built);
     return;

@@ -176,7 +176,7 @@ var __calls = [], __saves = 0;
 })();
 `;
 
-const UX_FNS = ['geodeMonthIncomeView', 'geodeIncomeReceiptParseAmount', 'geodeIncomeReceiptSubmitLabel', 'geodeIncomeReceiptInput', 'geodeIncomeReceiptReasonMessage',
+const UX_FNS = ['geodeMonthIncomeView', 'geodeIncomeReceiptParseAmount', 'geodeIncomeReceiptAmountTooLarge', 'geodeIncomeReceiptSubmitLabel', 'geodeIncomeReceiptInput', 'geodeIncomeReceiptReasonMessage',
   'geodeIncomeReceiptOutcomeMessage', 'geodeIncomeReceiptLikelyDuplicate', 'geodeIncomeReceiptDuplicateText', 'geodeIncomeReceiptFormHtml', 'geodeIncomeReceiptRemoveHtml',
   'geodeIncomeReceiptModel', 'geodeIncomeReceiptFind', 'geodeMonthDetailToggled', 'geodeIncomeReceiptRemember', 'geodeIncomeReceiptDismissed', 'geodeIncomeReceiptClose',
   'geodeIncomeReceiptDialogReady', 'geodeIncomeReceiptRecord', 'geodeIncomeReceiptCorrect', 'geodeIncomeReceiptRemove', 'geodeIncomeReceiptFormRead',
@@ -367,8 +367,9 @@ function checksFor(src) {
       [rk.date, incomePart(k).rows[0][1], new Date(rk.recordedAt).getDate()], ['2026-10-05', '\u00a33,000 \u00b7 5 Oct', 12]);
     const sep = P();
     recordVia(sep, { amount: '900', timing: 'day', date: '2026-09-28' });
-    check('K.past-month', 'An earlier month\'s day is accepted and belongs to September: October still has none recorded',
-      [calls(sep)[0], incomeLine(sep)], [['record', { amount: 900, ym: '2026-09', date: '2026-09-28' }], NONE + ' Record income received']);
+    check('K.past-month', 'P3-5E: an earlier month\'s day is not recorded (Beynd could not show it again): a message on the day, no writer call, the dialog open; the picker starts at 1 Oct',
+      [calls(sep), errors(sep)[2], dialogOpen(sep), val(sep, 'document.getElementById("geode-ir-date").getAttribute("min")'), memList(sep)],
+      [[], 'Choose a day in October. Beynd can only show this month\u2019s income records for now.', true, '2026-10-01', undefined]);
     const l = P();
     recordVia(l, { amount: '3000', timing: 'today', label: '  Salary ' });
     check('L.label', 'L. Label: display only — "Salary" titles the row, "£3,000 income recorded · 12 Oct"; the plan untouched',
@@ -434,8 +435,9 @@ function checksFor(src) {
     openOn(s, 'correct', 'inc_a');
     fill(s, { date: '2026-09-30' });
     submit(s);
-    check('S.moves-month', 'S. Correcting 1 Oct to 30 Sep moves it out of October: none recorded in October; September holds it',
-      [incomeLine(s), incomePart(s), val(s, 'geodeIncomeReceiptLedger(S.incomeReceipts, "2026-09").month.total')], [NONE + ' Record income received', null, 3000]);
+    check('S.moves-month', 'S. P3-5E: correcting 1 Oct to 30 Sep is not saved (the receipt would leave the only month Beynd shows): a message on the day; no writer call; still 1 Oct',
+      [calls(s).filter(c => c[0] === 'correct'), errors(s)[2], incomeLine(s), val(s, 'geodeIncomeReceiptLedger(S.incomeReceipts, "2026-09").month.total'), ledger(s).active.map(r => r.date)],
+      [[], 'Choose a day in October. Beynd can only show this month\u2019s income records for now.', '\u00a33,000 recorded as received this month. Add income', null, ['2026-10-01']]);
 
     const same = P({ incomeReceipts: [R('inc_a', 3000, { date: '2026-10-05' })] });
     reset(same);
@@ -761,4 +763,8 @@ function main() {
   process.exit(failed ? 1 : 0);
 }
 
-main();
+if (require.main === module) main();
+else {
+  module.exports = { SRC, OCT, GBP, BASELINE, R, V, NONE, BANNED, UX_FNS, page, install, val, T, TS, click, incomeLine, pulseText, dialogOpen, dialogText,
+    calls, saves, reset, toasts, ledger, storedList, memList, incomePart, detailText, figures, openRecord, fill, submit, recordVia, openOn, errors, activeId };
+}

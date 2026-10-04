@@ -680,7 +680,7 @@ function checksFor(src) {
       .filter(n => /income|receipt|received/i.test(body(n))), []);
 
   section('INCOME RECEIPT EXPERIENCE (P3-5D) — the dialog reaches receipts only through the P3-5B writers, once per confirmation, and writes nothing else');
-  const UX_FNS = ['geodeMonthIncomeView', 'geodeIncomeReceiptParseAmount', 'geodeIncomeReceiptSubmitLabel', 'geodeIncomeReceiptInput', 'geodeIncomeReceiptReasonMessage',
+  const UX_FNS = ['geodeMonthIncomeView', 'geodeIncomeReceiptParseAmount', 'geodeIncomeReceiptAmountTooLarge', 'geodeIncomeReceiptSubmitLabel', 'geodeIncomeReceiptInput', 'geodeIncomeReceiptReasonMessage',
     'geodeIncomeReceiptOutcomeMessage', 'geodeIncomeReceiptLikelyDuplicate', 'geodeIncomeReceiptDuplicateText', 'geodeIncomeReceiptFormHtml', 'geodeIncomeReceiptRemoveHtml',
     'geodeIncomeReceiptModel', 'geodeIncomeReceiptFind', 'geodeMonthDetailToggled', 'geodeIncomeReceiptRemember', 'geodeIncomeReceiptDismissed', 'geodeIncomeReceiptClose',
     'geodeIncomeReceiptDialogReady', 'geodeIncomeReceiptRecord', 'geodeIncomeReceiptCorrect', 'geodeIncomeReceiptRemove', 'geodeIncomeReceiptFormRead',
