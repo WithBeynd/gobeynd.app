@@ -81,11 +81,16 @@ const PRODUCTION_FUNCTIONS = [
   // debt ledger: shared payment paths call it; it must stay inert for goal/investment rows
   'geodeNormalizeDebtPaymentEvents', 'geodeDebtPaymentEventSnapshot', 'geodeDebtPaymentOccurrenceYm',
   'geodeDebtPaymentActiveCompletion', 'geodeDebtPaymentEventId', 'geodeRecordDebtPaymentTransition',
-  'geodeDebtPaymentYmValid', 'geodeDebtPaymentPointerTarget',
+  'geodeDebtPaymentYmValid', 'geodeDebtPaymentPointerTarget', 'geodeDebtPaymentActiveCompletions',
   // bill settlement ledger (P2-4): evidence on the same payment paths; nothing financial reads it
   'geodePaymentIsBill', 'geodeBillDueYm', 'geodeBillPaymentEventValid', 'geodeBillPaymentLedger', 'geodeNormalizeBillPaymentEvents',
   'geodeBillPaymentActiveCompletion', 'geodeBillPaymentEventId', 'geodeBillPaymentEventSnapshot', 'geodeBillPaidOccurrenceYm',
   'geodeBillCompletedAmount', 'geodeAppendBillCompletion', 'geodeRecordBillPaymentTransition', 'geodeSeedBillPaymentEvents',
+  // expectation evidence and schema 3 (P2-5): captured at the month boundary; nothing financial reads it
+  'geodeSchema3Active', 'geodeSchema3TransitionDue', 'geodeSchema3Transition', 'geodeSchema3TransitionOutstanding', 'geodeBoundaryTransitionOutstanding',
+  'geodeExpectationDomain', 'geodeExpectationGapValid', 'geodeExpectationGapLedger', 'geodeNormalizeExpectationGaps', 'geodeExpectationEventDueYm',
+  'geodeExpectationSettlementIndex', 'geodeExpectationSettled', 'geodeExpectationCreatedYm', 'geodeExpectationPaidOccurrenceYm',
+  'geodeExpectationCaptureContext', 'geodeCaptureExpectationGaps', 'geodeExpectationOccurrenceStatus', 'geodeExpectationOccurrences',
   // contribution ledger (FA-3A): captured on the same payment paths; nothing reads it for balances yet
   'geodeNormalizeContributionEvents', 'geodeContributionYmValid', 'geodeContributionYmTrusted', 'geodeContributionEventValid', 'geodeContributionLedger',
   'geodeContributionActiveCompletions', 'geodeContributionActiveCompletion', 'geodeContributionEntityRef',
@@ -138,6 +143,8 @@ const STRUCTURAL_FUNCTIONS = ['load', 'save', 'geodeInstallFinancialStorageListe
 
 /** The release gate load() and __reload put in front of the schema 1 → 2 transition (geodeShellReadiness). */
 const RELEASE_GATE = "else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();";
+/** P2-5: the same readiness in front of the schema 2 → 3 transition, between RELEASE_GATE and INVESTMENT_GATE. */
+const SCHEMA3_GATE = "if (geodeSchema3TransitionDue(S) && geodeShellReadiness() !== 'pending') geodeSchema3Transition();";
 /** P1-REL: the same readiness in front of the automatic FA-7B investment transition, after RELEASE_GATE and before recurring sync. */
 const INVESTMENT_GATE = "if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') geodeInvestmentAuthorityTransition(S, _geodeInvOpening);";
 
@@ -258,10 +265,12 @@ function __reload() {
   geodeNormalizeSavingsReleases(S);
   geodeNormalizeBillPaymentEvents(S);
   if (!_geodeRuntimeStale) geodeSeedBillPaymentEvents();
+  geodeNormalizeExpectationGaps(S);
   var _geodeInvOpening = _geodeRuntimeStale ? [] : geodeInvestmentLegacyOpeningValues(S);
   if (!_geodeRuntimeStale) {
     if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
     else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();
+    if (geodeSchema3TransitionDue(S) && geodeShellReadiness() !== 'pending') geodeSchema3Transition();
     if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') geodeInvestmentAuthorityTransition(S, _geodeInvOpening);
   }
   syncRecurringPayments();
@@ -857,9 +866,9 @@ function harnessFidelity() {
     const load = PROGRAM.structural.load;
     const order = ['geodeNoteFinancialBoot(d);', 'S._schemaVersion = geodePersistedSchemaVersion(p._schemaVersion);', 'geodeNormalizeContributionEvents(S);', 'geodeNormalizeContributionCarry(S);',
       'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();', 'geodeNormalizeSavingsReleases(S);',
-      'geodeNormalizeBillPaymentEvents(S);', 'if (!_geodeRuntimeStale) geodeSeedBillPaymentEvents();',
+      'geodeNormalizeBillPaymentEvents(S);', 'if (!_geodeRuntimeStale) geodeSeedBillPaymentEvents();', 'geodeNormalizeExpectationGaps(S);',
       'var _geodeInvOpening = _geodeRuntimeStale ? [] : geodeInvestmentLegacyOpeningValues(S);', 'if (!_geodeRuntimeStale) {',
-      'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, INVESTMENT_GATE, 'syncRecurringPayments();',
+      'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, SCHEMA3_GATE, INVESTMENT_GATE, 'syncRecurringPayments();',
       'geodeNormalizeDebtPaymentEvents(S);', 'geodeRecomputeBalancesFromPayments();'];
     const at = order.map(c => load.indexOf(c));
     invariant('fidelity.load', 'load() runs the reload-shim sequence in this order', at.every((p, i) => p >= 0 && (i === 0 || p > at[i - 1])), true);
@@ -942,11 +951,13 @@ function goalB() {
     invariant('B.aug.rollover', 'August rollover: Holiday keeps June (D1 closed by FA-3C-C)', s.goal.gH, 1100);
     app.at('2026-08-15'); app.toggle(id); s = app.snap('Aug 15 completed');
     invariant('B.aug.goal', 'August completed: Holiday (D1 closed by FA-3C-C)', s.goal.gH, 1200);
+    invariant('B.history', 'The occurrence read model answers June = confirmed, July = expected · no recorded outcome (never "missed" or "unpaid"), August = confirmed (P2-5)',
+      ['2026-06', '2026-07', '2026-08'].map(ym => app.run('geodeExpectationOccurrenceStatus(S, ' + JSON.stringify(id) + ', "' + ym + '")')),
+      ['confirmed', 'expected_no_recorded_outcome', 'confirmed']);
     timelines[mode] = app.timeline;
   }));
   scenario('GOAL B — same-session vs reload', () => {
     parity('B.parity', 'GOAL B (D6 closed for goals by FA-3C-C)', timelines);
-    spec('B.history', 'History reads June = completed, July = not recorded (missed), August = completed', 'one recurring row; no per-month record');
   });
 }
 
@@ -1087,24 +1098,26 @@ function missedRecurring() {
   const timelines = {};
   MODES.forEach(mode => scenario('MISSED — £100/month due 15 June, never completed [' + mode + ']', () => {
     const app = new App(baseState(), '2026-06-05');
-    monthlyHoliday(app);
+    const id = monthlyHoliday(app);
     let s = app.snap('Jun 05 scheduled');
     invariant('M.jun.left', 'June Monthly Left allocates £100', s.left, 2900);
     app.advance('2026-06-16', mode); s = app.snap('Jun 16 past due');
     current('M.jun.status', 'June after due date: effective status', s.rows[0].effective, 'overdue');
     current('M.jun.home', 'June after due date: Home overdue payment items', String(s.homeOverduePayments), '1');
     app.advance('2026-07-02', mode); s = app.snap('Jul 02 rollover');
-    current('M.jul.rows', 'July rollover: one row, moved to 15 July (June no longer identifiable)', s.rows.map(r => [r.date, r.effective]), [['2026-07-15', 'upcoming']]);
+    current('M.jul.rows', 'July rollover: one row, moved to 15 July (the row no longer identifies June; since P2-5 the June expectation survives as evidence, see M.history)', s.rows.map(r => [r.date, r.effective]), [['2026-07-15', 'upcoming']]);
     invariant('M.jul.left', 'July Monthly Left allocates only July\'s £100 (missed June is not a liability)', s.left, 2900);
     invariant('M.jul.goal', 'Holiday unchanged', s.goal.gH, 1000);
     app.advance('2026-08-02', mode); s = app.snap('Aug 02 rollover');
     current('M.aug.rows', 'August rollover: same row moved to 15 August', s.rows.map(r => r.date), ['2026-08-15']);
     invariant('M.aug.left', 'August Monthly Left allocates only August\'s £100', s.left, 2900);
+    invariant('M.history', 'The occurrence read model answers June and July = expected · no recorded outcome — recorded at each boundary from the template and the absence of a settlement, never "not completed" or "missed"; August, the current month, is not classified (P2-5)',
+      ['2026-06', '2026-07', '2026-08'].map(ym => app.run('geodeExpectationOccurrenceStatus(S, ' + JSON.stringify(id) + ', "' + ym + '")')),
+      ['expected_no_recorded_outcome', 'expected_no_recorded_outcome', 'unknown']);
     timelines[mode] = app.timeline;
   }));
   scenario('MISSED — same-session vs reload', () => {
     parity('M.parity', 'MISSED', timelines, undefined, '');
-    spec('M.history', 'History can answer "June = not completed" (derived from template + absence of a June completion)', 'June is erased at July rollover');
   });
 }
 
@@ -2501,9 +2514,9 @@ function fa3aLedger() {
     const lists = JSON.parse(app.run('JSON.stringify([geodeBeyndBackupRestorableKeyWhitelist(), geodeBeyndBackupForbiddenDataKeys()])'));
     invariant('FA3A.backup.lists', 'contributionEvents is restorable, not forbidden and not excluded from export',
       [lists[0].indexOf('contributionEvents') >= 0, lists[1].indexOf('contributionEvents'), env.excludedTopLevelKeys.indexOf('contributionEvents')], [true, -1, -1]);
-    const newer = app.restorable(Object.assign({}, env, { schemaVersion: 3 }));
-    invariant('FA3A.schema', 'Schema 2 since FA-3C-C (the authority switch): the build and its export are schema 2, and the schema-1 state saved above transitioned; a backup marked newer (3) is refused whole, never extracted without its ledger',
-      [app.run('GEODE_SCHEMA_VERSION'), env.schemaVersion, app.state()._schemaVersion, newer.ok, Object.keys(newer.state).length], [2, 2, 2, false, 0]);
+    const newer = app.restorable(Object.assign({}, env, { schemaVersion: 4 }));
+    invariant('FA3A.schema', 'Schema 3 since P2-5 (schema 2 since FA-3C-C, the authority switch): the build and its export are schema 3, and the schema-1 state saved above transitioned; a backup marked newer (4) is refused whole, never extracted without its ledger',
+      [app.run('GEODE_SCHEMA_VERSION'), env.schemaVersion, app.state()._schemaVersion, newer.ok, Object.keys(newer.state).length], [3, 3, 3, false, 0]);
   });
 }
 
@@ -3192,9 +3205,9 @@ function fa3bLifecycle() {
     const ambiguousEnv = new App(ambiguous, '2026-08-10').backup();
     ambiguousEnv.data = legacyData(ambiguousEnv.data); ambiguousEnv.schemaVersion = 1;
     const ambiguousBack = restoreLoad(ambiguousEnv, '2026-08-10');
-    invariant('FA3B.backup.ambiguous', 'A legacy backup with only ambiguous paid rows restores with no invented event: the transition carries both rows undated and Holiday stays £1,350 at schema 2',
+    invariant('FA3B.backup.ambiguous', 'A legacy backup with only ambiguous paid rows restores with no invented event: the transition carries both rows undated and Holiday stays £1,350 at schema 3 (P2-5: schema 2 then 3)',
       [ambiguousBack.a.events(), carryRows(ambiguousBack.a.state().contributionCarry).map(c => [c[0], c[3]]), ambiguousBack.a.snap().goal.gH, ambiguousBack.a.state()._schemaVersion],
-      [[], [['px', 100], ['pa', 250]], 1350, 2]);
+      [[], [['px', 100], ['pa', 250]], 1350, 3]);
   });
 
   scenario('FA-3B OBSERVATIONAL — £5,000 fake completions move only goal Saved: never the ISA, Monthly Left or rows', () => {
@@ -3520,11 +3533,11 @@ function fa3caLifecycle() {
     badEnv.data.contributionCarry = [CARRY('bad', 'pZ', { amount: -1 })].concat(records);
     const badBack = new App(app.restorable(badEnv).state, '2026-08-10');
     badBack.reload();
-    invariant('FA3CA.backup', 'A carry and its resolution survive the transition, render and reload; the export holds them; restore extraction keeps them (not stripped) and the restored load has them; an old schema-1 backup without the key loads [] and transitions to schema 2; an invalid carry in a backup is dropped at load; export and build are schema 2',
+    invariant('FA3CA.backup', 'A carry and its resolution survive the transition, render and reload; the export holds them; restore extraction keeps them (not stripped) and the restored load has them; an old schema-1 backup without the key loads [] and transitions to schema 3 (through 2, P2-5); an invalid carry in a backup is dropped at load; export and build are schema 3',
       [same(persisted, records), same(env.data.contributionCarry, records), [restored.ok, restored.strippedKeys.indexOf('contributionCarry')], same(back.state().contributionCarry, records),
         ['contributionCarry' in oldEnv.data, oldBack.state().contributionCarry, oldBack.state()._schemaVersion], badBack.state().contributionCarry.map(c => c.id),
         [env.schemaVersion, back.run('GEODE_SCHEMA_VERSION'), app.state()._schemaVersion, back.state()._schemaVersion]],
-      [true, true, [true, -1], true, [false, [], 2], ['c1', 'r1'], [2, 2, 2, 2]]);
+      [true, true, [true, -1], true, [false, [], 3], ['c1', 'r1'], [3, 3, 3, 3]]);
   });
 
   scenario('FA-3C-A BOUNDARY — carries come only from the schema 1→2 transition; only goal authority and the C4b reset read them', () => {
@@ -3877,10 +3890,10 @@ function fa3cbIntegration() {
     const records = b.state().contributionCarry;
     const env = b.backup(), restored = b.restorable(env), back = new App(restored.state, '2026-08-10'); back.reload(); back.reload();
     const none = new App(fa3cbFixture('monthly-ambiguous')[2], '2026-08-10'); none.reload(); none.toggle('pm'); none.reload();
-    invariant('FA3CB.backup', 'A resolution written by a production action survives save, reload, export and restore; repeating the same edit appends nothing; reloads never duplicate it; export and build are schema 2; a schema-1 state gains exactly its transition carry on the first load, and later loads and actions only append resolutions',
+    invariant('FA3CB.backup', 'A resolution written by a production action survives save, reload, export and restore; repeating the same edit appends nothing; reloads never duplicate it; export and build are schema 3 (P2-5); a schema-1 state gains exactly its transition carry on the first load, and later loads and actions only append resolutions',
       [resolutionRows(b), same(env.data.contributionCarry, records), same(back.state().contributionCarry, records), [env.schemaVersion, back.run('GEODE_SCHEMA_VERSION')],
         [carryRows(none.state().contributionCarry).map(c => c[0]), resolutionRows(none)]],
-      [[['carry_pm', 'amended', 120]], true, true, [2, 2], [['pm'], [['carry_pm', 'reversed']]]]);
+      [[['carry_pm', 'amended', 120]], true, true, [3, 3], [['pm'], [['carry_pm', 'reversed']]]]);
 
     const w = carriedFixture('monthly-ambiguous', s => { s.goals.push(CAR()); s.savingsReleases = [EVENT_RELEASE]; });
     const untouched = () => [w.state().contributionCarry[0], w.state().goals.map(g => g.baseSaved), w.state().savingsReleases, w.events()];
@@ -4486,9 +4499,9 @@ function fa3ccTransition() {
     const values = JSON.parse(app.run('JSON.stringify([undefined, null, "2", "x", NaN, Infinity, 0, -1, 1.5, true, 1, 2, 3].map(function (v) { return geodePersistedSchemaVersion(v); }))'));
     const src = PROGRAM.src, sAt = src.indexOf('\nvar S = {'), sDecl = src.slice(sAt, src.indexOf('\n};', sAt));
     const load = PROGRAM.structural.load, persist = load.indexOf('S._schemaVersion = geodePersistedSchemaVersion(p._schemaVersion);');
-    invariant('FA3CC.transition.version-rule', 'A stored marker counts only as a whole number ≥ 1 (missing, null, text, NaN, Infinity, 0, negative, fractional or boolean → schema 1); the build is schema 2, and a fresh install (nothing stored) keeps the default marker, so it starts at schema 2 and never transitions',
+    invariant('FA3CC.transition.version-rule', 'A stored marker counts only as a whole number ≥ 1 (missing, null, text, NaN, Infinity, 0, negative, fractional or boolean → schema 1); the build is schema 3 (P2-5), and a fresh install (nothing stored) keeps the default marker, so it starts at schema 3 and never transitions',
       [values, app.run('GEODE_SCHEMA_VERSION'), sDecl.indexOf('_schemaVersion: GEODE_SCHEMA_VERSION,') >= 0, load.indexOf('if (d) {') < persist && persist < load.indexOf('} catch(e) {}')],
-      [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3], 2, true, true]);
+      [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 3], 3, true, true]);
 
     const g1 = fa3cbFixture('one-off');
     const boot = v => {
@@ -4497,13 +4510,13 @@ function fa3ccTransition() {
       const a = new App(s, g1[3]);
       return [seededRows(a).length, stored(a)._schemaVersion, a.snap().goal.gH, a.warnings.length ? flagged(a) : 'clean'];
     };
-    const MOVED = [1, 2, 1250, 'clean'];
-    invariant('FA3CC.transition.version-load', 'Stored G1 (paid one-off £250 for Holiday) with the marker missing, "2", 0, −1, 1.5, "x", null or 1 loads as schema 1 and transitions once (completion seeded, stored marker 2, Holiday £1,250); a numeric 2 is already schema 2 — nothing seeded, the unowned row is flagged and adds nothing (Holiday £1,000)',
-      [undefined, '2', 0, -1, 1.5, 'x', null, 1, 2].map(boot), [MOVED, MOVED, MOVED, MOVED, MOVED, MOVED, MOVED, MOVED, [0, 2, 1000, true]]);
+    const MOVED = [1, 3, 1250, 'clean'];
+    invariant('FA3CC.transition.version-load', 'Stored G1 (paid one-off £250 for Holiday) with the marker missing, "2", 0, −1, 1.5, "x", null or 1 loads as schema 1 and transitions once (completion seeded, stored marker 3 after the P2-5 step, Holiday £1,250); a numeric 2 is already schema 2 — nothing seeded (it only moves to 3), the unowned row is flagged and adds nothing (Holiday £1,000)',
+      [undefined, '2', 0, -1, 1.5, 'x', null, 1, 2].map(boot), [MOVED, MOVED, MOVED, MOVED, MOVED, MOVED, MOVED, MOVED, [0, 3, 1000, true]]);
 
     const tr = extractFunction(src, 'geodeSchema2Transition').text;
     const steps = ['geodeSeedLegacyContributionEvents();', 'geodeSchema2TransitionCarryRecords(S)', 'geodeSchema2AuthorityProblems(S, true)',
-      'S._schemaVersion = GEODE_SCHEMA_VERSION;', 'geodeSchema2CommitTransition()'].map(s => tr.indexOf(s));
+      'S._schemaVersion = 2;', 'geodeSchema2CommitTransition()'].map(s => tr.indexOf(s));
     const gateAt = load.indexOf(RELEASE_GATE), syncAt = load.indexOf('syncRecurringPayments();');
     invariant('FA3CC.c4.order', 'The transition seeds dated completions, then carries what rows cannot date, validates, sets the marker and only then writes; load runs it (behind the release gate) before recurring sync resets paid rows — every construct is found before its position is compared',
       [steps.every(i => i >= 0), steps.every((i, n) => !n || steps[n - 1] < i), gateAt >= 0 && syncAt >= 0 && gateAt < syncAt], [true, true, true]);
@@ -4514,8 +4527,8 @@ function fa3ccTransition() {
     const first = [writes(once), stored(once)._schemaVersion, same(stored(once).contributionEvents, once.events()), same(stored(once).contributionCarry, once.state().contributionCarry)];
     const ledger = [once.events(), once.state().contributionCarry, once.run('__uidN')];
     once.reload(); once.reload();
-    invariant('FA3CC.c2.one-write', 'The transition persists the whole state in one store write (marker 2, the seeded completions and the four carries as held in memory); two later loads write nothing and change no completion, carry, id or time, and allocate no ids',
-      [first, writes(once), same([once.events(), once.state().contributionCarry, once.run('__uidN')], ledger)], [[1, 2, true, true], 0, true]);
+    invariant('FA3CC.c2.one-write', 'The transition persists the whole state in one store write (the seeded completions and the four carries as held in memory), and the P2-5 schema-3 transition in one more (marker 3); two later loads write nothing and change no completion, carry, id or time, and allocate no ids',
+      [first, writes(once), same([once.events(), once.state().contributionCarry, once.run('__uidN')], ledger)], [[2, 3, true, true], 0, true]);
 
     const CARRIED = { 'monthly-ambiguous': [100], 'annual-ambiguous': [250], 'annual-ambiguous-past': [250], negative: [-50] };
     const outcome = f => {
@@ -4561,9 +4574,9 @@ function fa3ccCrash() {
     watchWrites(thrown.app);
     thrown.app.run('__reload()');
     const clean = new App(FA3CC_MIX, '2026-08-21');
-    invariant('FA3CC.c2.crash.retry', 'With storage working again the next load (the 21st at 15:00: other ids and creation times) transitions and persists schema 2 at once; its financial result — display, seeded completions, carries, goal parts and positions — equals an uninterrupted transition (21st at noon)',
+    invariant('FA3CC.c2.crash.retry', 'With storage working again the next load (the 21st at 15:00: other ids and creation times) transitions and persists schema 2 at once, then schema 3 (P2-5: a second write); its financial result — display, seeded completions, carries, goal parts and positions — equals an uninterrupted transition (21st at noon)',
       [writes(thrown.app), stored(thrown.app)._schemaVersion, same(financial(thrown.app), financial(clean)), thrown.app.state().contributionCarry[0].createdAt === clean.state().contributionCarry[0].createdAt],
-      [1, 2, true, false]);
+      [2, 3, true, false]);
     const done = [thrown.app.events(), thrown.app.state().contributionCarry];
     thrown.app.reload();
     invariant('FA3CC.c2.crash.after-success', 'Reloading after the successful retry does not transition again: no write; completions and carries identical, ids and creation times included',
@@ -4576,10 +4589,13 @@ function fa3ccCrash() {
       app.at(reopen); app.run('__reload()');
       const whole = new App(FA3CC_MIX, clock);
       whole.at(reopen); whole.run('__reload()');
-      return [committed, same(app.state(), whole.state()), app.snap().goal];
+      const finance = s => Object.assign({}, s, { expectationGaps: null, expectationFloorYm: null, _rev: null });
+      const evidence = s => [s.expectationFloorYm, s.expectationGaps.map(g => [g.paymentId, g.fromYm, g.toYm])];
+      return [committed, same(finance(app.state()), finance(whole.state())), app.snap().goal, evidence(app.state()), evidence(whole.state())];
     };
-    invariant('FA3CC.c2.crash.before-sync', 'The app dies after the transition write but before recurring sync and the recompute: reopening the same day or on 2 September (past the carries\' month) gives exactly the state of an uninterrupted boot followed by the same reopen; Holiday £1,450, Car £540',
-      ['2026-08-20', '2026-09-02'].map(interrupted), [[true, true, { gH: 1450, gB: 540 }], [true, true, { gH: 1450, gB: 540 }]]);
+    invariant('FA3CC.c2.crash.before-sync', 'The app dies after the schema-2 write but before the schema-3 transition, recurring sync and the recompute: reopening the same day or on 2 September (past the carries\' month) gives exactly the financial state of an uninterrupted boot followed by the same reopen; Holiday £1,450, Car £540. Only expectation evidence may differ (P2-5): the interrupted boot reaches schema 3 on reopen, so its floor is that month and it can claim nothing before it; neither records a period here (the monthly row settled August, and rows with no known occurrence record nothing)',
+      ['2026-08-20', '2026-09-02'].map(interrupted),
+      [[true, true, { gH: 1450, gB: 540 }, ['2026-08', []], ['2026-08', []]], [true, true, { gH: 1450, gB: 540 }, ['2026-09', []], ['2026-08', []]]]);
 
     const broken = JSON.parse(JSON.stringify(fa3cbFixture('one-off')[2]));
     broken._schemaVersion = 2;
@@ -4587,9 +4603,9 @@ function fa3ccCrash() {
     const inc = new App(broken, '2026-08-10');
     inc.reload();
     const REPORT = INTEGRITY + 'investment carry cinv; payment p1 counts toward goal gH with no completion or carry';
-    invariant('FA3CC.c2.incomplete', 'A stored schema-2 state missing the paid one-off\'s completion and holding an investment carry is reported on every load and repaired by none: nothing seeded, no carry added or dropped, the row adds nothing (Holiday £1,000), the investment carry adds nothing (ISA £5,000), the marker stays 2',
+    invariant('FA3CC.c2.incomplete', 'A stored schema-2 state missing the paid one-off\'s completion and holding an investment carry is reported on every load and repaired by none: nothing seeded, no carry added or dropped, the row adds nothing (Holiday £1,000), the investment carry adds nothing (ISA £5,000), the marker moves only to 3 (P2-5 adds expectation storage and repairs nothing)',
       [inc.warnings.splice(0), inc.events(), same(inc.state().contributionCarry, broken.contributionCarry), inc.snap().goal.gH, inc.snap().inv.iA, stored(inc)._schemaVersion],
-      [[REPORT, REPORT], [], true, 1000, 5000, 2]);
+      [[REPORT, REPORT], [], true, 1000, 5000, 3]);
   });
 }
 
@@ -4845,17 +4861,23 @@ function fa3ccPositions() {
     const first1 = [writes(r1), stored(r1)._schemaVersion, r1.snap().goal, seededRows(r1).length, carryRows(r1.state().contributionCarry)];
     const r1Ledger = [r1.events(), r1.state().contributionCarry];
     r1.reload();
-    invariant('FA3CC.restore.schema-1', 'A schema-1 backup (exported by a fallback load) restores and transitions once: one write, marker 2, Holiday £1,350 and Car £540, one seeded completion and the four carries; the next load writes nothing and changes nothing',
-      [env1.schemaVersion, first1, writes(r1), same([r1.events(), r1.state().contributionCarry], r1Ledger)], [1, [1, 2, { gH: 1350, gB: 540 }, 1, CARRY_MIX_CARRIES], 0, true]);
+    invariant('FA3CC.restore.schema-1', 'A schema-1 backup (exported by a fallback load) restores and transitions once per schema: two writes (schema 2, then 3 — P2-5), marker 3, Holiday £1,350 and Car £540, one seeded completion and the four carries; the next load writes nothing and changes nothing',
+      [env1.schemaVersion, first1, writes(r1), same([r1.events(), r1.state().contributionCarry], r1Ledger)], [1, [2, 3, { gH: 1350, gB: 540 }, 1, CARRY_MIX_CARRIES], 0, true]);
     const src = new App(CARRY_MIX, '2026-08-20'), env2 = src.backup();
     const r2 = restoreBoot(env2, '2026-08-20');
-    invariant('FA3CC.restore.schema-2', 'A schema-2 backup restores without migrating: no write, completions and carries identical to the source (ids and times included), Holiday £1,350',
-      [env2.schemaVersion, writes(r2), same([r2.events(), r2.state().contributionCarry], [src.events(), src.state().contributionCarry]), r2.snap().goal.gH], [2, 0, true, 1350]);
+    invariant('FA3CC.restore.schema-2', 'A current-schema (3) backup restores without migrating: no write, completions and carries identical to the source (ids and times included), Holiday £1,350',
+      [env2.schemaVersion, writes(r2), same([r2.events(), r2.state().contributionCarry], [src.events(), src.state().contributionCarry]), r2.snap().goal.gH], [3, 0, true, 1350]);
+    const env2b = JSON.parse(JSON.stringify(env2));
+    env2b.schemaVersion = 2; env2b.data._schemaVersion = 2; delete env2b.data.expectationGaps; delete env2b.data.expectationFloorYm;
+    const r2b = restoreBoot(env2b, '2026-08-20');
+    invariant('FA3CC.restore.schema-2-to-3', 'A schema-2 backup (P2-5) restores and moves to schema 3 in one write: marker 3, an empty expectation list and the floor at this month (nothing derived before it), completions and carries identical to the source, Holiday £1,350',
+      [writes(r2b), stored(r2b)._schemaVersion, stored(r2b).expectationGaps, stored(r2b).expectationFloorYm, same([r2b.events(), r2b.state().contributionCarry], [src.events(), src.state().contributionCarry]), r2b.snap().goal.gH],
+      [1, 3, [], '2026-08', true, 1350]);
     const env3 = JSON.parse(JSON.stringify(env2));
     env3.data = legacyData(env3.data); env3.schemaVersion = 1;
     const r3 = restoreBoot(env3, '2026-08-20');
-    invariant('FA3CC.restore.old-backup', 'An old backup without a marker, completions or carries normalises and transitions: one write, marker 2, the same seeded completion and carries as a live transition, Holiday £1,350',
-      [writes(r3), stored(r3)._schemaVersion, seededRows(r3), carryRows(r3.state().contributionCarry), r3.snap().goal.gH], [1, 2, seededRows(src), CARRY_MIX_CARRIES, 1350]);
+    invariant('FA3CC.restore.old-backup', 'An old backup without a marker, completions or carries normalises and transitions: two writes (schema 2, then 3), marker 3, the same seeded completion and carries as a live transition, Holiday £1,350',
+      [writes(r3), stored(r3)._schemaVersion, seededRows(r3), carryRows(r3.state().contributionCarry), r3.snap().goal.gH], [2, 3, seededRows(src), CARRY_MIX_CARRIES, 1350]);
 
     const ln = new App(legacyState({ saved: 1350 }, { investments: [Object.assign(ISA(), { goalId: 'gH', balance: 5200 })],
       payments: [legacyPay('p1'), AMBIGUOUS_MONTHLY('pc'), legacyInvPay('im', { rec: 'yes', date: '2026-06-05' })] }), '2026-08-10');
@@ -4938,7 +4960,7 @@ function releaseSafetyFidelity() {
   scenario('FA-3 RELEASE — harness and production guards are the same code', () => {
     const src = PROGRAM.src, load = PROGRAM.structural.load;
     const reloadShim = TEST_SHIMS.slice(TEST_SHIMS.indexOf('function __reload()'), TEST_SHIMS.indexOf('\n}\n', TEST_SHIMS.indexOf('function __reload()')));
-    const gateOrder = text => { const at = ['geodeNoteFinancialBoot(', 'if (!_geodeRuntimeStale) {', 'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, INVESTMENT_GATE, 'syncRecurringPayments();'].map(c => text.indexOf(c)); return at.every((p, i) => p >= 0 && (!i || p > at[i - 1])); };
+    const gateOrder = text => { const at = ['geodeNoteFinancialBoot(', 'if (!_geodeRuntimeStale) {', 'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, SCHEMA3_GATE, INVESTMENT_GATE, 'syncRecurringPayments();'].map(c => text.indexOf(c)); return at.every((p, i) => p >= 0 && (!i || p > at[i - 1])); };
     const transitionCalls = text => text.split('geodeInvestmentAuthorityTransition(').length - 1;
     invariant('REL.fidelity.reload', 'load() and the __reload shim both note the stored schema first, then run the integrity report or the gated schema transition, then the investment transition behind the same shell readiness (P1-REL), only while the page may write and before recurring sync; each calls the investment transition exactly once, and production calls it nowhere else',
       [gateOrder(load), gateOrder(reloadShim), reloadShim.indexOf('geodeNoteFinancialBoot(__store);') >= 0, load.indexOf('geodeNoteFinancialBoot(d);') >= 0,
@@ -4950,9 +4972,9 @@ function releaseSafetyFidelity() {
         t.indexOf('localStorage.getItem(KEY) !== json') > w;
     };
     const wipe = extractFunction(src, 'wipeLocalAppStateAndReload').text;
-    invariant('REL.fidelity.writers', 'Each of the three KEY writers asks geodeFinancialWriteAllowed first (the transition commit as the schema-1 data it replaces), stamps _rev, read-backs the one setItem and only then accepts that text; production has no other KEY setItem; wipe asks the same guard before removeItem; the save shim stamps and accepts',
+    invariant('REL.fidelity.writers', 'Each of the three KEY writers asks geodeFinancialWriteAllowed first (the transition commit as the schema it replaces: 1, or 2 for the P2-5 schema-3 transition), stamps _rev, read-backs the one setItem and only then accepts that text; production has no other KEY setItem; wipe asks the same guard before removeItem; the save shim stamps and accepts',
       [guarded('save', 'if (!geodeFinancialWriteAllowed()) return;'), guarded('persistGeodeToLocalStorage', 'if (!geodeFinancialWriteAllowed()) return;'),
-        guarded('geodeSchema2CommitTransition', 'if (!geodeFinancialWriteAllowed(1)) return false;'), src.split('localStorage.setItem(KEY').length - 1,
+        guarded('geodeSchema2CommitTransition', 'if (!geodeFinancialWriteAllowed(from === undefined ? 1 : from)) return false;'), src.split('localStorage.setItem(KEY').length - 1,
         src.indexOf("setItem('geode_v6'") < 0, TEST_SHIMS.indexOf('geodeFinancialJsonToStore()') >= 0 && TEST_SHIMS.indexOf('geodeAcceptFinancialWrite(__json)') >= 0,
         wipe.indexOf('if (!geodeFinancialWriteAllowed()) return;') >= 0 && wipe.indexOf('if (!geodeFinancialWriteAllowed()) return;') < wipe.indexOf('localStorage.removeItem(KEY)')],
       [true, true, true, 3, true, true, true]);
@@ -4965,18 +4987,18 @@ function releaseSafetyBoot() {
   scenario('FA-3 RELEASE BOOT — data newer than this runtime is shown behind the reload gate and never rewritten', () => {
     const app = new App(baseState(), '2026-06-05');
     const versions = JSON.parse(app.run(`JSON.stringify([null, '{bad', 'null', '[]', '"x"', '{}', '{"_schemaVersion":"3"}', '{"_schemaVersion":2.5}', '{"_schemaVersion":1}',
-      '{"_schemaVersion":2}', '{"_schemaVersion":3}', '{"_schemaVersion":7}'].map(function (raw) {
+      '{"_schemaVersion":2}', '{"_schemaVersion":3}', '{"_schemaVersion":4}', '{"_schemaVersion":7}'].map(function (raw) {
       var v = geodeStoredSchemaVersion(raw); _geodeRuntimeStale = ''; geodeNoteFinancialBoot(raw);
       return [v !== v ? 'unreadable' : v, _geodeRuntimeStale, _geodeFinancialKeySeen];
     }))`));
     app.run("_geodeRuntimeStale = ''; _geodeFinancialKeySeen = true;");
-    invariant('REL.boot.versions', 'Stored KEY: nothing → none; unreadable, JSON null, an array or text → unreadable; a missing, text, fractional or 1 marker → schema 1; 2 and 3 as stored. Only a schema above 2 stops writes at boot; unreadable data is left to load() as before',
+    invariant('REL.boot.versions', 'Stored KEY: nothing → none; unreadable, JSON null, an array or text → unreadable; a missing, text, fractional or 1 marker → schema 1; 2, 3 and 4 as stored. Only a schema above 3 (P2-5) stops writes at boot; unreadable data is left to load() as before',
       [versions, relWarnings(app)],
       [[[null, '', false], ['unreadable', '', true], ['unreadable', '', true], ['unreadable', '', true], ['unreadable', '', true], [1, '', true], [1, '', true], [1, '', true],
-        [1, '', true], [2, '', true], [3, 'newer', true], [7, 'newer', true]], ['stale:newer', 'stale:newer']]);
+        [1, '', true], [2, '', true], [3, '', true], [4, 'newer', true], [7, 'newer', true]], ['stale:newer', 'stale:newer']]);
 
     const boot = v => {
-      const a = new App(Object.assign(baseState(v > 2 ? { payments: [legacyPay('p1')] } : {}), { _schemaVersion: v }), '2026-06-05', undefined, { boot: false });
+      const a = new App(Object.assign(baseState(v > 3 ? { payments: [legacyPay('p1')] } : {}), { _schemaVersion: v }), '2026-06-05', undefined, { boot: false });
       watchWrites(a);
       const raw = rawStore(a);
       a.run('__reload()');
@@ -4984,15 +5006,15 @@ function releaseSafetyBoot() {
       relAct(a); a.run('persistGeodeToLocalStorage();'); a.run('geodeSchema2CommitTransition();');
       return [booted, writes(a), rawStore(a) === raw, relWarnings(a)];
     };
-    invariant('REL.boot.newer', 'Stored schema 3 or 7: kept as stored in memory (never lowered to 2), no transition or seeding, the "newer version" gate; a form save, a direct persist and a transition commit then write nothing — the stored text is byte-identical',
-      [boot(3), boot(7)], [[[3, 0, ['newer', 'newer']], 0, true, ['stale:newer']], [[7, 0, ['newer', 'newer']], 0, true, ['stale:newer']]]);
-    invariant('REL.boot.current', 'Stored schema 2: no gate; save persists the reloaded state, and a following persist of that same text does not write it again; the commit, replacing schema 1 only, refuses and stops writes',
-      boot(2), [[2, 0, ['', '']], 0, false, ['stale:changed']]);
+    invariant('REL.boot.newer', 'Stored schema 4 or 7: kept as stored in memory (never lowered to 3), no transition or seeding, the "newer version" gate; a form save, a direct persist and a transition commit then write nothing — the stored text is byte-identical',
+      [boot(4), boot(7)], [[[4, 0, ['newer', 'newer']], 0, true, ['stale:newer']], [[7, 0, ['newer', 'newer']], 0, true, ['stale:newer']]]);
+    invariant('REL.boot.current', 'Stored schema 3: no gate; save persists the reloaded state, and a following persist of that same text does not write it again; the commit, replacing schema 1 only, refuses and stops writes',
+      boot(3), [[3, 0, ['', '']], 0, false, ['stale:changed']]);
 
-    const again = new App(Object.assign(baseState(), { _schemaVersion: 3 }), '2026-06-05');
+    const again = new App(Object.assign(baseState(), { _schemaVersion: 4 }), '2026-06-05');
     const raw = rawStore(again);
     again.reload(); again.reload();
-    invariant('REL.boot.no-loop', 'Reloading on schema 3 data shows the same gate each time and still writes nothing: the gate never reloads by itself',
+    invariant('REL.boot.no-loop', 'Reloading on schema 4 data shows the same gate each time and still writes nothing: the gate never reloads by itself',
       [staleState(again), rawStore(again) === raw, relWarnings(again)], [['newer', 'newer'], true, ['stale:newer', 'stale:newer', 'stale:newer']]);
   });
 }
@@ -5008,13 +5030,13 @@ function releaseSafetyWrites() {
       return [label, staleState(app), after === theirs ? 'kept theirs' : after && JSON.parse(after).payments.length === 1 ? 'wrote mine' : '?', relWarnings(app)];
     };
     const blocked = (label, why) => [label, [why, why], 'kept theirs', ['stale:' + why]];
-    invariant('REL.write.save', 'A schema 2 page whose stored data another window changed without telling it (no storage event, e.g. restored from the back/forward cache): a form save refuses schema 3 (newer), schema 1, a missing marker, a text "3" marker and removed data (changed), leaving their data byte-identical',
-      [atWrite('schema 3', r => withSchema(r, 3)), atWrite('schema 1', r => withSchema(r, 1)), atWrite('no marker', r => withSchema(r)),
+    invariant('REL.write.save', 'A schema 3 page whose stored data another window changed without telling it (no storage event, e.g. restored from the back/forward cache): a form save refuses schema 4 (newer), schema 1, a missing marker, a text "3" marker and removed data (changed), leaving their data byte-identical',
+      [atWrite('schema 4', r => withSchema(r, 4)), atWrite('schema 1', r => withSchema(r, 1)), atWrite('no marker', r => withSchema(r)),
         atWrite('text "3"', r => withSchema(r, '3')), atWrite('removed', () => null)],
-      [blocked('schema 3', 'newer'), blocked('schema 1', 'changed'), blocked('no marker', 'changed'), blocked('text "3"', 'changed'), blocked('removed', 'changed')]);
-    invariant('REL.write.persist', 'persistGeodeToLocalStorage refuses the same way: schema 3 (newer) and removed data (changed)',
-      [atWrite('schema 3', r => withSchema(r, 3), 'persist'), atWrite('removed', () => null, 'persist')], [blocked('schema 3', 'newer'), blocked('removed', 'changed')]);
-    invariant('REL.write.unreadable', 'Unreadable stored data keeps the behaviour from before the guard: the save writes this page\'s schema 2 state over it',
+      [blocked('schema 4', 'newer'), blocked('schema 1', 'changed'), blocked('no marker', 'changed'), blocked('text "3"', 'changed'), blocked('removed', 'changed')]);
+    invariant('REL.write.persist', 'persistGeodeToLocalStorage refuses the same way: schema 4 (newer) and removed data (changed)',
+      [atWrite('schema 4', r => withSchema(r, 4), 'persist'), atWrite('removed', () => null, 'persist')], [blocked('schema 4', 'newer'), blocked('removed', 'changed')]);
+    invariant('REL.write.unreadable', 'Unreadable stored data keeps the behaviour from before the guard: the save writes this page\'s schema 3 state over it',
       atWrite('unreadable', () => '{bad'), ['unreadable', ['', ''], 'wrote mine', []]);
     const lww = atWrite('same schema', r => JSON.stringify(Object.assign(JSON.parse(r), { income: 4000 })));
     invariant('REL.write.same-schema', 'A same-schema change that keeps this page\'s revision id is an unfenced write (P2-1 compatibility): it is logged and this page\'s save still replaces it. A newer fenced revision is refused separately (P2-1)',
@@ -5022,7 +5044,7 @@ function releaseSafetyWrites() {
 
     const sticky = schema2App();
     const mine = rawStore(sticky);
-    foreignStore(sticky, withSchema(mine, 3)); relAct(sticky);
+    foreignStore(sticky, withSchema(mine, 4)); relAct(sticky);
     foreignStore(sticky, mine); relAct(sticky); sticky.run('persistGeodeToLocalStorage();');
     const held = [staleState(sticky), rawStore(sticky) === mine];
     sticky.run('__reload()'); relAct(sticky);
@@ -5030,7 +5052,7 @@ function releaseSafetyWrites() {
       [held, staleState(sticky), JSON.parse(rawStore(sticky)).payments.length, relWarnings(sticky)], [[['newer', 'newer'], true], ['', ''], 1, ['stale:newer']]);
 
     const blind = schema2App();
-    foreignStore(blind, withSchema(rawStore(blind), 3)); relAct(blind);
+    foreignStore(blind, withSchema(rawStore(blind), 4)); relAct(blind);
     const held3 = rawStore(blind);
     blind.run("var __getItem = localStorage.getItem; localStorage.getItem = function (k) { if (k === KEY) throw new Error('SecurityError'); return __getItem.call(localStorage, k); };");
     relAct(blind); blind.run('persistGeodeToLocalStorage();');
@@ -5047,8 +5069,8 @@ function releaseSafetyWrites() {
       const ok = t.run('geodeSchema2Transition()');
       return [ok, writes(t), rawStore(t) === raw, t.run('S._schemaVersion'), t.events().length, staleState(t), relWarnings(t), toasts(t)];
     };
-    invariant('REL.write.transition', 'A load that read schema 1 commits nothing when storage became schema 3 (newer) or schema 2 (another window already transitioned): stored data byte-identical, memory back on schema 1, gate shown (the transition\'s storage toast sits behind it); unchanged schema 1 still commits',
-      [commit(r => withSchema(r, 3)), commit(r => withSchema(r, 2)), commit(r => r).slice(0, 6)],
+    invariant('REL.write.transition', 'A load that read schema 1 commits nothing when storage became schema 4 (newer) or schema 2 (another window already transitioned): stored data byte-identical, memory back on schema 1, gate shown (the transition\'s storage toast sits behind it); unchanged schema 1 still commits',
+      [commit(r => withSchema(r, 4)), commit(r => withSchema(r, 2)), commit(r => r).slice(0, 6)],
       [[false, 0, true, 1, 0, ['newer', 'newer'], ['stale:newer', 'transition:storage'], [SAVE_FAILED]],
         [false, 0, true, 1, 0, ['changed', 'changed'], ['stale:changed', 'transition:storage'], [SAVE_FAILED]],
         [true, 1, false, 2, 1, ['', '']]]);
@@ -5069,31 +5091,31 @@ function releaseSafetyListener() {
       return [label, gate, rawStore(app) === before ? 'no write' : 'wrote', relWarnings(app)];
     };
     const stops = (label, why) => [label, [why, why], 'no write', ['stale:' + why]];
-    invariant('REL.listen.stops', 'Storage events on geode_v6 stop writes before any action: schema 3 (newer); schema 1, no marker, text "2", unreadable, removed key, storage cleared (changed)',
-      [event('schema 3', 'geode_v6', withSchema(SCHEMA2, 3)), event('schema 1', 'geode_v6', withSchema(SCHEMA2, 1)), event('no marker', 'geode_v6', withSchema(SCHEMA2)),
+    invariant('REL.listen.stops', 'Storage events on geode_v6 stop writes before any action: schema 4 (newer); schema 1, no marker, text "2", unreadable, removed key, storage cleared (changed)',
+      [event('schema 4', 'geode_v6', withSchema(SCHEMA2, 4)), event('schema 1', 'geode_v6', withSchema(SCHEMA2, 1)), event('no marker', 'geode_v6', withSchema(SCHEMA2)),
         event('text "2"', 'geode_v6', withSchema(SCHEMA2, '2')), event('unreadable', 'geode_v6', '{bad'), event('removed', 'geode_v6', null), event('cleared', null, null)],
-      [stops('schema 3', 'newer'), stops('schema 1', 'changed'), stops('no marker', 'changed'), stops('text "2"', 'changed'), stops('unreadable', 'changed'),
+      [stops('schema 4', 'newer'), stops('schema 1', 'changed'), stops('no marker', 'changed'), stops('text "2"', 'changed'), stops('unreadable', 'changed'),
         stops('removed', 'changed'), stops('cleared', 'changed')]);
     const fencedOther = JSON.parse(SCHEMA2);
     fencedOther.income = 4321;
     fencedOther._rev = { seq: 50, id: 'rev_other_window', by: 'v1.0.77', at: 1 };
-    invariant('REL.listen.ignores', 'Other keys and sessionStorage events leave the page writing; an event without storageArea on geode_v6 still counts. Another fenced runtime\'s schema-2 text stops this page (P2-1)',
-      [event('other key', 'geode_shell', 'v1.0.76'), event('sessionStorage', 'geode_v6', withSchema(SCHEMA2, 3), 'session'), event('fenced schema 2', 'geode_v6', JSON.stringify(fencedOther)),
-        event('no area', 'geode_v6', withSchema(SCHEMA2, 3), 'none')],
-      [['other key', ['', ''], 'wrote', []], ['sessionStorage', ['', ''], 'wrote', []], stops('fenced schema 2', 'foreign'), stops('no area', 'newer')]);
+    invariant('REL.listen.ignores', 'Other keys and sessionStorage events leave the page writing; an event without storageArea on geode_v6 still counts. Another fenced runtime\'s same-schema text stops this page (P2-1)',
+      [event('other key', 'geode_shell', 'v1.0.76'), event('sessionStorage', 'geode_v6', withSchema(SCHEMA2, 4), 'session'), event('fenced same schema', 'geode_v6', JSON.stringify(fencedOther)),
+        event('no area', 'geode_v6', withSchema(SCHEMA2, 4), 'none')],
+      [['other key', ['', ''], 'wrote', []], ['sessionStorage', ['', ''], 'wrote', []], stops('fenced same schema', 'foreign'), stops('no area', 'newer')]);
     const tabA = schema2App();
     relListen(tabA);
     watchWrites(tabA);
-    const tabB = withSchema(rawStore(tabA), 3);
+    const tabB = withSchema(rawStore(tabA), 4);
     foreignStore(tabA, tabB); fireStorage(tabA, 'geode_v6', tabB);
     relAct(tabA);
     const writers = [tabA.run('persistGeodeToLocalStorage(); geodeSchema2CommitTransition()'), tabA.run('geodeFinancialWriteAllowed()'), tabA.run('geodeFinancialWriteAllowed(1)')];
-    invariant('REL.listen.all-writers', 'Tab A (schema 2) hears tab B store schema 3: a form save, persistGeodeToLocalStorage and the transition commit all refuse (commit false, no store write), tab B\'s data stays byte-identical, one "newer version" gate',
+    invariant('REL.listen.all-writers', 'Tab A (schema 3) hears tab B store schema 4: a form save, persistGeodeToLocalStorage and the transition commit all refuse (commit false, no store write), tab B\'s data stays byte-identical, one "newer version" gate',
       [writers, writes(tabA), rawStore(tabA) === tabB, staleState(tabA), relWarnings(tabA)], [[false, false, false], 0, true, ['newer', 'newer'], ['stale:newer']]);
     const first = schema2App();
     relListen(first);
-    fireStorage(first, 'geode_v6', null); fireStorage(first, 'geode_v6', withSchema(SCHEMA2, 3));
-    invariant('REL.listen.first-reason', 'The first reason is kept: removed, then schema 3 → still "changed", one warning, one gate', [staleState(first), relWarnings(first)], [['changed', 'changed'], ['stale:changed']]);
+    fireStorage(first, 'geode_v6', null); fireStorage(first, 'geode_v6', withSchema(SCHEMA2, 4));
+    invariant('REL.listen.first-reason', 'The first reason is kept: removed, then schema 4 → still "changed", one warning, one gate', [staleState(first), relWarnings(first)], [['changed', 'changed'], ['stale:changed']]);
   });
 }
 
@@ -5101,8 +5123,8 @@ function releaseSafetyGate() {
   scenario('FA-3 RELEASE GATE — schema 2 waits until older app caches are gone from this browser', () => {
     const legacyHoliday = legacyLoad(fa3cbFixture('one-off')[2], fa3cbFixture('one-off')[3]).snap().goal.gH;
     const look = app => [app.run('geodeShellReadiness()'), writes(app), storedSchema(app), app.events().length, app.snap().goal.gH, staleState(app), relWarnings(app)];
-    const held = ['pending', 0, 1, 0, legacyHoliday, ['', ''], []], moved = r => [r, 1, 2, 1, 1250, ['', ''], []];
-    invariant('REL.gate.readiness', 'With a Cache API: no geode_shell or the previous runtime\'s → pending: no transition, schema 1 stays stored, legacy display; this runtime\'s → ready: one commit to schema 2. No Cache API → absent: transitions',
+    const held = ['pending', 0, 1, 0, legacyHoliday, ['', ''], []], moved = r => [r, 2, 3, 1, 1250, ['', ''], []];
+    invariant('REL.gate.readiness', 'With a Cache API: no geode_shell or the previous runtime\'s → pending: no transition, schema 1 stays stored, legacy display; this runtime\'s → ready: one commit to schema 2, then one to schema 3 (P2-5). No Cache API → absent: transitions',
       [look(shellApp()), look(shellApp('v1.0.75')), look(shellApp(true)), look(shellApp(undefined, false))], [held, held, moved('ready'), moved('absent')]);
 
     const app = shellApp();
@@ -5112,8 +5134,8 @@ function releaseSafetyGate() {
     app.reload();
     const opened = [writes(app), storedSchema(app), app.events().length];
     relAct(app);
-    invariant('REL.gate.open', 'While pending the page keeps saving schema 1 (top-up stored); once geode_shell names this runtime the next load transitions once, and later saves write schema 2',
-      [pending, opened, storedSchema(app), stored(app).payments.length, staleState(app), relWarnings(app)], [[1, 2, ['', '']], [1, 2, 2], 2, 3, ['', ''], []]);
+    invariant('REL.gate.open', 'While pending the page keeps saving schema 1 (top-up stored); once geode_shell names this runtime the next load transitions once through each schema (two commits), and later saves write schema 3',
+      [pending, opened, storedSchema(app), stored(app).payments.length, staleState(app), relWarnings(app)], [[1, 2, ['', '']], [2, 3, 2], 3, 3, ['', ''], []]);
   });
 }
 
@@ -5127,14 +5149,14 @@ function releaseSafetyTabs() {
     relAct(heard);
     const heardOut = [staleState(heard), rawStore(heard) === theirs];
     heard.reload(); relAct(heard);
-    invariant('REL.tabs.event', 'A page still on schema 1 (pending) hears another window commit schema 2: it stops at once with the "updated in another window" gate and its save writes nothing; after reload it runs on schema 2 and saves again',
-      [heardOut, heard.run('S._schemaVersion'), storedSchema(heard), staleState(heard), relWarnings(heard)], [[['changed', 'changed'], true], 2, 2, ['', ''], ['stale:changed']]);
+    invariant('REL.tabs.event', 'A page still on schema 1 (pending) hears another window commit schema 3: it stops at once with the "updated in another window" gate and its save writes nothing; after reload it runs on schema 3 and saves again',
+      [heardOut, heard.run('S._schemaVersion'), storedSchema(heard), staleState(heard), relWarnings(heard)], [[['changed', 'changed'], true], 3, 3, ['', ''], ['stale:changed']]);
     const missed = shellApp();
     foreignStore(missed, theirs); relAct(missed);
     invariant('REL.tabs.missed', 'The same page without the event (suspended or back/forward cache): its next save re-reads storage, refuses and shows the gate',
       [staleState(missed), rawStore(missed) === theirs, relWarnings(missed)], [['changed', 'changed'], true, ['stale:changed']]);
     relAct(ready);
-    invariant('REL.tabs.winner', 'The window that transitioned keeps working on schema 2', [staleState(ready), storedSchema(ready), relWarnings(ready)], [['', ''], 2, []]);
+    invariant('REL.tabs.winner', 'The window that transitioned keeps working on schema 3', [staleState(ready), storedSchema(ready), relWarnings(ready)], [['', ''], 3, []]);
   });
 }
 
@@ -5284,8 +5306,8 @@ function fa7bSafety() {
       Object.prototype.hasOwnProperty.call(fa7bInv(aborted, 'iA'), 'valuations'), aborted.snap().inv.iA, aborted.state()._schemaVersion];
     aborted.run('geodeInvestmentPosition = __realPosition;');
     aborted.reload();
-    invariant('FA7B.safety.all-or-safe', 'A transition whose position would not equal the legacy figure is undone completely (warning; no valuations property; legacy authority £5,500 on schema 2); the next load anchors it at £5,500',
-      [abortedLook, fa7bVals(aborted), aborted.snap().inv.iA], [[1, false, 5500, 2], [[5500, '2026-08-10', 'legacy_transition']], 5500]);
+    invariant('FA7B.safety.all-or-safe', 'A transition whose position would not equal the legacy figure is undone completely (warning; no valuations property; legacy authority £5,500 on schema 3 — the P2-5 transition is independent of it); the next load anchors it at £5,500',
+      [abortedLook, fa7bVals(aborted), aborted.snap().inv.iA], [[1, false, 5500, 3], [[5500, '2026-08-10', 'legacy_transition']], 5500]);
 
     const d1 = FA7B_TRANSITION.filter(f => f[0] === 'I1-prior')[0][2];
     const opened = new App(d1, '2026-07-02', undefined, { boot: false });
@@ -5297,9 +5319,9 @@ function fa7bSafety() {
     const reopened = new App(d1, '2026-07-03', undefined, { boot: false });
     reopened.run('__store = ' + JSON.stringify(JSON.stringify(commits[0])) + '; __reload()');
     opened.reload(); opened.advance('2026-08-02', 'reload');
-    invariant('FA7B.safety.write-model', 'D1 fixture: the transitioning load commits schema 2 once through storage before the lifecycle runs (rows as stored — June paid — and no anchor), then memory holds the anchor and the reset row (£5,200) and the whole-state save stores them together. Browser closed right after the commit: reopening from it the next day opens at the same £5,200 with one anchor. Later reloads and the August rollover add no second anchor',
+    invariant('FA7B.safety.write-model', 'D1 fixture: the transitioning load commits schema 2 once through storage before the lifecycle runs (rows as stored — June paid — and no anchor; the P2-5 schema-3 commit follows it, also before the lifecycle), then memory holds the anchor and the reset row (£5,200) and the whole-state save stores them together. Browser closed right after the commit: reopening from it the next day opens at the same £5,200 with one anchor. Later reloads and the August rollover add no second anchor',
       [commit, reopened.snap().inv.iA, fa7bVals(reopened).length, fa7bVals(opened).length, opened.snap().inv.iA],
-      [[1, 2, true, 'paid', 'upcoming', 5200, 1, 'upcoming'], 5200, 1, 1, 5200]);
+      [[2, 2, true, 'paid', 'upcoming', 5200, 1, 'upcoming'], 5200, 1, 1, 5200]);
   });
 }
 
@@ -6210,15 +6232,18 @@ function p2BoundaryHold() {
       [rawStore(stale) === foreign, staleState(stale), stale.run('[_geodeBoundaryHoldNotice, _geodeBoundaryHoldAttempts]'), attempts, paid(stale), relWarnings(stale)],
       [true, ['foreign', 'foreign'], [false, attempts], attempts, ['paid'], ['stale:foreign']]);
 
+    const partial = p1rPage(f.state, f.clock, P1R_PREVIOUS);
+    partial.run('geodeInvestmentTransitionOutstanding = function () { return false; };');
+    partial.advance('2026-09-02', 'reload');
     const broken = p1rPage(f.state, f.clock, P1R_PREVIOUS);
-    broken.run('geodeInvestmentTransitionOutstanding = function () { return false; };');
+    broken.run('geodeBoundaryTransitionOutstanding = function () { return false; };');
     broken.advance('2026-09-02', 'reload');
-    invariant('P2.hold.disabled', 'With the outstanding-transition check forced off, the September load resets the row and the ISA falls to £5,000 — the hold is what keeps £5,200',
-      [isa(broken), paid(broken)], [5000, ['upcoming']]);
+    invariant('P2.hold.disabled', 'With only the investment check forced off the schema-3 transition still holds the boundary (P2-5: one hold rule, geodeBoundaryTransitionOutstanding); with that rule forced off, the September load resets the row and the ISA falls to £5,000 — the hold is what keeps £5,200',
+      [[isa(partial), paid(partial)], [isa(broken), paid(broken)]], [[5200, ['paid']], [5000, ['upcoming']]]);
 
-    const order = JSON.parse(loaded.run('JSON.stringify(["beynd-cache-v1.0.70","beynd-cache-v1.0.76","beynd-cache-v1.0.77","beynd-cache-v1.0.78","beynd-cache-preview","other-app"].map(geodeBeyndCacheOrder))'));
-    invariant('P2.hold.cache-order', 'Cache names order against v1.0.77: older, current, newer, unknown, and non-Beynd',
-      order, ['older', 'older', 'current', 'newer', 'unknown', 'other']);
+    const order = JSON.parse(loaded.run('JSON.stringify(["beynd-cache-v1.0.70","beynd-cache-v1.0.76","beynd-cache-v1.0.77","beynd-cache-v1.0.78","beynd-cache-v1.0.79","beynd-cache-preview","other-app"].map(geodeBeyndCacheOrder))'));
+    invariant('P2.hold.cache-order', 'Cache names order against v1.0.78: older, current, newer, unknown, and non-Beynd',
+      order, ['older', 'older', 'older', 'current', 'newer', 'unknown', 'other']);
   });
 }
 
@@ -6569,13 +6594,13 @@ function p2BillSettlement() {
       bodies.push([m[1], src.slice(start, end)]);
     }
     const users = needle => [...new Set(bodies.filter(b => b[1].indexOf(needle) >= 0).map(b => b[0]))].sort();
-    invariant('P2.bill.readers', 'Functions that mention the bill ledger: only the ledger family and the backup whitelist; functions that call into it: the family, load (normalise + seed), togglePay, the payment form and Smart Import — no Monthly Left, recompute, goal, investment or debt function',
+    invariant('P2.bill.readers', 'Functions that mention the bill ledger: only the ledger family, the backup whitelist and the P2-5 expectation settlement index (read-only correlation for evidence); functions that call into it: the family, load (normalise + seed), togglePay, the payment form, Smart Import and that index — no Monthly Left, recompute, goal, investment or debt function',
       [users('billPaymentEvents'), users('BillPayment')],
-      [['geodeAppendBillCompletion', 'geodeBeyndBackupRestorableKeyWhitelist', 'geodeBillPaymentActiveCompletion', 'geodeBillPaymentEventId', 'geodeNormalizeBillPaymentEvents',
+      [['geodeAppendBillCompletion', 'geodeBeyndBackupRestorableKeyWhitelist', 'geodeBillPaymentActiveCompletion', 'geodeBillPaymentEventId', 'geodeExpectationSettlementIndex', 'geodeNormalizeBillPaymentEvents',
         'geodeRecordBillPaymentTransition', 'geodeSeedBillPaymentEvents'],
       ['geodeAppendBillCompletion', 'geodeBillPaymentActiveCompletion', 'geodeBillPaymentEventId', 'geodeBillPaymentEventSnapshot', 'geodeBillPaymentEventValid', 'geodeBillPaymentLedger',
-        'geodeNormalizeBillPaymentEvents', 'geodeRecordBillPaymentTransition', 'geodeSavePayApply', 'geodeSeedBillPaymentEvents', 'geodeSmartImportConfirm', 'load', 'togglePay']]);
-    invariant('P2.bill.schema', 'Schema stays 2 with the additive list; the backup whitelist carries it', [app.state()._schemaVersion, app.run('geodeBeyndBackupRestorableKeyWhitelist().indexOf("billPaymentEvents") >= 0')], [2, true]);
+        'geodeExpectationSettlementIndex', 'geodeNormalizeBillPaymentEvents', 'geodeRecordBillPaymentTransition', 'geodeSavePayApply', 'geodeSeedBillPaymentEvents', 'geodeSmartImportConfirm', 'load', 'togglePay']]);
+    invariant('P2.bill.schema', 'The list stayed additive at schema 2; schema is 3 since P2-5; the backup whitelist carries it', [app.state()._schemaVersion, app.run('geodeBeyndBackupRestorableKeyWhitelist().indexOf("billPaymentEvents") >= 0')], [3, true]);
   });
 
   scenario('P2-4 BILL REGRESSION — P2-1 fence, P2-2 hold and P2-3 debt identity', () => {
@@ -6673,7 +6698,7 @@ function p2RevisionFence() {
     invariant('P2.write.stamp', 'Tab A\'s save advances seq, mints a new id, names this runtime and stores state and revision in one text',
       [newer !== parent, revA.seq, typeof revA.id === 'string' && revA.id.indexOf('rev_') === 0, revA.by, typeof revA.at === 'number',
         tabA.run('_geodeKnownRaw === __store'), JSON.parse(newer).payments.length],
-      [true, JSON.parse(parent)._rev.seq + 1, true, 'v1.0.77', true, true, JSON.parse(parent).payments.length + 1]);
+      [true, JSON.parse(parent)._rev.seq + 1, true, 'v1.0.78', true, true, JSON.parse(parent).payments.length + 1]);
 
     foreignStore(tabB, newer);
     tabB.run('S.lastSeenAt = 1; persistGeodeToLocalStorage();');
@@ -6710,10 +6735,10 @@ function p2RevisionFence() {
       [rawStore(kept), staleState(kept), relWarnings(kept)], [null, ['changed', 'changed'], ['stale:changed']]);
 
     const newer = pageOn(parent);
-    foreignStore(newer, withSchema(parent, 3));
+    foreignStore(newer, withSchema(parent, 4));
     newer.run('persistGeodeToLocalStorage();');
-    invariant('P2.newer', 'Stored schema 3 is still refused before any revision check',
-      [rawStore(newer) === withSchema(parent, 3), staleState(newer), relWarnings(newer)], [true, ['newer', 'newer'], ['stale:newer']]);
+    invariant('P2.newer', 'Stored schema 4 (newer than this schema-3 runtime) is still refused before any revision check',
+      [rawStore(newer) === withSchema(parent, 4), staleState(newer), relWarnings(newer)], [true, ['newer', 'newer'], ['stale:newer']]);
 
     const old = pageOn(parent);
     const unfenced = JSON.parse(parent);
@@ -6779,11 +6804,353 @@ function p1RelOldWriter() {
     theirs.income = 3100;
     foreignStore(app, JSON.stringify(theirs));
     const allowed = app.run('geodeFinancialWriteAllowed()');
-    relWarnings(app);
+    const refused = relWarnings(app);
     app.run('__reload();');
-    current('P1REL.old-writer', 'After this runtime anchored P2 and recorded +£100 (£5,300), a v1.0.76 page that loaded before the upgrade stores its memory (schema 2, no valuations, an unrelated income edit): schema protection sees the same schema, so nothing refuses it; the anchor and the £100 are gone and the next load re-anchors the £5,200 that data holds (no double count). This release relies on the version bump, the worker reloading every window on takeover, old-cache removal and the readiness gate; refusing such writes is Phase 2',
-      [before, allowed, staleState(app), [app.snap().inv.iA, p1rVals(app.state().investments), app.events().length, app.state().income]],
-      [[5300, [['iA', [[5200, 'legacy_transition']]]], 2], true, ['', ''], [5200, [['iA', [[5200, 'legacy_transition']]]], 1, 3100]]);
+    invariant('P1REL.old-writer', 'Resolved by schema 3 (P2-5): after this runtime anchored P2 and recorded +£100 (£5,300) its data is schema 3, so a v1.0.76/v1.0.77 page that loaded before the upgrade can no longer store its schema-2 memory — its own guard refuses schema-3 data as newer (release suite old.open-tab and old.event run the tagged v1.0.77 code). Should schema-2 text still land (an unguarded writer), this page refuses its next write as changed, and the next load moves that data to schema 3 again and re-anchors the £5,200 it holds (no double count)',
+      [before, allowed, refused, staleState(app), [app.snap().inv.iA, p1rVals(app.state().investments), app.events().length, app.state().income, app.state()._schemaVersion]],
+      [[5300, [['iA', [[5200, 'legacy_transition']]]], 2], false, ['stale:changed'], ['', ''], [5200, [['iA', [[5200, 'legacy_transition']]]], 1, 3100, 3]]);
+  });
+}
+
+// P2-5: a monthly expectation that elapses with no recorded outcome is kept as evidence when the month boundary rolls it.
+
+function p2Expectations() {
+  const mutate = (app, fn, from, to) => app.run(`(function () {
+    var src = ${fn}.toString();
+    var out = src.replace(${JSON.stringify(from)}, ${JSON.stringify(to)});
+    if (out === src) throw new Error('mutation did not apply');
+    ${fn} = (0, eval)('(' + out + ')');
+  })()`);
+  const CARD = () => ({ id: 'dC', name: 'Card', balance: 4000, apr: 20, minp: 50 });
+  const DOMAINS = ['goal', 'investment', 'debt', 'bill'];
+  const AMOUNT = { goal: 100, investment: 200, debt: 50, bill: 80 };
+  const LINK = { goal: { goalId: 'gH' }, investment: { investId: 'iA' }, debt: { debtId: 'dC', intent: 'set' }, bill: {} };
+  const C = 'confirmed', E = 'expected_no_recorded_outcome', U = 'unknown';
+  const addRow = (app, d, date, amount) => app.contribute(Object.assign({ name: d + ' monthly', amount: amount || AMOUNT[d], date, status: 'upcoming', rec: 'yes' }, LINK[d]));
+  /** A page born on clock (default 1 June, so the schema-3 floor is June) with one monthly row per domain due on the 15th. */
+  const world = (clock, domains, date) => {
+    const app = new App(baseState({ debts: [CARD()] }), clock || '2026-06-01');
+    const ids = {};
+    (domains || DOMAINS).forEach(d => { ids[d] = addRow(app, d, date || '2026-06-15'); });
+    return { app, ids };
+  };
+  const billRow = (id, o) => Object.assign({ id, name: 'Rent', amount: 80, date: '2026-06-15', status: 'upcoming', rec: 'yes', lastPaidYM: '',
+    goalId: '', investId: '', debtId: '', payKind: 'bill', createdAt: 1 }, o);
+  const label = (ids, pid) => Object.keys(ids).filter(k => ids[k] === pid)[0] || pid;
+  const bySpan = (a, b) => (a[0] + a[2] < b[0] + b[2] ? -1 : a[0] + a[2] > b[0] + b[2] ? 1 : 0);
+  /** Stored gap records as [row, domain, from, to, expected amount]. */
+  const gaps = (app, ids) => (app.state().expectationGaps || []).map(g => [label(ids, g.paymentId), g.domain, g.fromYm, g.toYm, g.expectedAmount]).sort(bySpan);
+  /** One record per domain over from..to (amounts: per domain, default AMOUNT). */
+  const span = (from, to, amounts, domains) => (domains || DOMAINS).map(d => [d, d, from, to, (amounts || AMOUNT)[d]]).sort(bySpan);
+  const status = (app, id, yms) => yms.map(ym => app.run('geodeExpectationOccurrenceStatus(S, ' + JSON.stringify(id) + ', ' + JSON.stringify(ym) + ')'));
+  const statuses = (app, ids, yms) => Object.keys(ids).map(d => [d, status(app, ids[d], yms)]);
+  const all = (ids, list) => Object.keys(ids).map(d => [d, list]);
+  const confirmAll = (app, ids, iso) => { app.at(iso); Object.keys(ids).forEach(d => app.toggle(ids[d])); };
+  const ymAdd = (ym, n) => { const t = Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1 + n; return Math.floor(t / 12) + '-' + String(t % 12 + 1).padStart(2, '0'); };
+  const ledgers = app => { const s = app.state(); return [s.contributionEvents, s.debtPaymentEvents, s.billPaymentEvents]; };
+  const ms = (y, m, d) => new Date(y, m - 1, d, 12).getTime();
+
+  MODES.forEach(mode => scenario('P2-5 THREE MONTHS — June confirmed, July absent, August return; goal, investment, debt and bill [' + mode + ']', () => {
+    const { app, ids } = world();
+    confirmAll(app, ids, '2026-06-15');
+    const settled = ledgers(app);
+    app.advance('2026-08-03', mode);
+    invariant('P2.exp.base', 'Each monthly row records July only: June was confirmed (its own occurrence), August is the current month',
+      gaps(app, ids), span('2026-07', '2026-07'));
+    invariant('P2.exp.base.status', 'June reads confirmed from each domain\'s own ledger (contributions for goal and investment, debt events, bill events); July expected · no recorded outcome; August not classified',
+      statuses(app, ids, ['2026-06', '2026-07', '2026-08']), all(ids, [C, E, U]));
+    const goalGap = app.state().expectationGaps.filter(g => g.paymentId === ids.goal)[0];
+    invariant('P2.exp.record', 'A record holds evidence only — deterministic id gap_<payment>_<from>, the template and target as seen, the boundary evidence and who captured it; no balance, position, Monthly Left or outcome field',
+      [Object.keys(goalGap).sort(), goalGap.id, goalGap.targetId, goalGap.recurrence, goalGap.dueDay, goalGap.templateNameSnapshot, goalGap.targetNameSnapshot, goalGap.seenYm,
+        goalGap.capturedBy, goalGap.source, typeof goalGap.capturedAt],
+      [['capturedAt', 'capturedBy', 'domain', 'dueDay', 'expectedAmount', 'fromYm', 'id', 'paymentId', 'recurrence', 'seenYm', 'source', 'targetId', 'targetNameSnapshot',
+        'templateNameSnapshot', 'toYm'], 'gap_' + ids.goal + '_2026-07', 'gH', 'monthly', 15, 'goal monthly', 'Holiday', '2026-06', 'v1.0.78', 'month_boundary', 'number']);
+    invariant('P2.exp.base.ledgers', 'The settlement ledgers are untouched by the boundary: nothing appended, altered or duplicated',
+      same(ledgers(app), settled), true);
+    invariant('P2.exp.base.rows', 'Every row rolled as before: upcoming, due 15 August',
+      app.state().payments.map(p => [label(ids, p.id), p.status, p.date]).sort(), DOMAINS.map(d => [d, 'upcoming', '2026-08-15']).sort());
+  }));
+
+  MODES.forEach(mode => scenario('P2-5 THREE MONTHS — variants: July confirmed, July opened unconfirmed, template edited, template deleted [' + mode + ']', () => {
+    const jc = world();
+    confirmAll(jc.app, jc.ids, '2026-06-15');
+    jc.app.advance('2026-07-02', mode);
+    confirmAll(jc.app, jc.ids, '2026-07-15');
+    jc.app.advance('2026-08-03', mode);
+    invariant('P2.exp.jul-confirmed', 'July confirmed in July: no record; June and July read confirmed', [gaps(jc.app, jc.ids), statuses(jc.app, jc.ids, ['2026-06', '2026-07'])], [[], all(jc.ids, [C, C])]);
+
+    const jo = world();
+    confirmAll(jo.app, jo.ids, '2026-06-15');
+    jo.app.advance('2026-07-10', mode);
+    jo.app.advance('2026-08-03', mode);
+    invariant('P2.exp.jul-open', 'Opened in July without confirming: the August boundary records July for every domain', [gaps(jo.app, jo.ids), statuses(jo.app, jo.ids, ['2026-06', '2026-07'])],
+      [span('2026-07', '2026-07'), all(jo.ids, [C, E])]);
+
+    const ed = world();
+    confirmAll(ed.app, ed.ids, '2026-06-15');
+    ed.app.advance('2026-08-03', mode);
+    const NEW = { goal: 150, investment: 250, debt: 75, bill: 120 };
+    DOMAINS.forEach(d => ed.app.modalEdit(ed.ids[d], { amount: String(NEW[d]) }));
+    ed.app.advance('2026-10-02', mode);
+    invariant('P2.exp.edit', 'July was recorded at the old amount before the August edit; August and September elapse at the edited amount; July is never rewritten',
+      gaps(ed.app, ed.ids), span('2026-07', '2026-07').concat(span('2026-08', '2026-09', NEW)).sort(bySpan));
+
+    const del = world();
+    confirmAll(del.app, del.ids, '2026-06-15');
+    del.app.advance('2026-08-03', mode);
+    const kept = del.app.state().expectationGaps;
+    DOMAINS.forEach(d => del.app.del(del.ids[d]));
+    del.app.advance('2026-10-02', mode);
+    invariant('P2.exp.delete', 'Templates deleted after the return: the July records survive unchanged, no later period is recorded (no tombstone); August and September stay unknown',
+      [same(del.app.state().expectationGaps, kept), statuses(del.app, del.ids, ['2026-07', '2026-08', '2026-09'])], [true, all(del.ids, [E, U, U])]);
+  }));
+
+  MODES.forEach(mode => scenario('P2-5 LONG ABSENCE — 1, 2 and 12 months away after June confirmed, all four domains [' + mode + ']', () => {
+    [1, 2, 12].forEach(n => {
+      const { app, ids } = world();
+      confirmAll(app, ids, '2026-06-15');
+      const back = ymAdd('2026-06', n + 1);
+      app.advance(back + '-03', mode);
+      const last = ymAdd(back, -1);
+      invariant('P2.exp.absence.' + n, n + ' month(s) away, back in ' + back + ': one record per row from July through ' + last + ' (the last fully elapsed month); the current month is not classified and nothing later is recorded',
+        [gaps(app, ids), statuses(app, ids, [last, back, ymAdd(back, 1)]), app.state().expectationGaps.every(g => g.toYm < back)],
+        [span('2026-07', last), all(ids, [E, U, U]), true]);
+    });
+  }));
+
+  MODES.forEach(mode => scenario('P2-5 EVIDENCE FLOOR — no period before the last stored write, the schema-3 transition or the row\'s creation [' + mode + ']', () => {
+    const bd = new App(baseState({ debts: [CARD()] }), '2026-03-01');
+    const rent = addRow(bd, 'bill', '2026-08-15');
+    bd.advance('2026-08-10', 'session');
+    bd.modalEdit(rent, { date: '2026-05-15' });
+    bd.advance('2026-09-02', mode);
+    invariant('P2.exp.floor.backdate', 'A row scheduled from August and backdated in August to 15 May records August only at the September boundary: May–July are not fabricated (the last stored write was August)',
+      [gaps(bd, { bill: rent }), status(bd, rent, ['2026-05', '2026-06', '2026-07', '2026-08', '2026-09'])], [[['bill', 'bill', '2026-08', '2026-08', 80]], [U, U, U, E, U]]);
+
+    const cr = new App(baseState({ investments: [], _schemaVersion: 3, expectationGaps: [], expectationFloorYm: '2026-03', contributionEvents: [], contributionCarry: [],
+      billPaymentEvents: [], payments: [billRow('b1', { date: '2026-04-15', createdAt: ms(2026, 6, 10) })] }), '2026-03-10', undefined, { boot: false });
+    cr.at('2026-08-03'); cr.run('__reload()');
+    invariant('P2.exp.floor.created', 'A row whose creation time is June (stored write and floor March, due April) records June–July only: never before its creation month',
+      [gaps(cr, { bill: 'b1' }), status(cr, 'b1', ['2026-04', '2026-05', '2026-06', '2026-07', '2026-08'])], [[['bill', 'bill', '2026-06', '2026-07', 80]], [U, U, E, E, U]]);
+
+    const tr = new App(baseState({ investments: [], _schemaVersion: 2, contributionEvents: [], contributionCarry: [], payments: [billRow('b1', { date: '2026-03-15' })] }),
+      '2026-03-10', undefined, { boot: false });
+    tr.at('2026-06-05'); tr.run('__reload()');
+    const atTransition = [tr.state()._schemaVersion, tr.state().expectationFloorYm, gaps(tr, { bill: 'b1' }), tr.state().payments[0].date];
+    tr.advance('2026-07-02', mode);
+    invariant('P2.exp.floor.transition', 'Schema-2 data last written in March, opened in June: the transition sets the floor to June and backfills nothing (March–May stay unknown) while the row rolls; the July boundary then records June',
+      [atTransition, gaps(tr, { bill: 'b1' }), status(tr, 'b1', ['2026-03', '2026-04', '2026-05', '2026-06', '2026-07'])],
+      [[3, '2026-06', [], '2026-06-15'], [['bill', 'bill', '2026-06', '2026-06', 80]], [U, U, U, E, U]]);
+
+    const ctx = JSON.parse(bd.run('JSON.stringify(geodeExpectationCaptureContext({ expectationFloorYm: "bad", expectationGaps: [] }, "2026-09"))'));
+    invariant('P2.exp.floor.missing', 'Missing revision evidence or an invalid floor gives the current month, which derives nothing', [ctx.seenYm, ctx.floorYm], ['2026-09', '2026-09']);
+  }));
+
+  scenario('P2-5 IDEMPOTENCE — render, reload and reopening never record a period twice', () => {
+    const { app, ids } = world();
+    confirmAll(app, ids, '2026-06-15');
+    app.advance('2026-08-03', 'reload');
+    const first = app.state().expectationGaps, raw = rawStore(app);
+    app.render(); app.render(); app.reload(); app.reload();
+    app.at('2026-08-25'); app.render(); app.reload();
+    invariant('P2.exp.idempotent', 'Two renders, two reloads and a later same-month render and reload: identical records (ids and capture times) and a byte-identical store',
+      [same(app.state().expectationGaps, first), rawStore(app) === raw, first.length], [true, true, 4]);
+    const reopened = new App(baseState(), '2026-08-03', undefined, { boot: false });
+    foreignStore(reopened, raw); reopened.run('_geodeKnownRaw = __store; __reload()');
+    invariant('P2.exp.reopen', 'Another page opening the same stored text later that month adds nothing', [same(reopened.state().expectationGaps, first), rawStore(reopened) === raw], [true, true]);
+
+    const one = world();
+    confirmAll(one.app, one.ids, '2026-06-15');
+    one.app.at('2026-08-03');
+    one.app.run('var __saved = [], __save0 = save; save = function () { __save0(); __saved.push(__store); };');
+    one.app.render();
+    const texts = JSON.parse(one.app.run('JSON.stringify(__saved)')).map(t => JSON.parse(t));
+    invariant('P2.exp.one-write', 'The boundary stores evidence and the rolled rows in one whole-state write: one save, holding the four July records and every row upcoming for 15 August',
+      [texts.length, texts.map(t => [t.expectationGaps.length, t.payments.every(p => p.status === 'upcoming' && p.date === '2026-08-15')])], [1, [[4, true]]]);
+  });
+
+  scenario('P2-5 REFUSED SAVE — a page that may not store the boundary neither records nor rolls it', () => {
+    const { app, ids } = world();
+    confirmAll(app, ids, '2026-06-15');
+    const body = JSON.parse(rawStore(app));
+    body.income = 3333;
+    body._rev = { seq: body._rev.seq + 2, id: 'rev_expectation_other', by: 'v1.0.78', at: ms(2026, 7, 10) };
+    const foreign = JSON.stringify(body);
+    foreignStore(app, foreign);
+    app.at('2026-08-03'); app.render();
+    invariant('P2.exp.refused', 'Another window\'s fenced July write is in storage: the August render records nothing and rolls nothing, in memory or storage; the page is foreign-stale',
+      [rawStore(app) === foreign, app.state().expectationGaps, app.state().payments.map(p => p.status), staleState(app), relWarnings(app)],
+      [true, [], ['paid', 'paid', 'paid', 'paid'], ['foreign', 'foreign'], ['stale:foreign']]);
+    app.run('__reload()');
+    const once = gaps(app, ids);
+    app.reload(); app.reload();
+    invariant('P2.exp.refused.reload', 'Reloading adopts that text (income £3,333) and records July exactly once; further reloads add nothing',
+      [app.state().income, once, gaps(app, ids)], [3333, span('2026-07', '2026-07'), span('2026-07', '2026-07')]);
+  });
+
+  scenario('P2-5 BOUNDARY HOLD — schema-2 data waiting for the shell holds the boundary; the ready load clears it', () => {
+    const state = baseState({ investments: [], _schemaVersion: 2, contributionEvents: [], contributionCarry: [],
+      payments: [billRow('b1', { status: 'paid', lastPaidYM: '2026-06', lastPaidDueDate: '2026-06-15', date: '2026-07-15', lastPaidAmount: 80 })] });
+    const app = p1rPage(state, '2026-08-03', P1R_PREVIOUS);
+    invariant('P2.exp.hold', 'Pending in August with no investment to transition: the schema-3 transition is outstanding, so the row stays paid, nothing is recorded, storage stays schema 2 and the reload notice is up',
+      [app.run('geodeBoundaryTransitionOutstanding()'), app.run('geodeInvestmentTransitionOutstanding()'), app.state().payments[0].status, app.state().expectationGaps, stored(app)._schemaVersion,
+        app.run('_geodeBoundaryHoldNotice')], [true, false, 'paid', [], 2, true]);
+    p1rReady(app); app.reload();
+    invariant('P2.exp.hold.ready', 'The first ready load moves to schema 3 (floor August) and the boundary runs: the row rolls, July stays unknown (it elapsed before the transition), the hold is cleared',
+      [stored(app)._schemaVersion, app.state().expectationFloorYm, app.state().payments[0].status, app.state().payments[0].date, status(app, 'b1', ['2026-06', '2026-07']),
+        app.run('[_geodeBoundaryHoldNotice, _geodeBoundaryHoldAttempts, geodeBoundaryTransitionOutstanding()]')],
+      [3, '2026-08', 'upcoming', '2026-08-15', [C, U], [false, 0, false]]);
+    app.advance('2026-09-02', 'reload');
+    invariant('P2.exp.hold.next', 'The September boundary records August', gaps(app, { bill: 'b1' }), [['bill', 'bill', '2026-08', '2026-08', 80]]);
+  });
+
+  scenario('P2-5 NOT FINANCIAL AUTHORITY — Monthly Left and every position are identical with no records, real records and forged £999,999 records', () => {
+    const { app, ids } = world();
+    confirmAll(app, ids, '2026-06-15');
+    app.advance('2026-08-03', 'reload');
+    const look = a => [a.snap(), a.state().debts.map(d => [d.id, d.balance]), a.state().goals.map(g => [g.id, g.saved]), a.state().investments.map(i => [i.id, i.balance]),
+      a.state().savingsReleases, a.run('calcMonthlyLeftover(S)')];
+    const real = look(app);
+    app.run('S.expectationGaps = []; save();'); app.reload();
+    const none = look(app);
+    const forged = DOMAINS.map(d => ({ id: 'gap_' + ids[d] + '_2026-01', paymentId: ids[d], domain: d, targetId: '', recurrence: 'monthly', fromYm: '2026-01', toYm: '2026-12',
+      expectedAmount: 999999, dueDay: 15, templateNameSnapshot: 'forged', targetNameSnapshot: '', seenYm: '2026-01', capturedAt: 1, capturedBy: 'forged', source: 'month_boundary' }));
+    app.ctx.__forged = JSON.stringify(forged);
+    app.run('S.expectationGaps = JSON.parse(__forged); save();'); app.reload();
+    const fake = look(app);
+    invariant('P2.exp.monthly-left', 'Monthly Left (all and confirmed-only), Home overdue items and the rows are the same with no records, the real July records and £999,999 records over 2026',
+      [same(none[0], real[0]), same(fake[0], real[0]), fake[5] === real[5], app.state().expectationGaps.length], [true, true, true, 4]);
+    invariant('P2.exp.positions', 'Holiday, ISA, Card and releases are the same in all three: a record never moves money',
+      [same(none.slice(1, 5), real.slice(1, 5)), same(fake.slice(1, 5), real.slice(1, 5))], [true, true]);
+
+    const src = PROGRAM.src;
+    const bodies = [];
+    const decl = /\nfunction ([A-Za-z_$][\w$]*)\(/g;
+    let m;
+    while ((m = decl.exec(src))) {
+      const start = m.index + 1, firstLine = src.slice(start, src.indexOf('\n', start));
+      const opens = (firstLine.match(/\{/g) || []).length, closes = (firstLine.match(/\}/g) || []).length;
+      const end = opens > 0 && opens === closes && /\}\s*$/.test(firstLine) ? start + firstLine.length : src.indexOf('\n}', start);
+      bodies.push([m[1], src.slice(start, end)]);
+    }
+    const users = needle => [...new Set(bodies.filter(b => b[1].indexOf(needle) >= 0).map(b => b[0]))].sort();
+    invariant('P2.exp.readers', 'Functions that mention the records: the evidence family, the schema-3 transition, recurring sync (capture) and the backup whitelist; outside the family only load (normalise) and recurring sync (capture) call into it — no Monthly Left, recompute, Plan, goal, investment or debt calculator',
+      [users('expectationGaps'), users('Expectation').filter(n => n.indexOf('Expectation') < 0)],
+      [['geodeBeyndBackupRestorableKeyWhitelist', 'geodeCaptureExpectationGaps', 'geodeExpectationCaptureContext', 'geodeExpectationOccurrenceStatus', 'geodeExpectationOccurrences',
+        'geodeNormalizeExpectationGaps', 'geodeSchema3Transition', 'syncRecurringPayments'], ['load', 'syncRecurringPayments']]);
+  });
+
+  MODES.forEach(mode => scenario('P2-5 RANGES AND CORRELATION — settlement overlays a recorded range at read time; a settled month is never recorded [' + mode + ']', () => {
+    const { app, ids } = world('2026-06-01', ['bill']);
+    confirmAll(app, ids, '2026-06-15');
+    app.advance('2026-10-02', mode);
+    const range = app.state().expectationGaps;
+    const before = app.state().billPaymentEvents.length;
+    app.modalEdit(ids.bill, { date: '2026-08-15' });
+    app.toggle(ids.bill);
+    invariant('P2.exp.range', 'July–September recorded as one range; confirming the August occurrence later through the existing edit and complete path reads July expected, August confirmed, September expected — the range record is unchanged and the ledger gains only that completion',
+      [gaps(app, ids), status(app, ids.bill, ['2026-07', '2026-08', '2026-09']), same(app.state().expectationGaps, range), app.state().billPaymentEvents.length - before],
+      [[['bill', 'bill', '2026-07', '2026-09', 80]], [E, C, E], true, 1]);
+    const occurrences = JSON.parse(app.run('JSON.stringify(geodeExpectationOccurrences(S).map(function (o) { return [o.periodYm, o.status]; }))'));
+    invariant('P2.exp.range.read', 'The read model lists each recorded period with its current outcome', occurrences, [['2026-07', E], ['2026-08', C], ['2026-09', E]]);
+    app.advance('2026-11-02', mode);
+    invariant('P2.exp.range.next', 'At the November boundary September is already recorded and October (no outcome) is added as its own record', gaps(app, ids),
+      [['bill', 'bill', '2026-07', '2026-09', 80], ['bill', 'bill', '2026-10', '2026-10', 80]]);
+
+    const cs = world('2026-06-01', ['bill']);
+    confirmAll(cs.app, cs.ids, '2026-06-15');
+    cs.app.run('S.payments.forEach(function (p) { p.status = "upcoming"; p.date = "2026-06-15"; p.lastPaidYM = ""; delete p.lastPaidDueDate; delete p.lastPaidAmount; }); save();');
+    cs.app.advance('2026-08-03', mode);
+    invariant('P2.exp.correlation', 'A row put back to June unpaid (as an older runtime could) while its June settlement stays active: the boundary skips June and records July only',
+      [gaps(cs.app, cs.ids), status(cs.app, cs.ids.bill, ['2026-06', '2026-07'])], [[['bill', 'bill', '2026-07', '2026-07', 80]], [C, E]]);
+  }));
+
+  scenario('P2-5 SCHEMA 3 TRANSITION — readiness-gated, adds only empty evidence storage and the floor, once, crash-safe', () => {
+    const src3 = world('2026-06-01', ['bill']);
+    const s2 = JSON.parse(rawStore(src3.app));
+    s2._schemaVersion = 2; delete s2.expectationGaps; delete s2.expectationFloorYm;
+    const app = new App(s2, '2026-06-05', undefined, { boot: false });
+    const before = JSON.parse(rawStore(app));
+    watchWrites(app);
+    app.run('__reload()');
+    const after = stored(app);
+    const strip = s => { const o = Object.assign({}, s); delete o._rev; delete o._schemaVersion; delete o.expectationGaps; delete o.expectationFloorYm; return o; };
+    const first = [writes(app), after._schemaVersion, after.expectationGaps, after.expectationFloorYm, same(strip(after), strip(before))];
+    app.reload(); app.reload();
+    invariant('P2.exp.schema3', 'Stored schema 2 moves to 3 in one write: an empty list and floor June, every other value as it was; two reloads write nothing and keep the floor',
+      [first, writes(app), stored(app).expectationFloorYm], [[1, 3, [], '2026-06', true], 0, '2026-06']);
+
+    const fail = new App(s2, '2026-06-05', undefined, { boot: false });
+    const raw = rawStore(fail);
+    fail.run('__storageFault = "throw"; __toasts = [];');
+    fail.run('__reload()');
+    const failed = [fail.warnings.splice(0), toasts(fail), rawStore(fail) === raw, fail.state()._schemaVersion, fail.state().expectationGaps, 'expectationFloorYm' in fail.state()];
+    fail.run('__storageFault = "";');
+    fail.reload();
+    invariant('P2.exp.schema3.crash', 'The commit failing: the warning gives storage, the save-failed toast shows, the store is untouched and memory stays schema 2 with no floor; the next load commits schema 3',
+      [failed, stored(fail)._schemaVersion, stored(fail).expectationFloorYm],
+      [[['[geode] schema 3 transition not completed, staying on schema 2: storage'], ['Could not save data (storage may be full).'], true, 2, [], false], 3, '2026-06']);
+
+    const fresh = new App(baseState(), '2026-06-05');
+    invariant('P2.exp.schema3.fresh', 'A fresh install starts at schema 3 with an empty list and the floor at its first month', [fresh.state()._schemaVersion, fresh.state().expectationGaps, fresh.state().expectationFloorYm],
+      [3, [], '2026-06']);
+
+    const old = new App(Object.assign(JSON.parse(rawStore(src3.app))), '2026-06-05', undefined, { boot: false });
+    const text3 = rawStore(old);
+    old.run('GEODE_SCHEMA_VERSION = 2; BEYND_RUNTIME_VERSION = "v1.0.77"; __reload();');
+    relAct(old); old.run('persistGeodeToLocalStorage(); geodeSchema2CommitTransition();');
+    invariant('P2.exp.forward-guard', 'A schema-2 runtime (v1.0.77 constants) opening schema-3 data shows the "newer version" gate and writes nothing — the evidence survives byte for byte (the tagged v1.0.77 code itself: release suite old.*)',
+      [staleState(old), rawStore(old) === text3, relWarnings(old)], [['newer', 'newer'], true, ['stale:newer']]);
+  });
+
+  scenario('P2-5 MUTATIONS — each guard is load-bearing', () => {
+    const cap = world();
+    confirmAll(cap.app, cap.ids, '2026-06-15');
+    mutate(cap.app, 'geodeCaptureExpectationGaps', 'if (fromYm > endYm) return;', 'return;');
+    cap.app.advance('2026-08-03', 'reload');
+    invariant('P2.exp.mut.capture', 'With capture disabled the August boundary records nothing — July is lost to unknown', gaps(cap.app, cap.ids), []);
+
+    const fl = new App(baseState({ debts: [CARD()] }), '2026-03-01');
+    const rent = addRow(fl, 'bill', '2026-08-15');
+    fl.advance('2026-08-10', 'session');
+    mutate(fl, 'geodeCaptureExpectationGaps', '[ctx.seenYm, ctx.floorYm, geodeExpectationCreatedYm(p)]', '[]');
+    fl.modalEdit(rent, { date: '2026-05-15' });
+    fl.advance('2026-09-02', 'reload');
+    invariant('P2.exp.mut.floor', 'With the floors ignored the backdated row fabricates May–July', gaps(fl, { bill: rent }), [['bill', 'bill', '2026-05', '2026-08', 80]]);
+
+    const co = world('2026-06-01', ['bill']);
+    confirmAll(co.app, co.ids, '2026-06-15');
+    co.app.run('S.payments.forEach(function (p) { p.status = "upcoming"; p.date = "2026-06-15"; p.lastPaidYM = ""; delete p.lastPaidDueDate; delete p.lastPaidAmount; }); save();');
+    mutate(co.app, 'geodeExpectationSettled', "return !!map[paymentId + '|' + ym];", 'return false;');
+    co.app.advance('2026-08-03', 'reload');
+    invariant('P2.exp.mut.correlation', 'With settlement correlation ignored the settled June is recorded as expected and reads expected',
+      [gaps(co.app, co.ids), status(co.app, co.ids.bill, ['2026-06'])], [[['bill', 'bill', '2026-06', '2026-07', 80]], [E]]);
+
+    const ml = world();
+    confirmAll(ml.app, ml.ids, '2026-06-15');
+    ml.app.advance('2026-08-03', 'reload');
+    const leftReal = ml.app.snap().left, goalReal = ml.app.snap().goal.gH;
+    ml.app.run('var __left0 = calcMonthlyLeftover; calcMonthlyLeftover = function (s) { return __left0(s) - (s.expectationGaps || []).reduce(function (t, g) { return t + g.expectedAmount; }, 0); };');
+    ml.app.run('var __goal0 = geodeGoalEffectiveSavedFromState; geodeGoalEffectiveSavedFromState = function (s, g) { return __goal0(s, g) + (s.expectationGaps || []).filter(function (x) { return x.targetId === g.id; }).reduce(function (t, x) { return t + x.expectedAmount; }, 0); };');
+    invariant('P2.exp.mut.authority', 'A Monthly Left or goal calculator that read the records would move £430 off Monthly Left and £100 onto Holiday — the identity checks above would fail',
+      [leftReal - ml.app.snap().left, ml.app.snap().goal.gH - goalReal], [430, 100]);
+
+    const fg = new App(Object.assign(JSON.parse(rawStore(cap.app))), '2026-08-03', undefined, { boot: false });
+    const text3 = rawStore(fg);
+    mutate(fg, 'geodeFinancialWriteAllowed', 'if (_geodeRuntimeStale) return false;', 'return true;');
+    fg.run('GEODE_SCHEMA_VERSION = 2; __reload(); S._schemaVersion = 2; S.expectationGaps = []; save();');
+    invariant('P2.exp.mut.forward-guard', 'With the forward guard bypassed a schema-2 runtime overwrites the schema-3 text, losing the evidence', [rawStore(fg) === text3, stored(fg)._schemaVersion], [false, 2]);
+    relWarnings(fg);
+
+    const sep = world();
+    confirmAll(sep.app, sep.ids, '2026-06-15');
+    sep.app.at('2026-08-03');
+    mutate(sep.app, 'syncRecurringPayments', "var paidYm = gaps && p.rec === 'yes'", "save(); var paidYm = gaps && p.rec === 'yes'");
+    sep.app.run('var __saved = [], __save0 = save; save = function () { __save0(); __saved.push(__store); };');
+    sep.app.render();
+    const texts = JSON.parse(sep.app.run('JSON.stringify(__saved)')).map(t => JSON.parse(t));
+    invariant('P2.exp.mut.separate', 'Saving between capture and roll stores evidence beside rows that have not rolled — a crash there leaves a half-processed boundary (one-write check above fails)',
+      [texts.length > 1, texts.some(t => t.expectationGaps.length > 0 && t.payments.some(p => p.status === 'paid'))], [true, true]);
   });
 }
 
@@ -6809,7 +7176,7 @@ function main() {
   fa7dLinkedGoals();
   p1Close();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
-  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2DebtIdentity(); p2BillSettlement(); p2RevisionFence(); p1RelOldWriter();
+  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2DebtIdentity(); p2BillSettlement(); p2RevisionFence(); p1RelOldWriter(); p2Expectations();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');

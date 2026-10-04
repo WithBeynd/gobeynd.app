@@ -1367,12 +1367,13 @@ var KEY = 'geode_v6';
  * Deploy/runtime marker for support and PWA freshness checks (80N-P.1); not persisted. Keep equal to service-worker.js
  * CACHE_VERSION: its install accepts only a shell containing this exact line, and geodeShellCleanup keeps that cache.
  */
-var BEYND_RUNTIME_VERSION = 'v1.0.77';
+var BEYND_RUNTIME_VERSION = 'v1.0.78';
 /**
  * Local persisted-state schema marker for backup/restore validation (bump when structure changes).
  * 2: goal Saved is base + dated contribution events + legacy carries − releases (geodeSchema2Transition).
+ * 3: month boundaries record monthly expectations that elapse without a recorded outcome (geodeSchema3Transition).
  */
-var GEODE_SCHEMA_VERSION = 2;
+var GEODE_SCHEMA_VERSION = 3;
 /** Until splash finishes, save() must not bump last-active (avoids sync-on-load skipping lock). */
 var _geodeBootstrap = true;
 var _geodeFirstBoot = false;
@@ -1405,6 +1406,10 @@ var S = {
   debtPaymentEvents: [],
   /** P2-4: append-only bill settlement completion/reversal events (evidence only; no position or Monthly Left reads this). */
   billPaymentEvents: [],
+  /** P2-5: monthly expectations that elapsed with no recorded outcome (evidence only; no position or Monthly Left reads this). */
+  expectationGaps: [],
+  /** P2-5: no expectation is derived before this month (the schema-3 transition month). */
+  expectationFloorYm: '',
   /** FA-3A: append-only goal/investment contribution completion/reversal events (historical memory only; no engine reads this yet). */
   contributionEvents: [],
   /** FA-3C-A: payment-level legacy carries and their resolutions (created only by the schema 1→2 transition; no engine reads this yet). */
@@ -1976,6 +1981,7 @@ function load() {
   geodeNormalizeBillPaymentEvents(S);
   // P2-4: before recurring sync resets the paid rows the seed reads.
   if (!_geodeRuntimeStale) geodeSeedBillPaymentEvents();
+  geodeNormalizeExpectationGaps(S);
   /**
    * FA-3C-C: the transition reads legacy paid rows, so it runs before recurring sync resets them. Release safety: it
    * starts only once no older app copy can be served in this browser (geodeShellReadiness); until then data stays
@@ -1984,11 +1990,14 @@ function load() {
    * only on schema-2 data, after the goal transition and before recurring sync. P1-REL: that move waits for the same
    * shell readiness, because the previous runtime reads schema 2 but not valuation authority; until then investments
    * stay on legacy authority.
+   * P2-5: schema 2 → 3 waits for the same readiness and runs before the investment transition, so its write never
+   * carries an anchor the investment transition has only made in memory. Until it commits, boundaries are held.
    */
   var _geodeInvOpening = _geodeRuntimeStale ? [] : geodeInvestmentLegacyOpeningValues(S);
   if (!_geodeRuntimeStale) {
     if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
     else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();
+    if (geodeSchema3TransitionDue(S) && geodeShellReadiness() !== 'pending') geodeSchema3Transition();
     if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') geodeInvestmentAuthorityTransition(S, _geodeInvOpening);
   }
   syncRecurringPayments();
@@ -8487,11 +8496,11 @@ function geodeSchema2IntegrityReport(state) {
 /**
  * FA-3C-C: the transition's single write — the whole state at KEY, read back to confirm. Unlike save(), it has no
  * snapshot or archive side effects and reports failure instead of swallowing it. Release safety: it replaces only
- * the schema-1 data the transition started from (geodeFinancialWriteAllowed).
+ * the schema-1 data the transition started from (geodeFinancialWriteAllowed); P2-5: `from` 2 for the schema-3 transition.
  */
-function geodeSchema2CommitTransition() {
+function geodeSchema2CommitTransition(from) {
   try {
-    if (!geodeFinancialWriteAllowed(1)) return false;
+    if (!geodeFinancialWriteAllowed(from === undefined ? 1 : from)) return false;
     var prepared = geodeFinancialJsonToStore();
     if (!prepared) return false;
     var prevRev = prepared.prev;
@@ -8529,7 +8538,7 @@ function geodeSchema2Transition() {
     if (problems.length) {
       why = problems.join('; ');
     } else {
-      S._schemaVersion = GEODE_SCHEMA_VERSION;
+      S._schemaVersion = 2;
       if (geodeSchema2CommitTransition()) return true;
       why = 'storage';
     }
@@ -8548,6 +8557,258 @@ function geodeSchema2Transition() {
     } catch (_eT) {}
   }
   return false;
+}
+
+/** P2-5: state is schema 3 — month boundaries record expectation evidence (geodeCaptureExpectationGaps). */
+function geodeSchema3Active(state) {
+  var v = state && state._schemaVersion;
+  return typeof v === 'number' && v >= 3;
+}
+
+/** P2-5: schema-2 data this runtime still has to move to schema 3. Schema 1 moves to 2 first. */
+function geodeSchema3TransitionDue(state) {
+  return geodeSchema2Active(state) && !geodeSchema3Active(state);
+}
+
+/**
+ * P2-5: the one-time schema 2 → 3 transition, run by load() once shell readiness allows, before recurring sync. It adds
+ * an empty expectation list and the floor month (this month) and changes nothing else: no expectation is derived for
+ * any month before it, and no snapshot or missing completion becomes history. One whole-state write that replaces only
+ * the schema-2 data it started from; on failure memory is restored exactly and stays schema 2, so the next load retries.
+ */
+function geodeSchema3Transition() {
+  var had = { gaps: Object.prototype.hasOwnProperty.call(S, 'expectationGaps'), floor: Object.prototype.hasOwnProperty.call(S, 'expectationFloorYm') };
+  var keep = JSON.stringify({ gaps: S.expectationGaps, floor: S.expectationFloorYm });
+  var version = S._schemaVersion;
+  var why = '';
+  try {
+    S.expectationGaps = [];
+    S.expectationFloorYm = currentYM();
+    S._schemaVersion = 3;
+    if (geodeSchema2CommitTransition(2)) return true;
+    why = 'storage';
+  } catch (e) {
+    why = String((e && e.message) || e);
+  }
+  var back = JSON.parse(keep);
+  if (had.gaps) S.expectationGaps = back.gaps; else delete S.expectationGaps;
+  if (had.floor) S.expectationFloorYm = back.floor; else delete S.expectationFloorYm;
+  S._schemaVersion = version;
+  console.warn('[geode] schema 3 transition not completed, staying on schema 2: ' + why);
+  if (why === 'storage') {
+    try {
+      toast('Could not save data (storage may be full).', 'warn');
+    } catch (_eT) {}
+  }
+  return false;
+}
+
+/** P2-5: schema-2 data still waiting for the schema-3 transition. A stale runtime is not this hold — that follows the reload gate. */
+function geodeSchema3TransitionOutstanding() {
+  return !_geodeRuntimeStale && !!S && geodeSchema3TransitionDue(S);
+}
+
+/**
+ * P2-5: the one boundary-hold rule. A month boundary is held while any transition it depends on is outstanding: the
+ * FA-7B investment transition (P2-2) or the schema-3 transition, without which a roll would erase occurrences this
+ * runtime must record. Both clear once their transition commits, so the hold never outlives them.
+ */
+function geodeBoundaryTransitionOutstanding() {
+  return geodeInvestmentTransitionOutstanding() || geodeSchema3TransitionOutstanding();
+}
+
+/**
+ * P2-5: expectation evidence. A gap record says only that, by the evidence Beynd held, a monthly template expected
+ * these occurrences and no outcome was recorded for them when the month boundary rolled them away. It never says a
+ * payment failed or was missed, and nothing financial reads it: not Monthly Left, goal, investment or debt positions,
+ * releases or contributions. Occurrence identity is (paymentId, due month). Whether an occurrence is confirmed is
+ * always read from the settlement ledgers (geodeExpectationOccurrenceStatus), never stored on the gap.
+ */
+function geodeExpectationDomain(p) {
+  if (!p) return '';
+  if (p.goalId) return 'goal';
+  if (p.investId) return 'investment';
+  if (p.debtId) return 'debt';
+  return 'bill';
+}
+
+function geodeExpectationGapValid(g) {
+  if (!g || typeof g !== 'object' || Array.isArray(g)) return false;
+  if (typeof g.paymentId !== 'string' || !g.paymentId) return false;
+  if (!geodeContributionYmValid(g.fromYm) || !geodeContributionYmValid(g.toYm) || g.fromYm > g.toYm) return false;
+  if (g.id !== 'gap_' + g.paymentId + '_' + g.fromYm) return false;
+  if (['goal', 'investment', 'debt', 'bill'].indexOf(g.domain) < 0 || g.recurrence !== 'monthly') return false;
+  if (typeof g.expectedAmount !== 'number' || !isFinite(g.expectedAmount) || g.expectedAmount < 0) return false;
+  if (typeof g.capturedAt !== 'number' || !isFinite(g.capturedAt)) return false;
+  return true;
+}
+
+/** P2-5: valid records, first of each id kept. */
+function geodeExpectationGapLedger(list) {
+  list = Array.isArray(list) ? list : [];
+  var seen = Object.create(null);
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    var g = list[i];
+    if (!geodeExpectationGapValid(g) || seen[g.id]) continue;
+    seen[g.id] = true;
+    out.push(g);
+  }
+  return out;
+}
+
+/** P2-5: load normaliser. Schema-3 data without a valid floor gets this month — never an earlier one. */
+function geodeNormalizeExpectationGaps(state) {
+  state = state || S;
+  state.expectationGaps = geodeExpectationGapLedger(state.expectationGaps);
+  if (geodeSchema3Active(state) && !geodeContributionYmValid(state.expectationFloorYm)) state.expectationFloorYm = currentYM();
+}
+
+/** P2-5: due month of a settlement event: its due-date snapshot when valid, else its occurrence month. */
+function geodeExpectationEventDueYm(e) {
+  return geodeBillDueYm(e && e.dueDateSnapshot) || (e && geodeContributionYmValid(e.occurrenceYm) ? e.occurrenceYm : '');
+}
+
+/** P2-5: active settlements per ledger, keyed paymentId|due month. Goal and investment rows settle in the contribution ledger. */
+function geodeExpectationSettlementIndex(state) {
+  function index(list) {
+    var map = Object.create(null);
+    list.forEach(function (e) {
+      var ym = geodeExpectationEventDueYm(e);
+      if (ym) map[e.paymentId + '|' + ym] = true;
+    });
+    return map;
+  }
+  return {
+    contribution: index(geodeContributionActiveCompletions(state)),
+    debt: index(geodeDebtPaymentActiveCompletions(state)),
+    bill: index(geodeBillPaymentLedger(state && state.billPaymentEvents).active)
+  };
+}
+
+function geodeExpectationSettled(index, domain, paymentId, ym) {
+  var map = domain === 'debt' ? index.debt : domain === 'bill' ? index.bill : index.contribution;
+  return !!map[paymentId + '|' + ym];
+}
+
+/** P2-5: local month of a payment's createdAt when it is a real past time, else ''. */
+function geodeExpectationCreatedYm(p) {
+  var t = p && p.createdAt;
+  if (typeof t !== 'number' || !isFinite(t) || t <= 0 || t > Date.now()) return '';
+  return geodeDateToLocalISO(new Date(t)).slice(0, 7);
+}
+
+/** P2-5: the occurrence a paid monthly row settled: its recorded due date, else its completion month; '' when unknown. */
+function geodeExpectationPaidOccurrenceYm(p) {
+  return geodeBillDueYm(p.lastPaidDueDate) || (geodeContributionYmValid(String(p.lastPaidYM || '')) ? String(p.lastPaidYM) : '');
+}
+
+/**
+ * P2-5: what one boundary may claim. seenYm is the month of the last stored write (P2-1 _rev.at): every edit to the
+ * stored rows happened at or before it, so a period before it may be a reschedule, not an absence. floorYm is the
+ * schema-3 transition month. Missing evidence gives this month, which derives nothing.
+ */
+function geodeExpectationCaptureContext(state, ym) {
+  var rev = state._rev;
+  var seenYm = geodeFinancialRevValid(rev) ? geodeDateToLocalISO(new Date(rev.at)).slice(0, 7) : '';
+  if (!geodeContributionYmValid(seenYm) || seenYm > ym) seenYm = ym;
+  var floorYm = geodeContributionYmValid(state.expectationFloorYm) && state.expectationFloorYm <= ym ? state.expectationFloorYm : ym;
+  var covered = Object.create(null);
+  (state.expectationGaps || []).forEach(function (g) {
+    for (var m = g.fromYm; m <= g.toYm; m = geodeContributionYmAdd(m, 1)) covered[g.paymentId + '|' + m] = true;
+  });
+  return { ym: ym, seenYm: seenYm, floorYm: floorYm, covered: covered, settled: geodeExpectationSettlementIndex(state), added: 0 };
+}
+
+/**
+ * P2-5: record the occurrences of monthly row p that this boundary is about to roll away: from its first unsettled due
+ * month (startYm) through last month, never before the seen month, the floor or the row's creation month. Months already
+ * settled or already recorded are skipped; each consecutive run left is one record, id gap_<paymentId>_<fromYm>.
+ * Must run before the row is reset or rolled, in the same state that recurring sync then saves once.
+ */
+function geodeCaptureExpectationGaps(state, p, startYm, ctx) {
+  if (!p || p.rec !== 'yes' || !geodeContributionYmValid(startYm)) return;
+  var date = String(p.date || '');
+  var dueDay = Number(date.slice(8, 10));
+  if (!geodeBillDueYm(date) || !(dueDay >= 1 && dueDay <= 31)) return;
+  var paymentId = String(p.id || '');
+  if (!paymentId) return;
+  var endYm = geodeContributionYmAdd(ctx.ym, -1);
+  var fromYm = startYm;
+  [ctx.seenYm, ctx.floorYm, geodeExpectationCreatedYm(p)].forEach(function (f) { if (f && f > fromYm) fromYm = f; });
+  if (fromYm > endYm) return;
+  var domain = geodeExpectationDomain(p);
+  var targetId = String(p.goalId || p.investId || p.debtId || '');
+  var target = null;
+  var targets = domain === 'goal' ? state.goals : domain === 'investment' ? state.investments : domain === 'debt' ? state.debts : null;
+  (targets || []).forEach(function (t) { if (t && String(t.id) === targetId) target = t; });
+  var amount = Math.round(toNum(p.amount) * 100) / 100;
+  var run = null;
+  function close() {
+    if (!run) return;
+    state.expectationGaps.push({
+      id: 'gap_' + paymentId + '_' + run.fromYm,
+      paymentId: paymentId,
+      domain: domain,
+      targetId: targetId,
+      recurrence: 'monthly',
+      fromYm: run.fromYm,
+      toYm: run.toYm,
+      expectedAmount: amount,
+      dueDay: dueDay,
+      templateNameSnapshot: String(p.name || ''),
+      targetNameSnapshot: target ? String(target.name || '') : '',
+      seenYm: ctx.seenYm,
+      capturedAt: Date.now(),
+      capturedBy: BEYND_RUNTIME_VERSION,
+      source: 'month_boundary'
+    });
+    ctx.added++;
+    run = null;
+  }
+  for (var m = fromYm; m <= endYm; m = geodeContributionYmAdd(m, 1)) {
+    var key = paymentId + '|' + m;
+    if (ctx.covered[key] || geodeExpectationSettled(ctx.settled, domain, paymentId, m)) {
+      close();
+      continue;
+    }
+    ctx.covered[key] = true;
+    if (run) run.toYm = m;
+    else run = { fromYm: m, toYm: m };
+  }
+  close();
+}
+
+/**
+ * P2-5: read side. 'confirmed' when an active settlement exists for (paymentId, due month); else
+ * 'expected_no_recorded_outcome' when a gap records that month; else 'unknown'. Settlement evidence recorded after the
+ * gap (a legitimate existing path) overlays it without either record changing.
+ */
+function geodeExpectationOccurrenceStatus(state, paymentId, ym) {
+  var gaps = geodeExpectationGapLedger(state && state.expectationGaps);
+  var gap = null;
+  for (var i = 0; i < gaps.length && !gap; i++) {
+    if (gaps[i].paymentId === paymentId && gaps[i].fromYm <= ym && ym <= gaps[i].toYm) gap = gaps[i];
+  }
+  var index = geodeExpectationSettlementIndex(state);
+  var domains = gap ? [gap.domain] : ['goal', 'debt', 'bill'];
+  for (var d = 0; d < domains.length; d++) {
+    if (geodeExpectationSettled(index, domains[d], paymentId, ym)) return 'confirmed';
+  }
+  return gap ? 'expected_no_recorded_outcome' : 'unknown';
+}
+
+/** P2-5: every recorded expected period with its current outcome, in record order. Read-only. */
+function geodeExpectationOccurrences(state) {
+  var index = geodeExpectationSettlementIndex(state);
+  var out = [];
+  geodeExpectationGapLedger(state && state.expectationGaps).forEach(function (g) {
+    for (var m = g.fromYm; m <= g.toYm; m = geodeContributionYmAdd(m, 1)) {
+      out.push({ gapId: g.id, paymentId: g.paymentId, domain: g.domain, periodYm: m, expectedAmount: g.expectedAmount,
+        status: geodeExpectationSettled(index, g.domain, g.paymentId, m) ? 'confirmed' : 'expected_no_recorded_outcome' });
+    }
+  });
+  return out;
 }
 
 /**
@@ -10314,14 +10575,17 @@ function geodeRefuseBoundaryEvidenceEdit() {
 
 function syncRecurringPayments() {
   if (!S) return;
-  // Hold every boundary mutation while the investment transition is outstanding. Holding only investment rows
+  var crossing = geodeRecurrenceWouldMutateBoundary();
+  // Hold every boundary mutation while a transition it depends on is outstanding. Holding only some rows
   // would leave a half-rolled month. Same-month recurrence still runs: the preview is false when nothing would cross.
-  if (geodeInvestmentTransitionOutstanding() && geodeRecurrenceWouldMutateBoundary()) {
+  if (crossing && geodeBoundaryTransitionOutstanding()) {
     if (!geodeFinancialWriteAllowed()) return;
     geodeNoteBoundaryHold();
     return;
   }
   geodeClearBoundaryHold();
+  // A page that may not store the roll neither rolls nor records it; the next page that may write processes it once.
+  if (crossing && !geodeFinancialWriteAllowed()) return;
   var ym = currentYM();
   var changed = false;
   var schema2 = geodeSchema2Active(S);
@@ -10330,6 +10594,13 @@ function syncRecurringPayments() {
     carried = Object.create(null);
     geodeContributionCarryActive(S).forEach(function (c) { carried[c.paymentId] = true; });
   }
+  var gaps = crossing && geodeSchema3Active(S) ? geodeExpectationCaptureContext(S, ym) : null;
+  if (gaps) {
+    if (!Array.isArray(S.expectationGaps)) S.expectationGaps = [];
+    (S.payments || []).forEach(function (p) {
+      if (p && p.rec === 'yes' && p.status !== 'paid') geodeCaptureExpectationGaps(S, p, String(p.date || '').slice(0, 7), gaps);
+    });
+  }
   if (S.payments && S.payments.length) {
     for (var i = 0; i < S.payments.length; i++) {
       var p = S.payments[i];
@@ -10337,6 +10608,12 @@ function syncRecurringPayments() {
       if (schema2 ? geodeSchema2RecurringResetDue(S, p, ym, carried) : p.lastPaidYM && p.lastPaidYM !== ym &&
           (geodeContributionYmTrusted(p.lastPaidYM) || !geodePaymentBalanceEffect(S, p))) {
         if (!schema2) geodeEnsureContributionCompletion(p, 'rollover_safety_net');
+        // A reset row whose settled occurrence is unknown records nothing: its elapsed months stay unknown.
+        var paidYm = gaps && p.rec === 'yes' ? geodeExpectationPaidOccurrenceYm(p) : '';
+        if (paidYm) {
+          var nextYm = geodeContributionYmAdd(paidYm, 1), dateYm = String(p.date || '').slice(0, 7);
+          geodeCaptureExpectationGaps(S, p, dateYm > nextYm ? dateYm : nextYm, gaps);
+        }
         p.status = 'upcoming';
         p.lastPaidYM = '';
         delete p.lastPaidDueDate;
@@ -10350,6 +10627,7 @@ function syncRecurringPayments() {
   if (rollupRecurringPaymentDueDates()) changed = true;
   if (rollupRecurringExpenseDueDates()) changed = true;
   if (geodeArchiveExpiredOneOffExpenses(S)) changed = true;
+  if (gaps && gaps.added) changed = true;
   if (changed) save();
 }
 function monthlyInterest(aprPercent, balance) {
@@ -42844,6 +43122,8 @@ function geodeBeyndBackupRestorableKeyWhitelist() {
     'savingsReleases',
     'debtPaymentEvents',
     'billPaymentEvents',
+    'expectationGaps',
+    'expectationFloorYm',
     'contributionEvents',
     'contributionCarry',
     'snapshots',

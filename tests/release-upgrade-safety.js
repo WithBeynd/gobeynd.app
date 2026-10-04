@@ -28,8 +28,11 @@ const INDEX = read('index.html');
 const SW = read('service-worker.js');
 const ORIGIN = 'https://gobeynd.app';
 const HARNESS = read('tests/cross-month-financial-truth.js');
-const PREVIOUS = 'v1.0.76';
+/** The deployed runtime (tag phase1-financial-truth-release, schema 2). */
+const PREVIOUS = 'v1.0.77';
+const PREVIOUS_TAG = 'phase1-financial-truth-release';
 const RELEASE_GATE = "else if (geodeShellReadiness() !== 'pending') geodeSchema2Transition();";
+const SCHEMA3_GATE = "if (geodeSchema3TransitionDue(S) && geodeShellReadiness() !== 'pending') geodeSchema3Transition();";
 const INVESTMENT_GATE = "if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') geodeInvestmentAuthorityTransition(S, _geodeInvOpening);";
 const flat = text => text.replace(/\s+/g, ' ');
 const count = (text, part) => text.split(part).length - 1;
@@ -249,9 +252,11 @@ function runBoot(caches, storage, schema, stale) {
   const code = ['BEYND_RUNTIME_VERSION', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'].map(extractConstant).join('\n') + '\n' + extractFunction('geodeShellReadiness') + '\n' +
     'var S = { _schemaVersion: ' + schema + ' }, _geodeRuntimeStale = ' + JSON.stringify(stale || '') + ';\n' +
     'function geodeInvestmentLegacyOpeningValues() { __calls.push("opening"); return [5200]; }\n' +
-    'function geodeSchema2Active(s) { return s._schemaVersion === 2; }\n' +
+    'function geodeSchema2Active(s) { return s._schemaVersion >= 2; }\n' +
     'function geodeSchema2IntegrityReport() { __calls.push("integrity"); }\n' +
     'function geodeSchema2Transition() { __calls.push("schema"); S._schemaVersion = 2; }\n' +
+    'function geodeSchema3TransitionDue(s) { return s._schemaVersion === 2; }\n' +
+    'function geodeSchema3Transition() { __calls.push("schema3"); S._schemaVersion = 3; }\n' +
     'function geodeInvestmentAuthorityTransition(s, opening) { __calls.push("investment " + JSON.stringify(opening)); return true; }\n' +
     'function syncRecurringPayments() { __calls.push("sync"); }\n' +
     '(function () {\n' + bootBlock(LOAD) + '\n})();';
@@ -259,7 +264,7 @@ function runBoot(caches, storage, schema, stale) {
   return calls;
 }
 const HELD2 = ['opening', 'integrity', 'sync'];
-const MOVED2 = ['opening', 'integrity', 'investment [5200]', 'sync'];
+const MOVED2 = ['opening', 'integrity', 'schema3', 'investment [5200]', 'sync'];
 const OLD_SW = SW.replace("const CACHE_VERSION = '" + RUNTIME + "';", "const CACHE_VERSION = '" + PREVIOUS + "';");
 
 /** A minimal DOM for geodeShowStaleRuntimeGate. */
@@ -297,11 +302,11 @@ async function versions() {
   group = 'VERSIONS — page runtime and worker cache move together';
   const worker = loadWorker({ caches: new FakeCaches(), net: fakeNetwork({}) });
   const cacheVersion = worker.value('CACHE_VERSION');
-  check('ver.values', 'index.html BEYND_RUNTIME_VERSION and service-worker.js CACHE_VERSION are v1.0.77 (P1-REL)', [RUNTIME, cacheVersion], ['v1.0.77', 'v1.0.77']);
+  check('ver.values', 'index.html BEYND_RUNTIME_VERSION and service-worker.js CACHE_VERSION are v1.0.78 (P2-5: schema 3 waits for this shell)', [RUNTIME, cacheVersion], ['v1.0.78', 'v1.0.78']);
   check('ver.lockstep', 'They match, so the worker accepts exactly this page and names its cache after it', [RUNTIME === cacheVersion, worker.value('CACHE_NAME')], [true, 'beynd-cache-' + RUNTIME]);
   check('ver.bumped', 'Both differ from the deployed ' + PREVIOUS + ', so every browser installs this release; the older worker modelled here really is ' + PREVIOUS,
     [RUNTIME !== PREVIOUS, cacheVersion !== PREVIOUS, loadWorker({ source: OLD_SW, caches: new FakeCaches(), net: fakeNetwork({}) }).value('CACHE_NAME')], [true, true, 'beynd-cache-' + PREVIOUS]);
-  check('ver.schema', 'The financial schema stays 2', SCHEMA, '2');
+  check('ver.schema', 'The financial schema is 3 (P2-5 expectation evidence)', SCHEMA, '3');
   check('ver.settings', 'Settings shows "Runtime " + BEYND_RUNTIME_VERSION through the existing display',
     INDEX.indexOf("Runtime ' +\n    escHtmlLite(typeof BEYND_RUNTIME_VERSION !== 'undefined' ? BEYND_RUNTIME_VERSION : 'unknown')") >= 0, true);
   const pure = fs.readdirSync(path.join(ROOT, 'js', 'geode-pure')).filter(f => /\.js$/.test(f)).sort().map(f => '/js/geode-pure/' + f);
@@ -357,7 +362,7 @@ async function installFailure() {
   const page = loadPage(caches, storage);
   const failed = await loadWorker({ caches, net: fakeNetwork(releaseFiles({ '/index.html': OLD_SHELL, '/': OLD_SHELL })) }).install();
   const load = LOAD;
-  check('fail.held', 'CDN still serving the old page: install fails; the previous cache stays; shell readiness is pending, so load()\'s boot block, run as written, takes neither transition (schema 1 stays schema 1; schema 2 keeps legacy investment authority); the financial key is untouched',
+  check('fail.held', 'CDN still serving the old page: install fails; the previous cache stays; shell readiness is pending, so load()\'s boot block, run as written, takes no transition (schema 1 stays schema 1; schema 2 stays schema 2 and keeps legacy investment authority); the financial key is untouched',
     [failed.indexOf('rejected') === 0, caches.names(), page.readiness(), load.indexOf('if (!_geodeRuntimeStale) {') >= 0 && load.indexOf(RELEASE_GATE) > load.indexOf('if (!_geodeRuntimeStale) {'),
       runBoot(caches, storage, 1), runBoot(caches, storage, 2), storage.m.geode_v6],
     [true, ['beynd-cache-' + PREVIOUS], 'pending', true, ['opening', 'sync'], HELD2, '{"income":3000}']);
@@ -584,10 +589,100 @@ async function investmentGate() {
   check('inv.boot.ready', 'Run as written, schema 2 with geode_shell = ' + RUNTIME + ': the legacy opening values are read, the integrity report runs, the investment transition gets those values, then recurring sync',
     runBoot(new FakeCaches(), ready(), 2), MOVED2);
   check('inv.boot.absent', 'No Cache API (readiness absent): the transition runs on the first load, as FA-7B shipped', runBoot(undefined, fakeStorage(), 2), MOVED2);
-  check('inv.boot.schema1', 'Schema 1: pending → neither transition; ready → the schema transition, then the investment transition in the same load, both before recurring sync',
-    [runBoot(new FakeCaches(), fakeStorage({ geode_shell: PREVIOUS }), 1), runBoot(new FakeCaches(), ready(), 1)], [['opening', 'sync'], ['opening', 'schema', 'investment [5200]', 'sync']]);
+  check('inv.boot.schema1', 'Schema 1: pending → no transition; ready → the schema 1 → 2 transition, the schema 2 → 3 transition (P2-5), then the investment transition in the same load, all before recurring sync',
+    [runBoot(new FakeCaches(), fakeStorage({ geode_shell: PREVIOUS }), 1), runBoot(new FakeCaches(), ready(), 1)], [['opening', 'sync'], ['opening', 'schema', 'schema3', 'investment [5200]', 'sync']]);
   check('inv.boot.stale', 'A stale runtime (newer stored data, or another window changed the schema): nothing is read or moved, even when ready or without a Cache API',
     [runBoot(new FakeCaches(), ready(), 2, 'newer'), runBoot(undefined, fakeStorage(), 1, 'changed')], [['sync'], ['sync']]);
+}
+
+async function schema3Gate() {
+  group = 'P2-5 SCHEMA 3 GATE — the schema 2 → 3 transition waits for this release\'s shell, before the investment transition';
+  const load = flat(LOAD), shim = flat(RELOAD_SHIM), gateText = flat(SCHEMA3_GATE);
+  const calls = text => count(text, 'geodeSchema3Transition(');
+  check('s3.gate.once', 'index.html calls geodeSchema3Transition once outside its own definition, in load(), as the gated statement; the harness shim has the same statement once',
+    [calls(INDEX) - calls(extractFunction('geodeSchema3Transition')), count(load, gateText), count(shim, gateText)], [1, 1, 1]);
+  const at = text => [text.indexOf(flat(RELEASE_GATE)), text.indexOf(gateText), text.indexOf(flat(INVESTMENT_GATE))];
+  const ordered = a => a.every((p, i) => p >= 0 && (!i || p > a[i - 1]));
+  check('s3.gate.order', 'In load() and the shim: after the schema 1 → 2 gate and before the investment gate, inside if (!_geodeRuntimeStale) { … } with no block end between them',
+    [ordered(at(load)), ordered(at(shim)), load.slice(at(load)[0], at(load)[2]).indexOf('}') < 0], [true, true, true]);
+  const ready = () => fakeStorage({ geode_shell: RUNTIME });
+  const pending = () => fakeStorage({ geode_shell: PREVIOUS });
+  check('s3.boot', 'Run as written. Schema 2: pending → no schema-3 transition (recurring sync then holds the boundary, see the harness); ready or no Cache API → schema 3 before the investment transition. Schema 3: no transition either way. Stale: nothing',
+    [runBoot(new FakeCaches(), pending(), 2), runBoot(new FakeCaches(), ready(), 2), runBoot(undefined, fakeStorage(), 2), runBoot(new FakeCaches(), pending(), 3),
+      runBoot(new FakeCaches(), ready(), 3), runBoot(new FakeCaches(), ready(), 2, 'newer')],
+    [HELD2, MOVED2, MOVED2, ['opening', 'integrity', 'sync'], ['opening', 'integrity', 'investment [5200]', 'sync'], ['sync']]);
+}
+
+/**
+ * The deployed runtime's own guard code, read from its release tag: boot note, write admission, the persist and
+ * transition writers, the storage listener and backup validation, with their constants as shipped.
+ */
+function loadOldRuntime(storage) {
+  const old = require('child_process').execFileSync('git', ['show', PREVIOUS_TAG + ':index.html'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).replace(/\r\n/g, '\n');
+  const fn = name => { const a = old.indexOf('\nfunction ' + name + '('); if (a < 0) throw new Error(PREVIOUS_TAG + ' has no ' + name); return old.slice(a + 1, old.indexOf('\n}\n', a) + 2); };
+  const constant = name => { const m = old.match(new RegExp('\\nvar ' + name + ' = [^\\n]*;\\n')); if (!m) throw new Error(PREVIOUS_TAG + ' has no var ' + name); return m[0].trim(); };
+  const gates = [], listeners = [];
+  const ctx = vm.createContext({ console: { log() {}, info() {}, warn() {}, error() {} }, localStorage: storage, __gates: gates, __listeners: listeners,
+    window: { addEventListener(t, f) { listeners.push([t, f]); } } });
+  const code = ['KEY', 'GEODE_SCHEMA_VERSION', 'BEYND_RUNTIME_VERSION', '_geodeRuntimeStale', '_geodeFinancialKeySeen'].map(constant).join('\n') + '\nvar S = null;\n' +
+    'function geodeShowStaleRuntimeGate(r) { __gates.push(r); }\nfunction toast() {}\n' +
+    ['geodePersistedSchemaVersion', 'geodeStoredSchemaVersion', 'geodeNoteFinancialBoot', 'geodeMarkRuntimeStale', 'geodeFinancialWriteAllowed', 'persistGeodeToLocalStorage',
+      'geodeSchema2CommitTransition', 'geodeOnForeignFinancialWrite', 'geodeInstallFinancialStorageListener', 'isPlainObject', 'validateBeyndBackupEnvelope'].map(fn).join('\n');
+  new vm.Script(code, { filename: PREVIOUS_TAG + '.js' }).runInContext(ctx);
+  return { old, fn, gates, listeners, run: src => vm.runInContext(src, ctx) };
+}
+
+async function oldRuntime() {
+  group = 'P2-5 OLD RUNTIME — the deployed ' + PREVIOUS + ' (schema 2) refuses schema-3 data with its own code';
+  const SCHEMA3 = JSON.stringify({ _schemaVersion: 3, income: 3000, expectationGaps: [], expectationFloorYm: '2026-10', _rev: { seq: 4, id: 'rev_s3', by: RUNTIME, at: 1 } });
+  const SCHEMA2 = JSON.stringify({ _schemaVersion: 2, income: 3000 });
+  const writes = () => log.filter(x => x.indexOf('setItem:geode_v6=') === 0).length;
+  const probe = loadOldRuntime(fakeStorage());
+  check('old.identity', 'The tag ' + PREVIOUS_TAG + ' is the deployed ' + PREVIOUS + ' at schema 2, and its save() asks the same write guard first',
+    [probe.run('BEYND_RUNTIME_VERSION'), probe.run('GEODE_SCHEMA_VERSION'), probe.fn('save').split('\n')[1].trim()], [PREVIOUS, 2, 'if (!geodeFinancialWriteAllowed()) return;']);
+
+  log.length = 0;
+  const bootStore = fakeStorage({ geode_v6: SCHEMA3 });
+  const boot = loadOldRuntime(bootStore);
+  boot.run('geodeNoteFinancialBoot(localStorage.getItem(KEY)); S = JSON.parse(localStorage.getItem(KEY)); persistGeodeToLocalStorage(); S._schemaVersion = 1;');
+  const bootCommit = boot.run('geodeSchema2CommitTransition()');
+  check('old.boot', 'A ' + PREVIOUS + ' page opening on schema-3 data: the "newer version" gate at boot; its persist and its schema-2 commit write nothing; the stored text is byte-identical',
+    [boot.run('_geodeRuntimeStale'), boot.gates, bootCommit, writes(bootStore), bootStore.m.geode_v6 === SCHEMA3], ['newer', ['newer'], false, 0, true]);
+
+  log.length = 0;
+  const openStore = fakeStorage({ geode_v6: SCHEMA2 });
+  const open = loadOldRuntime(openStore);
+  open.run('geodeNoteFinancialBoot(localStorage.getItem(KEY)); S = JSON.parse(localStorage.getItem(KEY));');
+  const before = open.run('_geodeRuntimeStale');
+  openStore.m.geode_v6 = SCHEMA3;
+  open.run('S.income = 3100; persistGeodeToLocalStorage();');
+  const allowed = open.run('geodeFinancialWriteAllowed()');
+  check('old.open-tab', 'A ' + PREVIOUS + ' page that loaded schema 2 before this runtime moved storage to schema 3 (no storage event, e.g. back/forward cache): its next write re-reads storage, refuses as newer and writes nothing; the schema-3 text (expectation evidence included) is byte-identical',
+    [before, allowed, open.run('_geodeRuntimeStale'), open.gates, writes(openStore), openStore.m.geode_v6 === SCHEMA3], ['', false, 'newer', ['newer'], 0, true]);
+
+  log.length = 0;
+  const heardStore = fakeStorage({ geode_v6: SCHEMA2 });
+  const heard = loadOldRuntime(heardStore);
+  heard.run('geodeNoteFinancialBoot(localStorage.getItem(KEY)); S = JSON.parse(localStorage.getItem(KEY)); geodeInstallFinancialStorageListener();');
+  heardStore.m.geode_v6 = SCHEMA3;
+  heard.listeners.filter(l => l[0] === 'storage').forEach(l => l[1]({ key: 'geode_v6', newValue: SCHEMA3, storageArea: heardStore }));
+  heard.run('persistGeodeToLocalStorage();');
+  check('old.event', 'A ' + PREVIOUS + ' page that hears the schema-3 write stops at once with the "newer version" gate and its persist writes nothing',
+    [heard.run('_geodeRuntimeStale'), heard.gates, writes(heardStore), heardStore.m.geode_v6 === SCHEMA3], ['newer', ['newer'], 0, true]);
+
+  log.length = 0;
+  const bypassStore = fakeStorage({ geode_v6: SCHEMA2 });
+  const bypass = loadOldRuntime(bypassStore);
+  bypass.run('geodeNoteFinancialBoot(localStorage.getItem(KEY)); S = JSON.parse(localStorage.getItem(KEY));' +
+    ' geodeFinancialWriteAllowed = function () { return true; };');
+  bypassStore.m.geode_v6 = SCHEMA3;
+  bypass.run('S.income = 3100; persistGeodeToLocalStorage();');
+  check('old.mut.guard', 'Mutation: with that page\'s write guard bypassed, the same persist overwrites the schema-3 text with schema 2 — the guard is what keeps the evidence',
+    [writes(), JSON.parse(bypassStore.m.geode_v6)._schemaVersion], [1, 2]);
+
+  const backup = sv => probe.run('validateBeyndBackupEnvelope(JSON.parse(' + JSON.stringify(JSON.stringify({ app: 'Beynd', exportType: 'state_backup_redacted_v1', exportFormatVersion: 1, redacted: true,
+    data: { income: 1 }, schemaVersion: sv })) + ')).ok');
+  check('old.backup', 'Its backup validator refuses a schema-3 backup and accepts a schema-2 one', [backup(3), backup(2)], [false, true]);
 }
 
 async function mixedVersions() {
@@ -689,7 +784,7 @@ async function gate() {
 
 async function cacheOrder() {
   group = 'P2-2 CACHE ORDER — a runtime deletes only Beynd caches older than itself';
-  const newer = 'beynd-cache-v1.0.78';
+  const newer = 'beynd-cache-v1.0.79';
   const unknown = 'beynd-cache-preview';
   log.length = 0;
   const caches = new FakeCaches();
@@ -700,7 +795,7 @@ async function cacheOrder() {
   caches.seed(CURRENT_CACHE, { '/index.html': INDEX });
   caches.seed('other-app', { '/x': 'x' });
   const outcome = await loadWorker({ caches, net: fakeNetwork({}), windows: [] }).activate();
-  check('cache.activate', 'Activation deletes v1.0.76 and v1.0.70, and keeps this release, a newer Beynd cache, an unorderable Beynd cache and a non-Beynd cache',
+  check('cache.activate', 'Activation deletes ' + PREVIOUS + ' and v1.0.70, and keeps this release, a newer Beynd cache, an unorderable Beynd cache and a non-Beynd cache',
     [outcome, caches.names().slice().sort()], ['resolved', [CURRENT_CACHE, newer, 'other-app', unknown].sort()]);
 
   const pageCaches = new FakeCaches();
@@ -727,7 +822,7 @@ async function main() {
   try {
     if (!RUNTIME) throw new Error('index.html has no BEYND_RUNTIME_VERSION line');
     await versions(); await install(); await installFailure(); await activate(); await activationStall(); await lookups(); await navigation();
-    await shellReadiness(); await cleanupFailure(); await investmentGate(); await mixedVersions(); await gate(); await cacheOrder();
+    await shellReadiness(); await cleanupFailure(); await investmentGate(); await schema3Gate(); await oldRuntime(); await mixedVersions(); await gate(); await cacheOrder();
   } catch (e) {
     results.push({ group, id: 'error', text: 'harness error', ok: false, detail: String(e && e.stack || e) });
   }

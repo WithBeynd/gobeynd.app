@@ -5,7 +5,7 @@
 // install only accepts an app shell that declares exactly this runtime version.
 // CACHE_NAME is derived so old caches are deleted on activate and clients never mix versions.
 
-const CACHE_VERSION = 'v1.0.77'; // P1-REL: Phase-1 release; investment valuation authority waits for this shell
+const CACHE_VERSION = 'v1.0.78'; // P2-5: schema 3 (expectation evidence) waits for this shell
 const CACHE_NAME = `beynd-cache-${CACHE_VERSION}`;
 const CACHE_PREFIX = 'beynd-cache-';
 const SHELL_URLS = ['/', '/index.html'];
