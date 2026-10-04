@@ -16548,16 +16548,16 @@ function getCoreNudges(state) {
         });
       } else {
         add({
-          title: 'Unused cash',
+          title: 'Room on your plan',
           message:
-            'You still have about ' +
+            'Your plan leaves about ' +
             fm(left) +
-            ' still open this month — when you choose a direction (debt, goals, or investing), momentum builds.',
+            ' open this month — when you choose a direction (debt, goals, or investing), momentum builds.',
           type: 'opportunity',
           topic: 'opportunity',
           variants: [
-            'You still have about ' + fm(left) + ' not yet directed this month — room to decide where it goes next.',
-            'There is still about ' + fm(left) + ' open for a plan step — choosing debt, goals, or investing builds momentum.',
+            'Your plan leaves about ' + fm(left) + ' not yet directed this month — room to decide where it goes next.',
+            'Your plan has about ' + fm(left) + ' open for a step — choosing debt, goals, or investing builds momentum.',
             'You have about ' + fm(left) + ' still open on your plan this month. A gentle next step can build momentum.'
           ]
         });
@@ -16566,15 +16566,15 @@ function getCoreNudges(state) {
       add({
         title: 'Plan room',
         message:
-          'You have about ' +
+          'Your plan leaves about ' +
           fm(left) +
-          ' left after bills — aligning it with your plan (debt, buffer, or goals) keeps momentum.',
+          ' after bills — aligning it with your plan (debt, buffer, or goals) keeps momentum.',
         type: 'opportunity',
         topic: 'opportunity',
         variants: [
-          'You have about ' + fm(left) + ' left after bills — staying aligned with your plan keeps momentum.',
+          'Your plan leaves about ' + fm(left) + ' after bills — staying aligned with it keeps momentum.',
           'You have about ' + fm(left) + ' plan room — small, consistent allocations matter.',
-          'About ' + fm(left) + ' is left after bills — keep it intentional (debt, buffer, goals).'
+          'About ' + fm(left) + ' is left on your plan after bills — keep it intentional (debt, buffer, goals).'
         ]
       });
     }
@@ -39747,7 +39747,7 @@ function rHome() {
         '<span data-geode-css="font-size:16px;color:rgba(189,183,220,0.45);line-height:1;flex-shrink:0" aria-hidden="true">\u203a</span>';
       h += '</div></div>';
       h += '<div data-geode-css="font-size:11px;color:rgba(237,234,255,0.8);line-height:1.5">' +
-        escHtmlLite('Your spending exceeds income by ' + fm(_homeOver) + ' this month. Plan can show where to adjust.') +
+        escHtmlLite('Your current plan is ' + fm(_homeOver) + ' over your income this month. Plan can show where to adjust.') +
         '</div>';
       h += '</div>';
     }

@@ -10,7 +10,7 @@
  * nothing; the whole record → correct → remove loop with one and two receipts (aggregate, rows, focus, Monthly Left,
  * P3-4, storage, baseline, revision); reload and a second tab; amount parsing; label escaping; an income plan of £0
  * versus none entered; irregular income; dialog accessibility; Home never calls a payment overdue only because no outcome is
- * recorded — then each mutant of index.html must fail a check.
+ * recorded, nor shows Monthly Left as cash in hand or spending — then each mutant of index.html must fail a check.
  * Exit code 0 when every check passes, 1 otherwise.
  */
 'use strict';
@@ -503,7 +503,46 @@ function dueChecks(src) {
   return results;
 }
 
+/**
+ * §27–28: Home's coaching insights and over-budget card, run from the production source — Monthly Left is a plan
+ * figure, so every line that shows it says so; none tells the user they have the money or that it was spent.
+ */
+function planWordChecks(src) {
+  const results = [];
+  const vm = require('vm');
+  const cm = require('./cross-month-financial-truth.js');
+  const check = (id, text, actual, expected) => {
+    const ok = J(actual) === J(expected);
+    results.push({ group: 'PLAN FIGURES ON HOME — Monthly Left is never cash in hand or actual spending (§27–28)', id, text, ok, detail: ok ? '' : 'expected ' + J(expected) + ', observed ' + J(actual) });
+  };
+  const nudges = ctxName => {
+    const ctx = vm.createContext({
+      Math, String, Number, JSON, Array, Object,
+      S: {}, fm: n => '\u00a3' + n, toNum: v => Number(v) || 0, getFinancialContext: () => ctxName, geodeCtx: () => ({ hasDeps: false, isIrregular: false }),
+      geodeHasOverdue: () => false, calcMonthlyLeftover: () => 742, selectWorstHighAprDebt: () => null, geodeIsEmergencyBufferGoal: () => false,
+      selectMostOffTrackGoal: () => null, hasRecentActivity: () => false, hasRecentInvestmentFlowActivity: () => false
+    });
+    vm.runInContext(cm.extractFunction(src, 'getCoreNudges').text, ctx);
+    const out = vm.runInContext('getCoreNudges({ income: 0, payments: [], goals: [], debts: [] })', ctx);
+    return out.filter(n => n.topic === 'opportunity').map(n => [n.title, n.message].concat(n.variants || []));
+  };
+  const lines = nudges('surplus').concat(nudges('steady'));
+  const figureLines = lines.flat().filter(s => s.indexOf('\u00a3742') >= 0);
+  check('W.insight-shown', 'With £742 of Monthly Left, the room insight appears in a surplus month and in an ordinary one',
+    [lines.length, figureLines.length > 0], [2, true]);
+  check('W.insight-plan', 'Every line that shows the £742 says it is on the plan; none says "you still have", "unused cash" or "left after bills" as money held',
+    figureLines.filter(s => !/plan/i.test(s) || /you still have|unused cash|^you have about \u00a3742 left|there is still about/i.test(s)), []);
+  check('W.insight-title', 'The surplus insight is titled as plan room, not cash', lines.map(l => l[0]).filter(t => /cash/i.test(t)), []);
+  const rHome = cm.extractFunction(src, 'rHome').text;
+  check('W.over-budget', 'The Home over-budget card says the plan is over income, never that spending exceeds income',
+    [rHome.indexOf("'Your current plan is ' + fm(_homeOver) + ' over your income this month.") > 0, rHome.indexOf('Your spending exceeds income by') < 0], [true, true]);
+  return results;
+}
+
 const MUTANTS = {
+  'plan room called cash in hand': [["            'Your plan leaves about ' +\n            fm(left) +\n            ' open this month", "            'You still have about ' +\n            fm(left) +\n            ' still open this month"]],
+  'plan room called left after bills': [["          'Your plan leaves about ' +\n          fm(left) +\n          ' after bills", "          'You have about ' +\n          fm(left) +\n          ' left after bills"]],
+  'over-plan called spending': [["escHtmlLite('Your current plan is ' + fm(_homeOver) + ' over your income this month.", "escHtmlLite('Your spending exceeds income by ' + fm(_homeOver) + ' this month."]],
   'due item called overdue on Home': [[`">Due ' + item.daysLate + ' day' + (item.daysLate===1?'':'s') + ' ago \\u00b7 no outcome recorded</div>';`,
     `">' + item.daysLate + ' day' + (item.daysLate===1?'':'s') + ' overdue</div>';`]],
   'Main Action says clear overdue': [["      out.title = 'Confirm due payments first';", "      out.title = 'Clear overdue items first';"]],
@@ -534,7 +573,7 @@ const MUTANTS = {
 };
 
 function main() {
-  const results = checksFor(SRC).concat(staticChecks(SRC), dueChecks(SRC));
+  const results = checksFor(SRC).concat(staticChecks(SRC), dueChecks(SRC), planWordChecks(SRC));
   Object.keys(MUTANTS).forEach(name => {
     let src = SRC;
     MUTANTS[name].forEach(([from, to]) => {
@@ -544,7 +583,7 @@ function main() {
     let caught;
     let by = [];
     try {
-      const r = checksFor(src).concat(staticChecks(src), dueChecks(src));
+      const r = checksFor(src).concat(staticChecks(src), dueChecks(src), planWordChecks(src));
       by = r.filter(x => !x.ok).map(x => x.id);
       caught = by.length > 0;
     } catch (e) {
