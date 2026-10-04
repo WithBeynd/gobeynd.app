@@ -1309,7 +1309,7 @@ details.geode-manage-disclosure[open] > :not(summary){animation:geode-details-bo
       <div class="fr-p">1. Add your income and spending
 2. Beynd builds your monthly priorities
 3. Follow the plan and adjust as you go</div>
-      <div class="fr-p">Reality helps you sense-check your plan against today and keep track of what matters this month. Nothing is pulled from your bank.</div>
+      <div class="fr-p">Reality lets you note the balance you see today and keep track of what matters this month. Nothing is pulled from your bank.</div>
       <button type="button" class="btn btn-p" onclick="frNext()">Continue</button>
       <button type="button" class="btn btn-s" onclick="frSkip()">I'll explore instead</button>
     </div>
@@ -2856,14 +2856,6 @@ function geodeFinancialPosture(state, opts) {
     }
     return '';
   }
-  function latestActivityAfter(ts) {
-    if (!ts) return false;
-    var log = arr(st.activityLog);
-    for (var i = 0; i < log.length; i++) {
-      if (log[i] && typeof log[i].ts === 'number' && log[i].ts > ts) return true;
-    }
-    return false;
-  }
   function snapshotRows() {
     var sn = st.snapshots && typeof st.snapshots === 'object' ? st.snapshots : {};
     if (Array.isArray(sn)) return sn.slice();
@@ -2987,56 +2979,15 @@ function geodeFinancialPosture(state, opts) {
   var breathingRoomGap = breathingRoomFloor - Math.max(0, leftThisMonth);
   if (hasFinancialShape && breathingRoomGap > 0) reason('breathing_room_under_floor');
 
-  var realityInput = opts.realityStatus && typeof opts.realityStatus === 'object' ? opts.realityStatus : null;
+  // The Reality balance is dated evidence the user typed in. It is never compared with the plan.
   var realityCheck = st.realityCheck && typeof st.realityCheck === 'object' ? st.realityCheck : null;
-  var reality = { hasData: false, gap: null, status: 'none', confidence: 'estimated', daysOld: 0, activitySinceCheck: false };
-  if (realityInput) {
-    reality = {
-      hasData: !!realityInput.hasData,
-      gap: realityInput.gap != null ? toNum(realityInput.gap) : null,
-      status: String(realityInput.status || ''),
-      confidence: String(realityInput.confidence || 'estimated'),
-      daysOld: toNum(realityInput.daysOld),
-      activitySinceCheck: !!realityInput.activitySinceCheck
-    };
-  } else if (realityCheck && String(realityCheck.ym || '') === monthKey && realityCheck.amount != null) {
-    var actual = toNum(realityCheck.amount);
-    var gap = actual - leftThisMonth;
-    var gapAbs = Math.abs(gap);
-    var gapRatio = gapAbs / Math.max(actual, 1);
-    var confidence = 'high';
-    if (gapRatio >= 0.25) confidence = 'low';
-    else if (gapRatio >= 0.1) confidence = 'moderate';
+  var reality = { hasData: false, daysOld: 0 };
+  if (realityCheck && String(realityCheck.ym || '') === monthKey && realityCheck.amount != null) {
     var checkedAt = toNum(realityCheck.date);
-    var daysOld = checkedAt > 0 && todayTime > 0 ? Math.max(0, Math.floor((todayTime - checkedAt) / 86400000)) : 0;
-    if (daysOld > 10) confidence = 'low';
-    else if (daysOld > 3 && confidence === 'high') confidence = 'moderate';
-    var activitySinceCheck = latestActivityAfter(checkedAt);
-    if (activitySinceCheck) {
-      if (confidence === 'high') confidence = 'moderate';
-      else if (confidence === 'moderate') confidence = 'low';
-    }
     reality = {
       hasData: true,
-      gap: gap,
-      status: gapAbs > 50 ? (gap < 0 ? 'overstated' : 'understated') : 'aligned',
-      confidence: confidence,
-      daysOld: daysOld,
-      activitySinceCheck: activitySinceCheck
+      daysOld: checkedAt > 0 && todayTime > 0 ? Math.max(0, Math.floor((todayTime - checkedAt) / 86400000)) : 0
     };
-  }
-  var realityMode = 'no_balance';
-  if (reality.hasData) {
-    if (reality.gap < -50 || reality.status === 'overstated') realityMode = 'below_plan';
-    else if (reality.gap > 50 || reality.status === 'understated') realityMode = 'above_plan';
-    else realityMode = 'aligned';
-    if (reality.daysOld > 7) reason('reality_stale');
-    if (reality.activitySinceCheck) reason('reality_activity_since_check');
-    if (reality.confidence === 'low') reason('reality_low_confidence');
-    if (realityMode === 'below_plan') reason('reality_balance_below_plan');
-    if (realityMode === 'above_plan') reason('reality_balance_above_plan');
-  } else {
-    reason('no_reality_balance');
   }
 
   var feeling = String(opts.realityFeeling || '').toLowerCase();
@@ -3075,14 +3026,6 @@ function geodeFinancialPosture(state, opts) {
   else if (leftThisMonth < 0 && expenses.length > 0) recoveryMode = 'active';
   if (recoveryMode !== 'none') reason('recovery_' + recoveryMode);
 
-  var activeAlignment = opts.activeAlignment !== undefined ? opts.activeAlignment : null;
-  if (activeAlignment == null && st.realityPlanAlignment && typeof st.realityPlanAlignment === 'object') {
-    var a = st.realityPlanAlignment;
-    if (a.status === 'approved' && a.version === 1 && String(a.ym || '') === monthKey && Array.isArray(a.stepAdjustments) && a.stepAdjustments.length) {
-      activeAlignment = a;
-    }
-  }
-  if (activeAlignment) reason('month_shift_alignment_active');
   if (opts.affordGatePending === true) reason('afford_gate_pending');
 
   var snaps = snapshotRows();
@@ -3123,7 +3066,6 @@ function geodeFinancialPosture(state, opts) {
   if (leftThisMonth < 0 || hasOverdue) pressureLevel = 'critical';
   else if (
     (income > 0 && leftThisMonth < Math.max(50, income * 0.08)) ||
-    realityMode === 'below_plan' ||
     breathingRoomGap > 0
   ) {
     pressureLevel = 'high';
@@ -3142,17 +3084,13 @@ function geodeFinancialPosture(state, opts) {
   else if (pressureLevel === 'critical') posture = 'critical';
   else if (pressureLevel === 'high') posture = 'pinched';
   else if (pressureLevel === 'moderate') posture = 'narrow';
-  if (realityMode === 'above_plan' && pressureLevel === 'low' && st.planStrategy === 'growth') {
-    posture = 'growth_room';
-    reason('growth_room_available');
-  }
   if (lapsedUse && pressureLevel !== 'critical' && pressureLevel !== 'high') {
     posture = 'lapsedReview';
   }
 
   var breathingRoomMode = 'normal';
   if (breathingRoomGap > 0 || protectedRows > 0 || hasDependants || incomeType === 'irregular') breathingRoomMode = 'reserve';
-  if (pressureLevel === 'critical' || realityMode === 'below_plan' || protectText) breathingRoomMode = 'protect';
+  if (pressureLevel === 'critical' || protectText) breathingRoomMode = 'protect';
 
   var protectionMode = 'none';
   if (protectedReasons.debt_minimum || unresolvedMinimum > 0) protectionMode = 'debt_minimum';
@@ -3183,9 +3121,6 @@ function geodeFinancialPosture(state, opts) {
     suppress('aggressive_investment_prompts');
   }
   if (breathingRoomMode === 'protect') suppress('new_commitment_pressure');
-  if (realityMode === 'below_plan' || reality.confidence === 'low') suppress('certainty_language');
-  if (activeAlignment) suppress('duplicate_month_shift_prompt');
-
   var recommendedTone = 'calm';
   if (posture === 'growth_room') recommendedTone = 'encouraging';
   else if (lapsedUse) recommendedTone = 'cautious';
@@ -3195,11 +3130,9 @@ function geodeFinancialPosture(state, opts) {
   var confidenceScore = 0;
   if (hasFinancialShape) confidenceScore++;
   if (income > 0) confidenceScore++;
-  if (reality.hasData) confidenceScore++;
   if (expenses.length || payments.length) confidenceScore++;
   if (snaps.length) confidenceScore++;
   if (follow.total >= 3 || ev.length) confidenceScore++;
-  if (reality.confidence === 'low') confidenceScore--;
   var confidence = confidenceScore >= 4 ? 'high' : confidenceScore >= 2 ? 'moderate' : 'low';
 
   return {
@@ -3209,7 +3142,6 @@ function geodeFinancialPosture(state, opts) {
     pacingMode: pacingMode,
     breathingRoomMode: breathingRoomMode,
     protectionMode: protectionMode,
-    realityMode: realityMode,
     confidence: confidence,
     reasonCodes: reasonCodes,
     sourceSignals: {
@@ -3237,7 +3169,6 @@ function geodeFinancialPosture(state, opts) {
       recoveryInputPresent: !!recoveryInput,
       lapsedUse: lapsedUse,
       lapsedDays: lapsedDays,
-      activeAlignment: !!activeAlignment,
       affordGatePending: opts.affordGatePending === true,
       tightPeriods: tightPeriods,
       tightPeriodsChecked: checkedPeriods,
@@ -3352,14 +3283,6 @@ function geodeAffordabilitySnapshot(state, opts) {
     if (!p.date) return true;
     return monthMatchesDate(p.date, monthKey);
   }
-  function latestActivityAfter(ts) {
-    if (!ts) return false;
-    var log = arr(st.activityLog);
-    for (var i = 0; i < log.length; i++) {
-      if (log[i] && typeof log[i].ts === 'number' && log[i].ts > ts) return true;
-    }
-    return false;
-  }
   function monthContextForInput() {
     var mc = opts.monthContext && typeof opts.monthContext === 'object' ? opts.monthContext : st.monthContext;
     if (!mc || typeof mc !== 'object' || Array.isArray(mc)) return { protect: '', worried: '', success: '', hasAny: false };
@@ -3425,59 +3348,16 @@ function geodeAffordabilitySnapshot(state, opts) {
     }
     return Math.min(minp, paySum + expSum);
   }
+  // The Reality balance is dated evidence the user typed in; it is reported, never compared with the plan.
   function realityFromInput() {
-    var input = opts.realityStatus && typeof opts.realityStatus === 'object' ? opts.realityStatus : null;
-    var fallback = { hasData: false, balance: null, estimate: planRoom, gap: null, status: 'none', confidence: 'estimated', daysOld: 0, activitySinceCheck: false };
-    if (input) {
-      var inputBalance = input.balance != null ? toNum(input.balance) : input.amount != null ? toNum(input.amount) : null;
-      var inputGap = input.gap != null ? toNum(input.gap) : inputBalance != null ? inputBalance - planRoom : null;
-      return {
-        hasData: !!input.hasData,
-        balance: inputBalance,
-        estimate: input.estimate != null ? toNum(input.estimate) : planRoom,
-        gap: inputGap,
-        status: String(input.status || ''),
-        confidence: String(input.confidence || 'estimated'),
-        daysOld: toNum(input.daysOld),
-        activitySinceCheck: !!input.activitySinceCheck
-      };
-    }
     var check = st.realityCheck && typeof st.realityCheck === 'object' ? st.realityCheck : null;
-    if (!check || String(check.ym || '') !== monthKey || check.amount == null) return fallback;
-    var balance = toNum(check.amount);
-    var gap = balance - planRoom;
-    var gapAbs = Math.abs(gap);
-    var ratio = gapAbs / Math.max(balance, 1);
-    var conf = 'high';
-    if (ratio >= 0.25) conf = 'low';
-    else if (ratio >= 0.1) conf = 'moderate';
-    var checkedAt = toNum(check.date);
-    var daysOld = checkedAt > 0 && todayTime > 0 ? Math.max(0, Math.floor((todayTime - checkedAt) / 86400000)) : 0;
-    if (daysOld > 10) conf = 'low';
-    else if (daysOld > 3 && conf === 'high') conf = 'moderate';
-    var activitySinceCheck = latestActivityAfter(checkedAt);
-    if (activitySinceCheck) {
-      if (conf === 'high') conf = 'moderate';
-      else if (conf === 'moderate') conf = 'low';
-    }
-    return {
-      hasData: true,
-      balance: balance,
-      estimate: planRoom,
-      gap: gap,
-      status: gapAbs > 50 ? (gap < 0 ? 'overstated' : 'understated') : 'aligned',
-      confidence: conf,
-      daysOld: daysOld,
-      activitySinceCheck: activitySinceCheck
-    };
+    if (!check || String(check.ym || '') !== monthKey || check.amount == null) return { hasData: false, balance: null };
+    return { hasData: true, balance: toNum(check.amount) };
   }
-  function emotionalPostureFromSignals(realityMode) {
+  function emotionalPostureFromSignals() {
     if (feeling === 'slow' || feeling === 'unsure') return 'review_first';
     if (feeling === 'moved') return 'protect_flexibility';
-    if ((incomeType === 'irregular' && hasDependants) || (hasDependants && realityMode === 'below_plan')) return 'protect_flexibility';
-    if (realityMode === 'below_plan') return 'protect_flexibility';
-    if (String(st.planStrategy || '') === 'growth' && realityMode === 'above_plan' && (feeling === 'still' || !feeling)) return 'growth_room';
-    if (realityMode === 'aligned' && !irregularIncome && !hasDependants && (feeling === 'still' || !feeling)) return 'steady_progress';
+    if (incomeType === 'irregular' && hasDependants) return 'protect_flexibility';
     return 'unknown';
   }
 
@@ -3558,13 +3438,7 @@ function geodeAffordabilitySnapshot(state, opts) {
   var confirmedRoom = income - confirmedPaymentOutflow - monthlyExpenses;
 
   var reality = realityFromInput();
-  var realityMode = 'no_balance';
-  if (reality.hasData) {
-    if (reality.gap < -50 || reality.status === 'overstated') realityMode = 'below_plan';
-    else if (reality.gap > 50 || reality.status === 'understated') realityMode = 'above_plan';
-    else realityMode = 'aligned';
-  }
-  var emotionalPosture = emotionalPostureFromSignals(realityMode);
+  var emotionalPosture = emotionalPostureFromSignals();
 
   var breathingRoomFloor = Math.max(50, income * 0.08);
   if (irregularIncome) breathingRoomFloor *= 1.18;
@@ -3576,9 +3450,8 @@ function geodeAffordabilitySnapshot(state, opts) {
 
   var suggestableBeforeReality = 0;
   var suggestableRoom = 0;
-  var realityGapAdjustment = 0;
   var postureMultiplier = 1;
-  var realityReasonCodes = [];
+  var paceReasonCodes = [];
   if (planRoom <= 0) {
     reason('plan_room_negative');
   } else {
@@ -3587,21 +3460,6 @@ function geodeAffordabilitySnapshot(state, opts) {
     if (unresolvedMinimums > 0) reason('min_not_in_cashflow');
     if (breathingRoomFloor > 0 && suggestableBeforeReality < planRoom - unresolvedMinimums) reason('breathing_room_reserved');
     if (protectedRows > 0) reason('protected_spending_reserved');
-    if (reality.hasData) {
-      if (realityMode === 'below_plan') {
-        realityGapAdjustment = Math.min(suggestableRoom, Math.abs(toNum(reality.gap)));
-        suggestableRoom = Math.max(0, suggestableRoom - realityGapAdjustment);
-        realityReasonCodes.push('reality_balance_below_plan');
-      } else if (realityMode === 'above_plan') {
-        realityReasonCodes.push('reality_balance_above_plan');
-      } else {
-        realityReasonCodes.push('reality_aligned');
-      }
-      if (reality.activitySinceCheck) realityReasonCodes.push('activity_since_reality_check');
-      if (typeof reality.daysOld === 'number' && reality.daysOld > 7) realityReasonCodes.push('reality_check_older_than_week');
-    } else {
-      realityReasonCodes.push('no_reality_balance');
-    }
     if (feeling === 'slow' || emotionalPosture === 'review_first') postureMultiplier = Math.min(postureMultiplier, 0.62);
     if (feeling === 'unsure') postureMultiplier = Math.min(postureMultiplier, 0.72);
     if (feeling === 'moved' || emotionalPosture === 'protect_flexibility') postureMultiplier = Math.min(postureMultiplier, 0.78);
@@ -3609,9 +3467,9 @@ function geodeAffordabilitySnapshot(state, opts) {
     if (mc.protect) postureMultiplier = Math.min(postureMultiplier, 0.86);
     if (postureMultiplier < 1) {
       suggestableRoom = Math.floor(suggestableRoom * postureMultiplier);
-      realityReasonCodes.push('soft_recovery_pace');
+      paceReasonCodes.push('soft_recovery_pace');
     }
-    for (var ri = 0; ri < realityReasonCodes.length; ri++) reason(realityReasonCodes[ri]);
+    for (var ri = 0; ri < paceReasonCodes.length; ri++) reason(paceReasonCodes[ri]);
   }
   if (!positiveIncome) reason('no_income');
 
@@ -3634,9 +3492,6 @@ function geodeAffordabilitySnapshot(state, opts) {
     protectedRows: protectedRows,
     breathingRoomFloor: breathingRoomFloor,
     realityBalance: reality.hasData ? reality.balance : null,
-    realityEstimate: reality.estimate,
-    realityGap: reality.hasData ? reality.gap : null,
-    realityMode: realityMode,
     emotionalPosture: emotionalPosture,
     planRoom: planRoom,
     confirmedRoom: confirmedRoom,
@@ -3657,9 +3512,8 @@ function geodeAffordabilitySnapshot(state, opts) {
           realityAdjustment: {
             suggestableBeforeReality: suggestableBeforeReality,
             suggestableAfterReality: suggestableRoom,
-            realityGapAdjustment: realityGapAdjustment,
             postureMultiplier: postureMultiplier,
-            reasonCodes: realityReasonCodes
+            reasonCodes: paceReasonCodes
           },
           monthContext: {
             hasProtect: !!mc.protect,
@@ -6964,37 +6818,16 @@ function geodeStage62BreathingRoomFloor(state, protectedSummary, postureObj) {
   return Math.max(0, Math.round(base));
 }
 
+// Pace softening from the user's own feeling and month notes. The Reality balance is evidence
+// only and must never reach this function: room comes from the monthly plan.
 function geodeStage62RealityAdjustment(state, suggestableBeforeReality, postureObj) {
   state = state || S;
   var out = {
     suggestableBeforeReality: Math.max(0, toNum(suggestableBeforeReality)),
     suggestableAfterReality: Math.max(0, toNum(suggestableBeforeReality)),
-    realityGapAdjustment: 0,
     postureMultiplier: 1,
     reasonCodes: []
   };
-  var rs = null;
-  try {
-    rs = geodeRealityStatus();
-  } catch (_eRaRs) {
-    rs = null;
-  }
-  if (rs && rs.hasData) {
-    var gap = typeof rs.gap === 'number' && isFinite(rs.gap) ? rs.gap : 0;
-    if (gap < -50) {
-      out.realityGapAdjustment = Math.min(out.suggestableAfterReality, Math.abs(gap));
-      out.suggestableAfterReality = Math.max(0, out.suggestableAfterReality - out.realityGapAdjustment);
-      out.reasonCodes.push('reality_balance_below_plan');
-    } else if (gap > 50) {
-      out.reasonCodes.push('reality_balance_above_plan');
-    } else {
-      out.reasonCodes.push('reality_aligned');
-    }
-    if (rs.activitySinceCheck) out.reasonCodes.push('activity_since_reality_check');
-    if (typeof rs.daysOld === 'number' && rs.daysOld > 7) out.reasonCodes.push('reality_check_older_than_week');
-  } else {
-    out.reasonCodes.push('no_reality_balance');
-  }
 
   var feeling = '';
   try {
@@ -7379,18 +7212,6 @@ function geodePlanReadinessMainActionFallbackTitle(state, opts) {
   if (readiness === 'baseline') return 'Review your setup';
   if (readiness === 'preview') return 'See suggested priorities';
   return 'Review your plan';
-}
-
-/** F.1 display-only: Reality compare intro note from readiness. */
-function geodePlanReadinessRealityCompareNote(state) {
-  var readiness = geodePlanReadinessState(state);
-  if (readiness === 'active' || readiness === 'preview') {
-    return 'Based on your plan for this month.';
-  }
-  if (readiness === 'baseline') {
-    return 'Based on what you entered for this month.';
-  }
-  return 'Based on what you entered so far.';
 }
 
 function goToSettings() {
@@ -11079,48 +10900,25 @@ function currentYM() {
   var m = d.getMonth() + 1;
   return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m;
 }
+// The balance the user typed in for this month: dated evidence only. It is never compared with
+// Monthly Left and carries no plan authority, so it has no gap, status or confidence.
 function geodeRealityStatus() {
   if (!S.realityCheck || S.realityCheck.ym !== currentYM()) {
-    return { hasData: false, confidence: 'estimated' };
+    return { hasData: false };
   }
-  var actual = Number(S.realityCheck.amount) || 0;
-  var leftover = calcMonthlyLeftover(S);
-  var gap = actual - leftover;
-  var gapAbs = Math.abs(gap);
-  var gapRatio = gapAbs / Math.max(actual, 1);
-  var status = 'aligned';
-  if (gapAbs > 50) {
-    status = gap < 0 ? 'overstated' : 'understated';
-  }
-  // Base confidence from gap size.
-  var confidence = 'high';
-  if (gapRatio >= 0.25) confidence = 'low';
-  else if (gapRatio >= 0.10) confidence = 'moderate';
-  // Freshness penalty: older saves erode confidence.
-  var daysOld = S.realityCheck.date
-    ? Math.floor((Date.now() - S.realityCheck.date) / 86400000)
-    : 0;
-  if (daysOld > 10) {
-    // Strong penalty: high → low, moderate → low, low stays low.
-    if (confidence === 'high') confidence = 'low';
-    else confidence = 'low';
-  } else if (daysOld > 3) {
-    // Mild penalty: high → moderate, moderate stays, low stays.
-    if (confidence === 'high') confidence = 'moderate';
-  }
-  // Activity-since-check: if the user made any financial action after saving the balance,
-  // degrade confidence by one level. Balance, gap, and status are not changed.
-  var activitySinceCheck = false;
-  try {
-    var latestForRc = geodeGetLatestActivity(S);
-    if (latestForRc && typeof latestForRc.ts === 'number' && latestForRc.ts > (S.realityCheck.date || 0)) {
-      activitySinceCheck = true;
-      if (confidence === 'high') confidence = 'moderate';
-      else if (confidence === 'moderate') confidence = 'low';
-      // low stays low
-    }
-  } catch (eRcAct) {}
-  return { hasData: true, gap: gap, status: status, confidence: confidence, daysOld: daysOld, activitySinceCheck: activitySinceCheck };
+  var date = typeof S.realityCheck.date === 'number' && isFinite(S.realityCheck.date) ? S.realityCheck.date : 0;
+  var daysOld = date ? Math.max(0, Math.floor((Date.now() - date) / 86400000)) : 0;
+  return {
+    hasData: true,
+    amount: Number(S.realityCheck.amount) || 0,
+    date: date,
+    daysOld: daysOld,
+    stale: daysOld > 7
+  };
+}
+/** "4 Oct" for the day the balance was recorded, or '' when no date was kept. */
+function geodeRealityRecordedDay(rs) {
+  return rs && rs.hasData && rs.date ? geodeMonthChangeDay(rs.date) : '';
 }
 
 /**
@@ -13333,77 +13131,6 @@ function geodeReplaceMoPanelHtml(html) {
   return true;
 }
 
-function geodeMoPanelPrefersReducedMotion() {
-  try {
-    return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  } catch (_prm) {
-    return false;
-  }
-}
-
-/** Afford gate → Reality Check only: same #modal shell; keep sheet height ≥ afford height so the top edge does not jump when RC is shorter (no closeModal, no delayed remove). */
-function geodeAffordGateMoToRealityCheckHandoff(html) {
-  var bg = document.getElementById('modal');
-  if (!bg || !bg.classList || !bg.classList.contains('mo-bg')) return false;
-  var mo = bg.firstElementChild;
-  if (!mo || !mo.classList || !mo.classList.contains('mo')) return false;
-  try {
-    mo.scrollTop = 0;
-  } catch (_st) {}
-  var H0 = Math.ceil(mo.getBoundingClientRect().height || mo.offsetHeight);
-  if (H0 < 48) H0 = Math.ceil(mo.offsetHeight) || 280;
-  var maxH = Math.max(120, Math.floor(window.innerHeight * 0.9));
-
-  mo.style.transition = 'none';
-  mo.style.minHeight = H0 + 'px';
-  mo.style.height = H0 + 'px';
-  mo.style.overflow = 'hidden';
-
-  try {
-    mo.innerHTML = html;
-  } catch (_ih) {
-    try {
-      mo.style.minHeight = '';
-      mo.style.height = '';
-      mo.style.overflow = '';
-      mo.style.transition = '';
-    } catch (_ih2) {}
-    return false;
-  }
-
-  var H1 = Math.ceil(mo.scrollHeight);
-  if (H1 > maxH) H1 = maxH;
-  var Hlock = H1 > H0 ? Math.min(H1, maxH) : H0;
-  mo.style.height = Hlock + 'px';
-  mo.style.minHeight = H0 + 'px';
-  mo.style.overflowY = 'auto';
-  mo.style.overflowX = 'hidden';
-
-  if (!geodeMoPanelPrefersReducedMotion()) {
-    mo.style.transition = 'opacity 170ms ease-out';
-    mo.style.opacity = '0.93';
-    void mo.offsetHeight;
-    requestAnimationFrame(function () {
-      try {
-        mo.style.opacity = '1';
-      } catch (_o) {}
-    });
-    window.setTimeout(function () {
-      try {
-        if (mo && mo.parentNode) {
-          mo.style.transition = '';
-          mo.style.opacity = '';
-        }
-      } catch (_t) {}
-    }, 240);
-  } else {
-    try {
-      mo.style.transition = '';
-    } catch (_tr) {}
-  }
-
-  return true;
-}
 function closeModal() {
   if (window._geodeQS) {
     geodeQuickSetupExit();
@@ -17256,12 +16983,6 @@ function geodeBehaviourContinuityCoachHint(state, postureObj) {
       'Favour stability and small steps over new commitments.'
     );
   }
-  if (p.oftenApprovesShift) {
-    return (
-      'They have applied this month\u2019s shift view more than once. ' +
-      'Keep any further shifts optional and easy to reverse.'
-    );
-  }
   if (p.oftenMovedFeeling && !cautious && sessionFeeling !== 'moved') {
     return (
       'They have often indicated that things moved this month. ' +
@@ -17269,15 +16990,6 @@ function geodeBehaviourContinuityCoachHint(state, postureObj) {
     );
   }
   return null;
-}
-
-/** Stage 66: optional Plan banner hint when repeated reverts show a preference for easy reversal. */
-function geodeBehaviourContinuityPlanBannerHint(state) {
-  var p = geodeBehaviourContinuityProfile(state || S);
-  if (!p.oftenRevertsShift) return null;
-  return (
-    'You have switched back more than once this month, so this shifted view stays optional and easy to reverse.'
-  );
 }
 
 function geodeFinancialMemoryProfile(state) {
@@ -17319,7 +17031,6 @@ function geodeFinancialMemoryProfile(state) {
     typeof state.snapshots === 'object' &&
     !Array.isArray(state.snapshots) &&
     Object.keys(state.snapshots).length > 0;
-  var hasRealityData = !!(state.realityCheck && state.realityCheck.amount != null);
   var hasActivityHistory = Array.isArray(state.activityLog) && state.activityLog.length > 0;
   var hasBehaviourHistory = Array.isArray(state.behaviourEvents) && state.behaviourEvents.length > 0;
   var hasFollowthroughHistory =
@@ -17335,7 +17046,6 @@ function geodeFinancialMemoryProfile(state) {
     hasDebtData ||
     hasInvestmentData ||
     hasSnapshotData ||
-    hasRealityData ||
     hasActivityHistory ||
     hasBehaviourHistory ||
     hasFollowthroughHistory ||
@@ -17432,7 +17142,6 @@ function geodeFinancialMemoryProfile(state) {
       (hasExpenseData && sumExpensesMonthly(state.expenses || []) > 0) ||
       hasPaymentData ||
       !!(protectedSummary && protectedSummary.rows > 0) ||
-      hasRealityData ||
       tightPeriods > 0;
     if (
       affordability &&
@@ -17445,7 +17154,6 @@ function geodeFinancialMemoryProfile(state) {
       mark();
       if (
         tightPeriods > 0 ||
-        affCodes.indexOf('reality_balance_below_plan') >= 0 ||
         toNum(affordability.suggestableRoom) <= Math.max(25, incomeForPressure * 0.03)
       ) {
         mark();
@@ -17627,7 +17335,6 @@ function geodeFinancialMemoryPlanModifiers(state, affordability, posture) {
   var postureTone = posture && posture.tone ? posture.tone : '';
   var incomeForCurrentPressure = state && state.income != null ? toNum(state.income) : 0;
   var hasCurrentPressure =
-    affCodes.indexOf('reality_balance_below_plan') >= 0 ||
     affCodes.indexOf('soft_recovery_pace') >= 0 ||
     (affordability && toNum(affordability.suggestableRoom) <= Math.max(25, incomeForCurrentPressure * 0.03)) ||
     postureName === 'review_first' ||
@@ -18874,15 +18581,6 @@ function geodeHumanMomentSuppressionContext(state) {
   } catch (_eHmSup2) {
     hasPostSetupRealityPrompt = false;
   }
-  var hasRealityData = false;
-  var rs = null;
-  try {
-    rs = geodeRealityStatus();
-    hasRealityData = !!(rs && rs.hasData);
-  } catch (_eHmSup3) {
-    hasRealityData = false;
-    rs = null;
-  }
   var hasDependants = false;
   try {
     hasDependants = !!state.hasDependants;
@@ -18948,11 +18646,9 @@ function geodeHumanMomentSuppressionContext(state) {
   return {
     hasOverdue: hasOverdue,
     hasPostSetupRealityPrompt: hasPostSetupRealityPrompt,
-    hasRealityData: hasRealityData,
     hasDependants: hasDependants,
     postureObj: postureObj,
     monthCtx: monthCtx,
-    rs: rs,
     feeling: feeling,
     subsDueVisible: subsDueVisible,
     needsAttentionVisible: needsAttentionVisible,
@@ -19092,41 +18788,18 @@ function geodeOrchestrationSnapshot(state) {
   } catch (_eGateSnap) {}
 
   if (snap.decisionMode === 'none') {
-    try {
-      if (geodePeekActiveRealityPlanAlignment(state)) {
-        snap.decisionMode = 'aligning';
-        pushReason('alignment_active');
-      }
-    } catch (_eAlignSnap) {}
-  }
-
-  if (snap.decisionMode === 'none') {
     var reviewFirst = false;
     try {
       var poRev = geodeGetContextPosture(state);
       reviewFirst = !!(poRev && poRev.posture === 'review_first');
     } catch (_ePoRev) {}
-    var gapReview = false;
-    try {
-      var rsRev = geodeRealityStatus();
-      if (
-        rsRev &&
-        rsRev.hasData &&
-        typeof rsRev.gap === 'number' &&
-        rsRev.gap < -50 &&
-        !geodePeekActiveRealityPlanAlignment(state)
-      ) {
-        gapReview = true;
-        pushReason('reality_gap');
-      }
-    } catch (_eRsRev) {}
     var feelReview = false;
     try {
       var feel = geodeGetRealityFeeling() || '';
       feelReview = feel === 'unsure' || feel === 'slow';
       if (feelReview) pushReason('human_feeling_cautious');
     } catch (_eFeelRev) {}
-    if (reviewFirst || gapReview || feelReview) {
+    if (reviewFirst || feelReview) {
       snap.decisionMode = 'review';
       if (reviewFirst) pushReason('posture_review_first');
     }
@@ -19144,8 +18817,7 @@ function geodeOrchestrationSnapshot(state) {
       left < 0 ||
       (pao && pao.band === 'pinched') ||
       (pao && pao.dimensions && pao.dimensions.humanLoad && pao.dimensions.humanLoad.level === 'high') ||
-      snap.decisionMode === 'scheduling' ||
-      snap.decisionMode === 'aligning'
+      snap.decisionMode === 'scheduling'
     ) {
       resolvedLoad = 'high';
     }
@@ -19328,25 +19000,6 @@ function geodeOrchestrationSnapshot(state) {
   if (snap.decisionMode === 'scheduling') {
     snap.askBeyndMode = 'pressure_test';
   } else {
-    var feelAsk = '';
-    try {
-      feelAsk = geodeGetRealityFeeling() || '';
-    } catch (_eFeelAsk) {}
-    var feelUnsureOrSlow = feelAsk === 'unsure' || feelAsk === 'slow';
-
-    var materialGap = snap.reasonCodes.indexOf('reality_gap') >= 0;
-    var staleReality = false;
-    try {
-      var rsAsk = geodeRealityStatus();
-      if (!rsAsk || !rsAsk.hasData) {
-        staleReality = true;
-      } else {
-        if (rsAsk.confidence === 'low') staleReality = true;
-        if (typeof rsAsk.daysOld === 'number' && rsAsk.daysOld > 3) staleReality = true;
-        if (rsAsk.activitySinceCheck) staleReality = true;
-      }
-    } catch (_eRsAsk) {}
-
     var afterActionSnap = false;
     try {
       afterActionSnap = !!window._geodeOverdueCleared;
@@ -19369,9 +19022,7 @@ function geodeOrchestrationSnapshot(state) {
     var primaryMode = 'neutral';
     if (afterActionSnap) {
       primaryMode = 'after_action';
-    } else if (snap.decisionMode === 'aligning' || materialGap) {
-      primaryMode = 'reality_mismatch';
-    } else if (snap.decisionMode === 'review' && (feelUnsureOrSlow || staleReality)) {
+    } else if (snap.decisionMode === 'review') {
       primaryMode = 'still_deciding';
     } else if (snap.primaryFocus.type === 'setup' || thinPlanSnap) {
       primaryMode = 'explain_plan';
@@ -19742,14 +19393,6 @@ function geodeOrchestrationSnapshotV2(state, opts) {
       return true;
     });
   }
-  function v2PeekAlignment(st0, monthKey) {
-    var a = st0.realityPlanAlignment;
-    if (!a || typeof a !== 'object') return null;
-    if (a.status !== 'approved' || a.version !== 1) return null;
-    if (String(a.ym || '') !== monthKey) return null;
-    if (!Array.isArray(a.stepAdjustments) || !a.stepAdjustments.length) return null;
-    return a;
-  }
   function v2MonthContext(st0, monthKey) {
     if (opts.monthContext && typeof opts.monthContext === 'object') {
       var omc = opts.monthContext;
@@ -19759,40 +19402,6 @@ function geodeOrchestrationSnapshotV2(state, opts) {
     if (!mc || typeof mc !== 'object') return null;
     if (mc.ym && String(mc.ym) !== monthKey) return null;
     return mc;
-  }
-  function v2RealityStatus(st0, monthKey) {
-    if (opts.realityStatus && typeof opts.realityStatus === 'object') return opts.realityStatus;
-    var rc = st0.realityCheck;
-    if (!rc || rc.ym !== monthKey) return { hasData: false, confidence: 'estimated' };
-    var actual = toNum(rc.amount);
-    var income = toNum(st0.income);
-    var expenses = arr(st0.expenses);
-    var payments = arr(st0.payments);
-    var monthlyExpenses = 0;
-    var monthlyPayments = 0;
-    var ei, payi, pay;
-    for (ei = 0; ei < expenses.length; ei++) {
-      monthlyExpenses += toNum(expenses[ei] && expenses[ei].amount);
-    }
-    for (payi = 0; payi < payments.length; payi++) {
-      pay = payments[payi];
-      if (!pay) continue;
-      if (String(pay.rec || '').toLowerCase() === 'yes') monthlyPayments += toNum(pay.amount);
-      else if (pay.date && String(pay.date).slice(0, 7) === monthKey) monthlyPayments += toNum(pay.amount);
-    }
-    var leftover = income - monthlyPayments - monthlyExpenses;
-    var gap = actual - leftover;
-    var gapAbs = Math.abs(gap);
-    var status = 'aligned';
-    if (gapAbs > 50) status = gap < 0 ? 'overstated' : 'understated';
-    var confidence = gapAbs / Math.max(actual, 1) >= 0.25 ? 'low' : gapAbs / Math.max(actual, 1) >= 0.1 ? 'moderate' : 'high';
-    var daysOld = 0;
-    if (rc.date && typeof opts.now === 'number' && isFinite(opts.now)) {
-      daysOld = Math.floor((opts.now - rc.date) / 86400000);
-    }
-    if (daysOld > 10) confidence = 'low';
-    else if (daysOld > 3 && confidence === 'high') confidence = 'moderate';
-    return { hasData: true, gap: gap, status: status, confidence: confidence, daysOld: daysOld, activitySinceCheck: false };
   }
   function v2CoachingPosture(fp, aff, feeling, mc) {
     var ep = aff && aff.emotionalPosture ? aff.emotionalPosture : 'unknown';
@@ -19835,10 +19444,6 @@ function geodeOrchestrationSnapshotV2(state, opts) {
     var postureObj = ctx.postureObj;
     var posture = postureObj && postureObj.posture;
     var tone = postureObj && postureObj.tone;
-    var feeling = ctx.feeling;
-    var rs = ctx.rs || {};
-    var gap = rs.hasData && typeof rs.gap === 'number' ? rs.gap : null;
-    var below = rs.hasData && ((gap != null && gap < -50) || rs.status === 'overstated');
     var mc = ctx.monthCtx || {};
     var worried = !!(mc.worried || mc.worry);
     var cautious = tone === 'cautious' || posture === 'protect_flexibility' || posture === 'review_first';
@@ -19888,10 +19493,6 @@ function geodeOrchestrationSnapshotV2(state, opts) {
       topic = posture === 'review_first' ? 'review_first' : 'protect_flexibility';
       bodyKey = 'month_context';
       source = 'month_context';
-    } else if (below && feeling === 'slow') {
-      topic = 'review_first';
-      bodyKey = 'reality_gap';
-      source = 'reality_gap';
     } else if (posture === 'review_first') {
       topic = 'review_first';
       bodyKey = 'default';
@@ -20078,10 +19679,8 @@ function geodeOrchestrationSnapshotV2(state, opts) {
       today: todayKey,
       monthContext: v2MonthContext(st, monthKey),
       realityFeeling: feeling,
-      realityStatus: opts.realityStatus,
       recoveryState: opts.recoveryState,
-      affordGatePending: affordGatePending,
-      activeAlignment: opts.activeAlignment
+      affordGatePending: affordGatePending
     };
     dashboard = geodeDashboardSnapshot(st, snapOpts);
     financialPosture = geodeFinancialPosture(st, snapOpts);
@@ -20095,8 +19694,6 @@ function geodeOrchestrationSnapshotV2(state, opts) {
   var income = toNum(st.income);
   var hasMeaningfulExpenses = toNum(dashboard.monthlySummary && dashboard.monthlySummary.monthlyExpenses) > 0;
   var mc = v2MonthContext(st, monthKey);
-  var rs = v2RealityStatus(st, monthKey);
-  var alignmentActive = !!v2PeekAlignment(st, monthKey);
   var subsDue = arr(opts.subsDueSoon);
   var subsDueVisible = subsDue.length > 0;
   var overdueItems = v2OverdueItems(st, todayKey);
@@ -20162,17 +19759,12 @@ function geodeOrchestrationSnapshotV2(state, opts) {
   if (affordGatePending) {
     decisionMode = 'scheduling';
     pushReason('afford_gate_pending');
-  } else if (alignmentActive) {
-    decisionMode = 'aligning';
-    pushReason('alignment_active');
   } else {
     var coachingPosture = v2CoachingPosture(financialPosture, affordability, feeling, mc);
     var reviewFirst = coachingPosture.posture === 'review_first';
-    var gapReview = rs.hasData && typeof rs.gap === 'number' && rs.gap < -50 && !alignmentActive;
     var feelReview = feeling === 'unsure' || feeling === 'slow';
-    if (gapReview) pushReason('reality_gap');
     if (feelReview) pushReason('human_feeling_cautious');
-    if (reviewFirst || gapReview || feelReview) {
+    if (reviewFirst || feelReview) {
       decisionMode = 'review';
       if (reviewFirst) pushReason('posture_review_first');
     }
@@ -20187,8 +19779,7 @@ function geodeOrchestrationSnapshotV2(state, opts) {
       left < 0 ||
       paoBand === 'pinched' ||
       humanLoadLevel === 'high' ||
-      decisionMode === 'scheduling' ||
-      decisionMode === 'aligning'
+      decisionMode === 'scheduling'
     ) {
       userLoad = 'high';
     }
@@ -20295,7 +19886,6 @@ function geodeOrchestrationSnapshotV2(state, opts) {
     postureObj: v2CoachingPosture(financialPosture, affordability, feeling, mc),
     monthCtx: mc,
     feeling: feeling,
-    rs: rs,
     mainActionTitle: mainActionTitle,
     mainActionSub: mainActionSub,
     todayKey: todayKey,
@@ -20308,7 +19898,6 @@ function geodeOrchestrationSnapshotV2(state, opts) {
   if (hmCtx.subsDueVisible) hmCtx.suppressed = true;
   if (hmCtx.hasOverdue) hmCtx.suppressed = true;
   if (hmCtx.needsAttentionVisible) hmCtx.suppressed = true;
-  if (alignmentActive && opts.observeAlignmentActive !== false) hmCtx.suppressed = true;
   if (mainActionOverdue) hmCtx.suppressed = true;
 
   var hmSnap = hmCtx.suppressed ? null : v2PickHumanMoment(st, hmCtx);
@@ -20335,23 +19924,13 @@ function geodeOrchestrationSnapshotV2(state, opts) {
   if (decisionMode === 'scheduling') {
     askBeyndMode = 'pressure_test';
   } else {
-    var feelUnsureOrSlow = feeling === 'unsure' || feeling === 'slow';
-    var materialGap = reasonCodes.indexOf('reality_gap') >= 0;
-    var staleReality = false;
-    if (!rs.hasData) staleReality = true;
-    else {
-      if (rs.confidence === 'low') staleReality = true;
-      if (typeof rs.daysOld === 'number' && rs.daysOld > 3) staleReality = true;
-      if (rs.activitySinceCheck) staleReality = true;
-    }
     var afterActionSnap = sf.overdueCleared === true;
     var thinPlanSnap = empty || incomeCtx === 'NONE';
     if (!thinPlanSnap) {
       thinPlanSnap = !planHasMeaningfulStep;
     }
     if (afterActionSnap) askBeyndMode = 'after_action';
-    else if (decisionMode === 'aligning' || materialGap) askBeyndMode = 'reality_mismatch';
-    else if (decisionMode === 'review' && (feelUnsureOrSlow || staleReality)) askBeyndMode = 'still_deciding';
+    else if (decisionMode === 'review') askBeyndMode = 'still_deciding';
     else if (primaryFocus.type === 'setup' || thinPlanSnap) askBeyndMode = 'explain_plan';
     else if (userLoad === 'critical' || userLoad === 'high') askBeyndMode = 'second_opinion';
   }
@@ -20624,7 +20203,6 @@ function geodeOrchestrationSnapshotV2(state, opts) {
       leftThisMonth: left,
       incomeContext: incomeCtx,
       hasOverdue: hasOverdue,
-      alignmentActive: alignmentActive,
       planInjected: !!plan
     },
     audit: opts.audit === true ? { monthKey: monthKey, todayKey: todayKey, empty: empty } : undefined
@@ -21834,13 +21412,6 @@ function geodeHumanMomentShouldSuppress(ctx, state, opts) {
   if (ctx.subsDueVisible) return true;
   if (ctx.hasOverdue) return true;
   if (ctx.needsAttentionVisible) return true;
-  try {
-    if (opts.observeOnly) {
-      if (geodePeekActiveRealityPlanAlignment(state)) return true;
-    } else if (geodePeekActiveRealityPlanAlignment(state)) {
-      return true;
-    }
-  } catch (_eHmRpaSup) {}
   var maNorm = geodeNormalizeHomeMainActionText(ctx.mainActionTitle + ' ' + ctx.mainActionSub);
   if (maNorm.indexOf('overdue') >= 0 || maNorm.indexOf('confirm due payments') >= 0) return true;
   return false;
@@ -21894,10 +21465,6 @@ function geodePickHumanMoment(state) {
   var postureObj = ctx.postureObj;
   var posture = postureObj && postureObj.posture;
   var tone = postureObj && postureObj.tone;
-  var feeling = ctx.feeling;
-  var rs = ctx.rs || {};
-  var gap = rs.hasData && typeof rs.gap === 'number' ? rs.gap : null;
-  var below = rs.hasData && ((gap != null && gap < -50) || rs.status === 'overstated');
   var mc = ctx.monthCtx || {};
   var worried = !!(mc.worried);
   var cautious = tone === 'cautious' || posture === 'protect_flexibility' || posture === 'review_first';
@@ -21918,10 +21485,6 @@ function geodePickHumanMoment(state) {
     topic = posture === 'review_first' ? 'review_first' : 'protect_flexibility';
     body = geodeCopy('humanMoment.home.protectFlexibility.monthContext', 'This month already has something on your mind. Keep flexibility before adding more.');
     source = 'month_context';
-  } else if (below && feeling === 'slow') {
-    topic = 'review_first';
-    body = geodeCopy('humanMoment.home.reviewFirst.realityGap', 'Today may need a slower pace. Review what has changed before adding anything new.');
-    source = 'reality_gap';
   } else if (posture === 'review_first') {
     topic = 'review_first';
     body = geodeCopy('humanMoment.home.reviewFirst.default', 'Today may need a slower pace. Review what has changed before adding anything new.');
@@ -22883,14 +22446,6 @@ function assessPressure(state, _options) {
     hasOverdue = geodeHasOverdue(state);
   } catch (_eOd) {}
 
-  var rs = null;
-  try {
-    rs = geodeRealityStatus();
-  } catch (_eRs) {
-    rs = { hasData: false };
-  }
-  if (!rs) rs = { hasData: false };
-
   var feeling = '';
   try {
     feeling = geodeGetRealityFeeling() || '';
@@ -22940,21 +22495,10 @@ function assessPressure(state, _options) {
   if (feeling === 'moved' || feeling === 'unsure' || monthWorry) humanLevel = 'high';
   else if (feeling === 'slow' || monthProtect || dependants) humanLevel = 'moderate';
 
-  var dataLevel = 'moderate';
-  var reasonCodes = [];
-  if (!rs.hasData) {
-    dataLevel = 'low';
-    reasonCodes.push('data_plan_estimate_only');
-  } else {
-    if (rs.confidence === 'low') {
-      dataLevel = 'low';
-      reasonCodes.push('data_reality_low_confidence');
-    }
-    if (typeof rs.daysOld === 'number' && rs.daysOld > 3) reasonCodes.push('data_reality_stale');
-    if (rs.activitySinceCheck) reasonCodes.push('data_reality_activity_since');
-    var gap = typeof rs.gap === 'number' ? rs.gap : null;
-    if (gap != null && gap < -50) reasonCodes.push('signals_conflict');
-  }
+  // Every figure here is a plan estimate from what the user entered. A Reality balance is
+  // user-entered evidence, not verification, so it never raises data trust.
+  var dataLevel = 'low';
+  var reasonCodes = ['data_plan_estimate_only'];
 
   if (cashCritical) reasonCodes.push('cash_leftover_nonpositive');
   else if (cashHigh) reasonCodes.push('cash_leftover_low_ratio');
@@ -23024,7 +22568,6 @@ function assessPressure(state, _options) {
       hasDependants: dependants,
       totalDebt: totalDebt,
       hasOverdue: hasOverdue,
-      reality: rs,
       feeling: feeling || null,
       monthContextPresent: !!(monthWorry || monthProtect),
       expenseCompleteness: expenseCompleteness
@@ -23034,7 +22577,6 @@ function assessPressure(state, _options) {
       suppressTopics: suppressTopics,
       elevateTopics: hasOverdue || cashCritical ? ['debt', 'tight_month'] : [],
       pacingMode: recoveryPhase === 'emerging' ? 'gentle' : 'full',
-      affordGateTone: !rs.hasData || dataLevel === 'low' ? 'reality_first' : 'neutral',
       askBeyndStabilityFirst: band === 'pinched' || band === 'critical' || humanLevel === 'high',
       humanMomentEligible: humanLevel === 'high' && band !== 'open'
     },
@@ -25067,48 +24609,18 @@ function geodePlanPageNonDebtExplainHtml(step, bufDisp, invDisp, prog) {
 /**
  * Plan tab only: one optional pacing sentence from PAO (read-only). No heading or PAO field names.
  */
-function geodeFormatPlanPagePacingNote(pao, rs, opts) {
+function geodeFormatPlanPagePacingNote(pao, opts) {
   if (!pao || !pao.signals) return '';
-  rs = rs || { hasData: false };
   opts = opts || {};
 
   var sig = pao.signals;
   var hasOverdue = !!sig.hasOverdue;
   var left = Number(sig.leftover) || 0;
   var band = pao.band;
-  var bandConf = pao.bandConfidence;
-  var expenseCompleteness = sig.expenseCompleteness;
   var recoveryPhase = pao.recovery && pao.recovery.phase;
   var pacingMode = pao.outputs && pao.outputs.pacingMode;
 
-  if (
-    band === 'open' &&
-    bandConf === 'high' &&
-    !hasOverdue &&
-    rs.hasData &&
-    expenseCompleteness !== 'minimal' &&
-    recoveryPhase !== 'emerging'
-  ) {
-    return '';
-  }
-
   if (opts.skipStrongAlignment) return '';
-
-  var balanceSaysTighter = false;
-  var balanceCaution = false;
-  if (!rs.hasData) {
-    balanceCaution = true;
-  } else {
-    var gap = typeof rs.gap === 'number' ? rs.gap : null;
-    if (gap != null && gap < -50) balanceSaysTighter = true;
-    if (
-      rs.confidence === 'low' ||
-      rs.activitySinceCheck ||
-      (typeof rs.daysOld === 'number' && rs.daysOld > 3)
-    ) {
-      balanceCaution = true;
-    }
-  }
 
   if (hasOverdue) {
     return 'If a payment is due with no outcome recorded, confirm it before adding new commitments this month.';
@@ -25120,7 +24632,6 @@ function geodeFormatPlanPagePacingNote(pao, rs, opts) {
 
   if (
     (band === 'narrow' || pacingMode === 'gentle') &&
-    !balanceSaysTighter &&
     !hasOverdue &&
     !opts.hasIrregularHint &&
     !opts.hasMildAlignment
@@ -25128,28 +24639,8 @@ function geodeFormatPlanPagePacingNote(pao, rs, opts) {
     return 'This month may suit smaller steps; the sequence stays the same.';
   }
 
-  if (bandConf === 'low' && !balanceCaution && rs.hasData) {
-    return 'Treat amounts as a guide until you\u2019ve sense-checked with Reality.';
-  }
-
-  if ((!rs.hasData || expenseCompleteness === 'minimal') && !balanceCaution) {
-    return 'Amounts follow what you\u2019ve entered until you add a balance check.';
-  }
-
-  if (left < 0 && !balanceSaysTighter && !opts.hasMildAlignment) {
+  if (left < 0 && !opts.hasMildAlignment) {
     return 'Smaller steps may fit better this month.';
-  }
-
-  if (
-    band !== 'open' &&
-    band !== 'narrow' &&
-    band !== 'unknown' &&
-    left >= 0 &&
-    !balanceSaysTighter &&
-    !balanceCaution &&
-    !opts.hasMildAlignment
-  ) {
-    return 'This month may suit smaller steps; the sequence stays the same.';
   }
 
   if (band === 'unknown' && !opts.hasIrregularHint) {
@@ -25707,11 +25198,6 @@ function geodePlanStepDetailPageHtml(plan, ix) {
       amtShown = fm(step.amount);
     }
   }
-  var _rpaDetDisp = geodePlanStepRealityDisplay(S, step, prog, ix, amtShown, _rpaDetCap);
-  if (_rpaDetDisp) {
-    amtShown = _rpaDetDisp.amtShown;
-    _rpaDetCap = _rpaDetDisp.capShown || '';
-  }
   var statusLb = geodePlanStepStatusDisplayLabel(prog);
   var statusCls = prog.phase === 'done' ? 'pl-status done' : prog.phase === 'partial' ? 'pl-status inp' : 'pl-status';
   var stepY = steps.length;
@@ -25852,7 +25338,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
       '</div>';
   }
   h += '<div class="geode-plan-detail-status"><span class="' + statusCls + '">' + escHtmlLite(statusLb) + '</span></div>';
-  var trustLine = geodePlanDetailSummaryContinuityLine(step, prog, { realityCap: _rpaDetCap });
+  var trustLine = geodePlanDetailSummaryContinuityLine(step, prog);
   if (trustLine) {
     h += '<div class="geode-plan-detail-trust">' + escHtmlLite(trustLine) + '</div>';
   }
@@ -26478,11 +25964,6 @@ function geodePlanPagePrioritiesStackHtml(plan) {
     var rowAmt = geodePlanPageStepRowAmountDisplay(s, prog, bufDisp, invDisp);
     var amtShown = rowAmt.amtShown;
     var capShown = rowAmt.capShown;
-    var _rpaDisp = geodePlanStepRealityDisplay(S, s, prog, i, amtShown, capShown);
-    if (_rpaDisp) {
-      amtShown = _rpaDisp.amtShown;
-      capShown = _rpaDisp.capShown;
-    }
     var statusLb = geodePlanStepStatusDisplayLabel(prog);
     var statusCls = prog.phase === 'done' ? 'pl-status done' : prog.phase === 'partial' ? 'pl-status inp' : 'pl-status';
     var isLast = i === steps.length - 1;
@@ -27633,10 +27114,6 @@ function geodePlanDetailSummaryContinuityLine(step, prog, opts) {
   var isBuffer = lb === 'Build your emergency fund';
   var isDebt = lb.indexOf('Reduce high') === 0 || lb.indexOf('Pay down ') === 0;
   var isGoal = lb.indexOf('Restart progress on ') === 0 || lb.indexOf('Catch up on ') === 0;
-  var realityCap = String(opts.realityCap || '');
-  if (realityCap && /\b(paus|soften|reduc)/i.test(realityCap)) {
-    return 'This step softened after your Reality check.';
-  }
   if (prog.phase === 'done') {
     if (isInvest) {
       if (scheduled > 0) return 'Optional this month, with a scheduled payment still waiting.';
@@ -27705,19 +27182,6 @@ function geodePlanStepStatusDisplayLabel(prog) {
     return 'In progress';
   }
   return 'Not started';
-}
-
-/** Display-only Home context line from Reality Check (no internal confidence words). */
-function geodeHomeRealityConfDisplayLabel(rs) {
-  if (!rs || !rs.hasData) return 'No balance check on file';
-  if (rs.activitySinceCheck) return 'Your month may have shifted a little since this check';
-  if (typeof rs.daysOld === 'number' && rs.daysOld > 3) {
-    if (rs.daysOld > 7) return 'This check is from earlier in the month';
-    return 'A quick refresh may help';
-  }
-  if (rs.confidence === 'high') return 'Balance check on file';
-  if (rs.confidence === 'moderate') return 'Recent check on file';
-  return 'Balance check may be partial';
 }
 
 /** First plan row with amount > 0 that is not done this month (full sequence; Plan + Home). */
@@ -29214,21 +28678,6 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
     }
   } catch (eBhv) {}
 
-  // Confidence / plan-status context (rendered only when decision-relevant).
-  var _rs = null;
-  try { _rs = geodeRealityStatus(); } catch (_eRs) { _rs = { hasData: false, confidence: 'estimated', daysOld: 0, activitySinceCheck: false }; }
-  var _showConfLine =
-    !_rs || !_rs.hasData ||
-    _rs.confidence !== 'high' ||
-    (typeof _rs.daysOld === 'number' && _rs.daysOld > 3) ||
-    !!_rs.activitySinceCheck;
-  var _confLabel = '';
-  try {
-    _confLabel = geodeHomeRealityConfDisplayLabel(_rs);
-  } catch (_eConfLbl) {
-    _confLabel = 'No balance check on file';
-  }
-
   // Plan source line: only for plan-navigation CTAs (avoid clutter on execution cards).
   var _ctaLc = String(cta || '').toLowerCase();
   var _showPlanSource =
@@ -29273,22 +28722,6 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
   } else if (_bhvIsConflict && _bhvLine) {
     _contextLine = _bhvLine;
     _contextIsConflict = true;
-  } else if (_showConfLine && !_showPlanSource) {
-    var _skipRcForMoneyPosture = false;
-    try {
-      _skipRcForMoneyPosture = !!(showAmt && window._geodeMainActionGate && window._geodeMainActionGate.needsAffordGate);
-    } catch (_eSkp) {}
-    var _skipRcContextDup = false;
-    try {
-      if (geodePickHumanMoment(S)) _skipRcContextDup = true;
-      else {
-        var _poRc = geodeGetContextPosture(S);
-        if (_poRc && _poRc.posture === 'review_first') _skipRcContextDup = true;
-      }
-    } catch (_eRcDup) {}
-    if (!_skipRcForMoneyPosture && !_skipRcContextDup) {
-      _contextLine = _confLabel;
-    }
   }
 
   var _maVisualReg = geodeMainActionVisualRegister(a);
@@ -29768,20 +29201,6 @@ function geodeRunAffordGatedAction(fn, gate) {
       okOn = sessionStorage.getItem(skOk) === '1';
     } catch (_eOk) {}
     if (okOn) {
-      var rsOk = null;
-      try {
-        rsOk = geodeRealityStatus();
-      } catch (_eRsOk) {
-        rsOk = null;
-      }
-      if (!geodeAffordGateRealityFirmEnough(rsOk)) {
-        okOn = false;
-        try {
-          sessionStorage.removeItem(skOk);
-        } catch (_eClr) {}
-      }
-    }
-    if (okOn) {
       fn();
       return;
     }
@@ -29795,37 +29214,9 @@ function geodeAffordGateStoragePrefix(kind, sigKey) {
   return 'geode_aff_' + String(kind || '') + '_' + String(sigKey || '');
 }
 
-/** Read-only: true when current-month balance check is firm enough to remember confirmation. */
-function geodeAffordGateRealityFirmEnough(rs) {
-  if (!rs || !rs.hasData) return false;
-  if (rs.activitySinceCheck) return false;
-  return rs.confidence === 'high';
-}
-
-/** Display-only: one afford-modal line from Reality Check state (no plan or gate changes). */
+/** The gate works from the monthly plan alone; a Reality balance neither unlocks nor blocks it. */
 function geodeAffordabilityRealityLine() {
-  try {
-    var rs = geodeRealityStatus();
-    if (!rs || !rs.hasData) {
-      return 'No balance added this month yet. This step comes from your monthly plan, not your bank.';
-    }
-    if (rs.confidence === 'low') {
-      return 'Your balance and plan look quite far apart. Worth a fresh look before you continue.';
-    }
-    if (rs.activitySinceCheck) {
-      return 'Your month may have shifted a little since this check.';
-    }
-    var daysOld = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
-    if (daysOld > 7) {
-      return 'This check is from earlier in the month.';
-    }
-    if (daysOld > 3) {
-      return 'A quick refresh may help.';
-    }
-    return 'Your latest balance check helps Beynd sense-check this step.';
-  } catch (_eAr) {
-    return 'No balance added this month yet. This step comes from your monthly plan, not your bank.';
-  }
+  return 'This step comes from your monthly plan, not your bank.';
 }
 
 function geodeOpenAffordabilityGateModal() {
@@ -29838,19 +29229,7 @@ function geodeOpenAffordabilityGateModal() {
   } catch (_eAm) {
     amtStr = String(g.amount);
   }
-  var rs = null;
-  try {
-    rs = geodeRealityStatus();
-  } catch (_eRsMo) {
-    rs = { hasData: false };
-  }
-  if (!rs) rs = { hasData: false };
   var primaryLabel = 'Continue with this amount';
-  if (!rs.hasData) {
-    primaryLabel = 'Add my balance first';
-  } else if (geodeAffordGateRealityFirmEnough(rs)) {
-    primaryLabel = 'Still feels right';
-  }
   var paused = false;
   try {
     paused = sessionStorage.getItem(geodeAffordGateStoragePrefix('pause', g.sig)) === '1';
@@ -29885,7 +29264,7 @@ function geodeOpenAffordabilityGateModal() {
     '</button>';
   h +=
     '<button type="button" class="btn btn-s" onclick="geodeAffordGateNotSure()">' +
-    escHtmlLite('Not sure, I\u2019ll check first') +
+    escHtmlLite('Not sure yet') +
     '</button>';
   h +=
     '<button type="button" class="btn btn-s" data-geode-css="opacity:0.95" onclick="geodeAffordGatePause()">' +
@@ -29899,27 +29278,14 @@ function geodeAffordGateYes() {
   try {
     var p = window._geodeAffordGatePending;
     if (!p || typeof p.fn !== 'function' || !p.skOk || !p.skPause) return;
-    var rs = null;
-    try {
-      rs = geodeRealityStatus();
-    } catch (_eRsY) {
-      rs = { hasData: false };
-    }
-    if (!rs) rs = { hasData: false };
-    if (!rs.hasData) {
-      geodeAffordGateNotSure();
-      return;
-    }
     window._geodeAffordGatePending = null;
     // Immediate teardown: closeModal() schedules removeModalDom(165ms) and would
     // delete the next modal openPayModal/openModal creates on the same #modal id.
     removeModalDom();
-    if (geodeAffordGateRealityFirmEnough(rs)) {
-      try {
-        sessionStorage.setItem(p.skOk, '1');
-        sessionStorage.removeItem(p.skPause);
-      } catch (_eS) {}
-    }
+    try {
+      sessionStorage.setItem(p.skOk, '1');
+      sessionStorage.removeItem(p.skPause);
+    } catch (_eS) {}
     p.fn();
   } catch (_eY) {}
 }
@@ -29927,17 +29293,8 @@ function geodeAffordGateYes() {
 function geodeAffordGateNotSure() {
   try {
     window._geodeAffordGatePending = null;
-    // Same #modal shell: lock height → swap → animate height to new content (bottom sheet, no snap).
-    if (geodeAffordGateMoToRealityCheckHandoff(geodeRealityCheckModalInnerHtml())) {
-      return;
-    }
-  } catch (_eN) {}
-  try {
     removeModalDom();
-  } catch (_eN0) {}
-  try {
-    geodeOpenRealityCheckModal();
-  } catch (_eN2) {}
+  } catch (_eN) {}
 }
 
 function geodeAffordGatePause() {
@@ -30144,10 +29501,8 @@ function geodeRealityMoneyTileStatusLine(state) {
   try {
     var rs = geodeRealityStatus();
     if (!rs || !rs.hasData) return 'Not added this month';
-    if (rs.activitySinceCheck) return 'Activity since last save';
-    if (typeof rs.daysOld === 'number' && rs.daysOld > 7) return 'Saved earlier this month';
-    if (typeof rs.daysOld === 'number' && rs.daysOld > 3) return 'Saved a few days ago';
-    return 'On file this month';
+    var day = geodeRealityRecordedDay(rs);
+    return day ? 'Balance recorded ' + day : 'Balance recorded this month';
   } catch (_eRcMt) {
     return '';
   }
@@ -30170,12 +29525,7 @@ function geodeHomeRealityEntryHtml(state) {
       }
     } catch (_eRcHomeQs) {}
     var rs = geodeRealityStatus();
-    var line = 'Compare balance with this month';
-    if (!rs || !rs.hasData) {
-      line = 'Add a balance check for this month';
-    } else if (rs.activitySinceCheck || (typeof rs.daysOld === 'number' && rs.daysOld > 7)) {
-      line = 'Refresh your balance check';
-    }
+    var line = rs && rs.hasData ? 'Update the balance you noted' : 'Note today\u2019s balance';
     return (
       '<button type="button" onclick="geodeNavigateToReality(\'home\')" ' +
       'data-geode-css="display:block;width:100%;margin:10px 0 2px;padding:0;border:none;background:transparent;' +
@@ -30325,91 +29675,21 @@ function geodeGetContextPosture(state) {
     strategy = 'balanced';
   }
   var incomeType = state.incomeType || 'stable';
-  var irregular = incomeType === 'irregular';
   var dependants = !!state.hasDependants;
   var feeling = geodeGetRealityFeeling();
 
-  var rs = null;
-  try {
-    rs = geodeRealityStatus();
-  } catch (_eCpRs) {
-    rs = { hasData: false };
-  }
-  if (!rs) rs = { hasData: false };
-
-  var hasData = !!rs.hasData;
-  var gap = hasData && typeof rs.gap === 'number' ? rs.gap : null;
-  var below = hasData && ((gap != null && gap < -50) || rs.status === 'overstated');
-  var above = hasData && ((gap != null && gap > 50) || rs.status === 'understated');
-  var aligned =
-    hasData &&
-    !below &&
-    !above &&
-    rs.confidence !== 'low' &&
-    rs.status === 'aligned' &&
-    !rs.activitySinceCheck &&
-    !(typeof rs.daysOld === 'number' && rs.daysOld > 3) &&
-    rs.confidence !== 'moderate';
-
+  // Posture comes from how the user says the month feels. The Reality balance is evidence only
+  // and must not set posture, because posture feeds the breathing-room floor and step pace.
   var posture = 'unknown';
   var tone = 'calm';
-
-  if (!hasData) {
-    reasonCodes.push('no_reality_check');
-    if (feeling === 'moved') {
-      posture = 'protect_flexibility';
-      tone = 'cautious';
-      reasonCodes.push('feeling_moved');
-    } else if (feeling === 'slow' || feeling === 'unsure') {
-      posture = 'review_first';
-      tone = 'cautious';
-      reasonCodes.push('feeling_' + feeling);
-    }
-  } else if (feeling === 'slow' && below) {
-    posture = 'review_first';
-    tone = 'cautious';
-    reasonCodes.push('feeling_slow', 'reality_below');
-  } else if (irregular && dependants) {
-    posture = 'protect_flexibility';
-    tone = 'cautious';
-    reasonCodes.push('irregular_income', 'dependants');
-    if (below) reasonCodes.push('reality_below');
-  } else if (dependants && below) {
-    posture = 'protect_flexibility';
-    tone = 'cautious';
-    reasonCodes.push('dependants', 'reality_below');
-  } else if (feeling === 'moved') {
+  if (feeling === 'moved') {
     posture = 'protect_flexibility';
     tone = 'cautious';
     reasonCodes.push('feeling_moved');
-    if (below) reasonCodes.push('reality_below');
-  } else if (below) {
-    posture = 'protect_flexibility';
-    tone = 'cautious';
-    reasonCodes.push('reality_below');
-    if (irregular) reasonCodes.push('irregular_income');
-  } else if (strategy === 'growth' && above && (feeling === 'still' || !feeling)) {
-    posture = 'growth_room';
-    tone = 'encouraging';
-    reasonCodes.push('growth_strategy', 'reality_above');
-    if (feeling === 'still') reasonCodes.push('feeling_still');
-  } else if (!irregular && !dependants && aligned && (feeling === 'still' || !feeling)) {
-    posture = 'steady_progress';
-    tone = 'calm';
-    reasonCodes.push('stable_income', 'reality_aligned');
-    if (feeling === 'still') reasonCodes.push('feeling_still');
   } else if (feeling === 'slow' || feeling === 'unsure') {
     posture = 'review_first';
     tone = 'cautious';
     reasonCodes.push('feeling_' + feeling);
-  } else if (above) {
-    posture = 'growth_room';
-    tone = 'encouraging';
-    reasonCodes.push('reality_above');
-  } else if (hasData) {
-    posture = 'steady_progress';
-    tone = 'calm';
-    reasonCodes.push('reality_check_present');
   }
 
   return {
@@ -30423,8 +29703,7 @@ function geodeGetContextPosture(state) {
       planStrategy: strategy,
       incomeType: incomeType,
       hasDependants: dependants,
-      realityFeeling: feeling || null,
-      realityHasData: hasData
+      realityFeeling: feeling || null
     }
   };
 }
@@ -31039,48 +30318,32 @@ function geodeDismissMonthContextForNow() {
   }
 }
 
-function geodeRealityHumanMomentMonthContextOverlay(body, postureObj, state, rs, difference) {
+function geodeRealityHumanMomentMonthContextOverlay(body, postureObj, state) {
   var mc = geodeGetMonthContext(state);
   if (!mc.hasAny) return body;
   var p = postureObj && postureObj.posture;
   var tone = postureObj && postureObj.tone;
-  var diff = difference;
-  var hasDiff = diff != null && isFinite(diff);
-  var tighter = (hasDiff && diff < -50) || (rs && rs.status === 'overstated');
   if (mc.protect && (p === 'protect_flexibility' || p === 'review_first' || tone === 'cautious')) {
     return 'You shared what matters this month — keep flexibility before adding more.';
-  }
-  if (mc.worried && tighter) {
-    return 'Since this month already has a concern, keeping flexibility may help.';
-  }
-  if (mc.success && p === 'steady_progress') {
-    return 'Keep the next move aligned with what would make this month feel successful.';
   }
   return body;
 }
 
-/** Reality Human Moment copy from Context Posture (display-only). */
-function geodeRealityHumanMomentBodyFromPosture(postureObj, state, rs, difference) {
-  if (!postureObj) {
-    return 'Add the balance you want Beynd to use when you want a clearer check against your monthly estimate.';
-  }
+/** Reality Human Moment copy from how the user says today feels; '' when there is nothing to say. */
+function geodeRealityHumanMomentBodyFromPosture(postureObj, state) {
+  if (!postureObj) return '';
   var p = postureObj.posture;
   var dependants = postureObj.inputs && postureObj.inputs.hasDependants;
-  var body;
+  var body = '';
   if (dependants && (p === 'protect_flexibility' || p === 'review_first')) {
     body = 'Since this income supports others too, keeping flexibility may be the safer move.';
   } else if (p === 'protect_flexibility') {
     body = 'Today may need a little more room. Keep flexibility before adding new commitments.';
   } else if (p === 'review_first') {
     body = 'Today may be a moment to pause and review before adding anything new.';
-  } else if (p === 'steady_progress') {
-    body = 'Today looks steady enough to keep the next move small and intentional.';
-  } else if (p === 'growth_room') {
-    body = 'Today looks a little stronger than your monthly estimate. Choose the next move carefully.';
-  } else {
-    body = 'Add the balance you want Beynd to use when you want a clearer check against your monthly estimate.';
   }
-  return geodeRealityHumanMomentMonthContextOverlay(body, postureObj, state, rs, difference);
+  if (!body) return '';
+  return geodeRealityHumanMomentMonthContextOverlay(body, postureObj, state);
 }
 
 function geodeRealityHumanMomentToneFromPosture(postureObj) {
@@ -31122,34 +30385,19 @@ function geodeSaveRealityCheckFromPage() {
 }
 
 /**
- * Reality page only: one human read of estimate vs balance. Read-only for S; session feeling via sessionStorage.
- * Status above says what changed; this line says what it may mean in practice (guided by geodeGetContextPosture).
+ * Reality page only: one human line from how the user says today feels, or null. The balance is never read here:
+ * it is evidence the user entered, not a verdict on the plan.
  */
-function geodeRealityHumanMoment(state, rs, monthlyEstimate, availableToday, difference) {
+function geodeRealityHumanMoment(state) {
   state = state || S;
-  var title = 'What this means today';
   var postureObj = geodeGetContextPosture(state);
+  var body = geodeRealityHumanMomentBodyFromPosture(postureObj, state);
+  if (!body) return null;
   return {
-    title: title,
-    body: geodeRealityHumanMomentBodyFromPosture(postureObj, state, rs, difference),
+    title: 'What this means today',
+    body: body,
     tone: geodeRealityHumanMomentToneFromPosture(postureObj)
   };
-}
-
-/** Display-only: last-checked line for Reality page (daysOld from geodeRealityStatus). */
-function geodeRealityLastCheckedLabel(daysOld) {
-  var d = typeof daysOld === 'number' && daysOld >= 0 ? daysOld : 0;
-  if (d === 0) return 'Last checked today';
-  if (d === 1) return 'Last checked yesterday';
-  return 'Last checked ' + d + ' days ago';
-}
-
-/** Display-only: plain-language Difference helper (same sign as avail − estimate). */
-function geodeRealityDifferenceExplain(diffNum) {
-  if (diffNum == null || !isFinite(diffNum)) return '';
-  if (Math.abs(diffNum) <= 50) return 'Your balance today is close to your monthly estimate.';
-  if (diffNum < 0) return 'Your balance today reads tighter than your monthly estimate.';
-  return 'Your balance today looks higher than your monthly estimate.';
 }
 
 /** Stage 91E-B: one quiet orientation line for Reality (read-only; existing signals only). */
@@ -31161,7 +30409,7 @@ function geodeRealityContinuityOrientationLine(state) {
     if (!geodeHasMeaningfulMonthlyExpenses(state)) return '';
     var mc = geodeGetMonthContext(state);
     if (mc.hasAny && String(mc.protect || '').trim()) {
-      return 'You named what matters this month. The balance picture below is only one view of how things are sitting.';
+      return 'You named what matters this month. The balance below is only a note of what you saw.';
     }
     if (mc.hasAny && String(mc.worried || '').trim()) {
       return 'Something is on your mind this month. The numbers below stay factual, not a verdict.';
@@ -31210,109 +30458,66 @@ function geodeRealityContinuityOrientationLine(state) {
 
 /** Lightweight Reality tap-through page (Money · msub reality). */
 function geodeRealityPageHtml() {
-  var left = calcMonthlyLeftover(S);
   var rs = null;
   try {
     rs = geodeRealityStatus();
   } catch (_eRsPg) {
-    rs = { hasData: false, confidence: 'estimated', daysOld: 0, activitySinceCheck: false, status: 'aligned' };
+    rs = { hasData: false };
   }
-  var statusLabel = '';
-  var statusDetail = '';
-  if (!rs.hasData) {
-    statusLabel = 'Unknown';
-    statusDetail = 'Add the balance you want Beynd to use to compare it with your monthly estimate.';
-  } else if (rs.confidence === 'low' || rs.status !== 'aligned') {
-    statusLabel = 'Worth reviewing';
-    statusDetail =
-      'Your balance today and monthly estimate look meaningfully different. Beynd won\u2019t change anything unless you choose to.';
-  } else if (rs.activitySinceCheck || (typeof rs.daysOld === 'number' && rs.daysOld > 3) || rs.confidence === 'moderate') {
-    statusLabel = 'A quick refresh may help';
-    if (rs.activitySinceCheck) {
-      statusDetail = 'Your month may have shifted a little since this check.';
-    } else if (typeof rs.daysOld === 'number' && rs.daysOld > 7) {
-      statusDetail = 'This check is from earlier in the month.';
-    } else {
-      statusDetail = 'Your month may have shifted a little since you saved this check.';
-    }
-  } else {
-    statusLabel = 'Broadly aligned';
-    statusDetail = 'Your balance today is close to your monthly estimate.';
-  }
+  if (!rs) rs = { hasData: false };
 
   var curAmt = '';
   if (S.realityCheck && S.realityCheck.ym === currentYM() && S.realityCheck.amount != null && !isNaN(Number(S.realityCheck.amount))) {
     curAmt = String(S.realityCheck.amount);
   }
 
-  var availNum = null;
-  if (rs.hasData && S.realityCheck && S.realityCheck.amount != null && !isNaN(Number(S.realityCheck.amount))) {
-    availNum = Number(S.realityCheck.amount);
-  }
-  var diffNum = availNum != null && isFinite(availNum) && isFinite(left) ? availNum - left : null;
-
-  var cmp = '';
-  cmp += '<div class="reality-compare-card">';
-  cmp +=
+  // Evidence only: the balance the user entered and when. It is never compared with Monthly Left.
+  var ev = '';
+  ev += '<div class="reality-compare-card">';
+  ev +=
     '<div class="reality-row">' +
     '<span class="reality-key">' +
-    escHtmlLite('Monthly estimate') +
-    '</span>' +
-    '<span class="reality-value" data-geode-css="color:' +
-    (left >= 0 ? '#f5c234' : '#f07070') +
-    '">' +
-    escHtmlLite(fm(left)) +
-    '</span></div>';
-  cmp +=
-    '<div class="reality-note reality-note--intro">' +
-    escHtmlLite(geodePlanReadinessRealityCompareNote(S)) +
-    '</div>';
-  cmp +=
-    '<div class="reality-divider"></div>';
-  cmp +=
-    '<div class="reality-row">' +
-    '<span class="reality-key">' +
-    escHtmlLite('Balance today') +
+    escHtmlLite('Balance you entered') +
     '</span>';
-  if (rs.hasData && availNum != null && isFinite(availNum)) {
-    cmp +=
+  if (rs.hasData) {
+    ev +=
       '<span class="reality-value" data-geode-css="color:var(--gem)">' +
-      escHtmlLite(fm(availNum)) +
+      escHtmlLite(fm(toNum(rs.amount))) +
       '</span>';
   } else {
-    cmp +=
+    ev +=
       '<span class="reality-value reality-value--muted">' +
-      escHtmlLite('Not added yet') +
+      escHtmlLite('Not added this month') +
       '</span>';
   }
-  cmp += '</div>';
-  if (rs.hasData && diffNum != null && isFinite(diffNum)) {
-    cmp += '<div class="reality-divider"></div>';
-    var diffAbs = Math.abs(diffNum);
-    var diffCol =
-      diffNum === 0 ? 'rgba(237,234,255,0.88)' : diffNum > 0 ? '#34d5a0' : 'var(--guide)';
-    var diffPrefix = diffNum > 0 ? '+' : diffNum < 0 ? '\u2212' : '';
-    var diffMag = diffNum === 0 ? fm(0) : fm(diffAbs);
-    cmp +=
+  ev += '</div>';
+  if (rs.hasData) {
+    var _rcDay = geodeRealityRecordedDay(rs);
+    ev += '<div class="reality-divider"></div>';
+    ev +=
       '<div class="reality-row">' +
       '<span class="reality-key">' +
-      escHtmlLite('Difference') +
+      escHtmlLite('Recorded') +
       '</span>' +
-      '<span class="reality-value" data-geode-css="font-size:15px;color:' +
-      diffCol +
-      '">' +
-      diffPrefix +
-      escHtmlLite(diffMag) +
+      '<span class="reality-value">' +
+      escHtmlLite(_rcDay || 'Earlier this month') +
       '</span></div>';
-    var _diffExplain = geodeRealityDifferenceExplain(diffNum);
-    if (_diffExplain) {
-      cmp +=
-        '<div class="reality-note">' +
-        escHtmlLite(_diffExplain) +
-        '</div>';
-    }
   }
-  cmp += '</div>';
+  ev +=
+    '<div class="reality-note">' +
+    escHtmlLite(
+      rs.hasData
+        ? 'This is a snapshot you entered. Your monthly plan is tracked separately.'
+        : 'Add a balance if you want a dated note of what you saw. Your monthly plan is tracked separately.'
+    ) +
+    '</div>';
+  if (rs.hasData && rs.stale) {
+    ev +=
+      '<div class="reality-muted-line">' +
+      escHtmlLite('Recorded more than a week ago.') +
+      '</div>';
+  }
+  ev += '</div>';
 
   var h = '';
   h += '<div class="reality-page">';
@@ -31328,10 +30533,10 @@ function geodeRealityPageHtml() {
   h +=
     '<div class="reality-head">' +
     '<div class="reality-title">' +
-    escHtmlLite('This month') +
+    escHtmlLite('Reality Check') +
     '</div>' +
     '<div class="reality-subtitle">' +
-    escHtmlLite('How things are sitting this month.') +
+    escHtmlLite('A balance you note yourself. Nothing is pulled from your bank.') +
     '</div>' +
     '</div>';
 
@@ -31348,92 +30553,40 @@ function geodeRealityPageHtml() {
       '</div>';
   }
 
-  h +=
-    '<div class="reality-status-card">';
-  h +=
-    '<div class="reality-status-title">' +
-    escHtmlLite(statusLabel) +
-    '</div>';
-  h +=
-    '<div class="reality-status-body">' +
-    escHtmlLite(statusDetail) +
-    '</div>';
-  h += '</div>';
-
-  h +=
-    '<div class="reality-section-title" data-geode-css="margin-top:4px">' +
-    escHtmlLite('Balance picture') +
-    '</div>';
-  h +=
-    '<div class="reality-section-copy" data-geode-css="margin-bottom:10px">' +
-    escHtmlLite('Your monthly estimate beside the balance you entered. Nothing is pulled from your bank.') +
-    '</div>';
-
-  h += cmp;
-
-  var _shiftOfferHtml = '';
-  try {
-    _shiftOfferHtml = geodeRealityPlanAlignmentOfferHtml() || '';
-  } catch (_eRpaOffPg) {
-    _shiftOfferHtml = '';
-  }
+  h += ev;
 
   var _hmRe = null;
   try {
-    _hmRe = geodeRealityHumanMoment(S, rs, left, availNum, diffNum);
+    _hmRe = geodeRealityHumanMoment(S);
   } catch (_eHmR) {
     _hmRe = null;
   }
-  if (_hmRe && _hmRe.title && _hmRe.body) {
-    var _suppressRealityHm = false;
-    if (_rcContLine) {
-      _suppressRealityHm = true;
-    }
-    if (_shiftOfferHtml) {
-      var _hmPo = null;
-      try {
-        _hmPo = geodeGetContextPosture(S);
-      } catch (_eHmPo) {}
-      var _hmPosture = _hmPo && _hmPo.posture;
-      if (
-        _hmRe.tone === 'caution' ||
-        _hmPosture === 'protect_flexibility' ||
-        _hmPosture === 'review_first'
-      ) {
-        _suppressRealityHm = true;
-      }
-    }
-    if (!_suppressRealityHm) {
-      var _hmBd = 'rgba(155,127,232,0.14)';
-      if (_hmRe.tone === 'unknown') _hmBd = 'rgba(189,183,220,0.18)';
-      else if (_hmRe.tone === 'caution') _hmBd = 'rgba(245,194,52,0.2)';
-      h +=
-        '<div data-geode-css="padding:13px 15px;border-radius:12px;margin-bottom:16px;background:rgba(255,255,255,0.02);border:1px solid ' +
-        _hmBd +
-        '">';
-      h +=
-        '<div data-geode-css="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.02em;margin-bottom:6px;line-height:1.3">' +
-        escHtmlLite(String(_hmRe.title)) +
-        '</div>';
-      h +=
-        '<div data-geode-css="font-size:12px;color:rgba(237,234,255,0.82);line-height:1.5">' +
-        escHtmlLite(String(_hmRe.body)) +
-        '</div>';
-      h += '</div>';
-    }
+  if (_hmRe && _hmRe.title && _hmRe.body && !_rcContLine) {
+    var _hmBd = 'rgba(155,127,232,0.14)';
+    if (_hmRe.tone === 'unknown') _hmBd = 'rgba(189,183,220,0.18)';
+    else if (_hmRe.tone === 'caution') _hmBd = 'rgba(245,194,52,0.2)';
+    h +=
+      '<div data-geode-css="padding:13px 15px;border-radius:12px;margin-bottom:16px;background:rgba(255,255,255,0.02);border:1px solid ' +
+      _hmBd +
+      '">';
+    h +=
+      '<div data-geode-css="font-size:11px;font-weight:700;color:var(--tx-3);letter-spacing:0.02em;margin-bottom:6px;line-height:1.3">' +
+      escHtmlLite(String(_hmRe.title)) +
+      '</div>';
+    h +=
+      '<div data-geode-css="font-size:12px;color:rgba(237,234,255,0.82);line-height:1.5">' +
+      escHtmlLite(String(_hmRe.body)) +
+      '</div>';
+    h += '</div>';
   }
-
-  h += _shiftOfferHtml;
 
   h +=
     '<div class="reality-section-title">' +
-    escHtmlLite('Update check') +
+    escHtmlLite(rs.hasData ? 'Update balance' : 'Add balance') +
     '</div>';
   h +=
     '<div class="reality-section-copy">' +
-    escHtmlLite(
-      'Enter the balance you want Beynd to use for this month\u2019s sense-check. You add it yourself; nothing is pulled from your bank.'
-    ) +
+    escHtmlLite('Enter the balance you see today. You add it yourself; nothing is pulled from your bank, and your plan stays the same.') +
     '</div>';
   h +=
     '<label class="reality-field-label">' +
@@ -31445,48 +30598,13 @@ function geodeRealityPageHtml() {
     '" placeholder="e.g. 1200"/>';
   h +=
     '<button type="button" class="btn btn-p" onclick="geodeSaveRealityCheckFromPage()">' +
-    escHtmlLite('Save balance check') +
+    escHtmlLite('Save balance') +
     '</button>';
-  if (rs.hasData) {
-    var _rcDaysOldQuick = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
-    if (_rcDaysOldQuick > 3 || !!rs.activitySinceCheck) {
-      h +=
-        '<button type="button" class="btn btn-s" data-geode-css="width:100%;margin-top:8px" onclick="geodeQuickConfirmRealityCheck()">' +
-        escHtmlLite('Confirm still accurate') +
-        '</button>';
-    }
-  }
-  if (rs.hasData && S.realityCheck && S.realityCheck.date) {
-    var _rcDaysOld = typeof rs.daysOld === 'number' ? rs.daysOld : 0;
-    var _rcStale = _rcDaysOld > 7;
-    var _rcAct = !!rs.activitySinceCheck;
-    var _rcMetaMb = _rcStale || _rcAct ? '6' : '14';
+  if (rs.hasData && typeof rs.daysOld === 'number' && rs.daysOld > 3) {
     h +=
-      '<div class="reality-meta" data-geode-css="margin-top:' +
-      _rcMetaMb +
-      'px">' +
-      escHtmlLite(geodeRealityLastCheckedLabel(_rcDaysOld)) +
-      '</div>';
-    if (_rcStale) {
-      var _rcAgeLbl = geodeRealityLastCheckedLabel(_rcDaysOld);
-      var _rcAgeShort = String(_rcAgeLbl || '')
-        .replace(/^Last checked /i, '')
-        .toLowerCase();
-      h +=
-        '<div class="reality-muted-line">' +
-        escHtmlLite(
-          _rcAgeShort
-            ? 'This check was saved ' + _rcAgeShort + '.'
-            : 'This is your check from earlier in the month.'
-        ) +
-        '</div>';
-    }
-    if (_rcAct) {
-      h +=
-        '<div class="reality-muted-line">' +
-        escHtmlLite('Your month may have shifted a little since this check.') +
-        '</div>';
-    }
+      '<button type="button" class="btn btn-s" data-geode-css="width:100%;margin-top:8px" onclick="geodeQuickConfirmRealityCheck()">' +
+      escHtmlLite('Same balance today') +
+      '</button>';
   }
 
   h +=
@@ -31676,108 +30794,20 @@ function geodeRealityMonthContextSectionHtml() {
   return geodeRealityMonthContextExpandedFormHtml(mc);
 }
 
-function geodeRealityCheckCardHtml() {
-  var rs = geodeRealityStatus();
-  var cardTitle = '';
-  var cardBody = '';
-  if (!rs.hasData) {
-    cardTitle = 'Reality check balance';
-    cardBody =
-      'Add your latest account balance so Beynd can compare your monthly plan with reality.';
-  } else {
-    cardTitle = 'Keep your reality check current';
-    cardBody =
-      'Confirm your balance is still accurate or update it if your position has changed.';
-  }
-  var h = '<div class="card" data-geode-css="margin-bottom:12px;padding:14px 16px">';
-  h += '<div class="card-title">' + escHtmlLite(cardTitle) + '</div>';
-  h +=
-    '<div data-geode-css="font-size:12px;color:rgba(237,234,255,0.82);line-height:1.4;margin-bottom:6px">' +
-    escHtmlLite(cardBody) +
-    '</div>';
-  if (rs.hasData) {
-    var daysOld = rs.daysOld || 0;
-    var balanceCheckedLine =
-      daysOld === 0
-        ? 'Balance last checked today.'
-        : daysOld === 1
-          ? 'Balance last checked yesterday.'
-          : 'Balance last checked ' + daysOld + ' days ago.';
-    var isStale = daysOld > 7;
-    // Shrink age-label bottom margin when a follow-on line will supply the 10px gap.
-    var ageMb = (isStale || rs.activitySinceCheck) ? '4' : '10';
-    h +=
-      '<div data-geode-css="font-size:9px;color:rgba(189,183,220,0.4);margin-bottom:' +
-      ageMb +
-      'px">' +
-      escHtmlLite(balanceCheckedLine) +
-      '</div>';
-    if (isStale) {
-      var staleMb = rs.activitySinceCheck ? '4' : '10';
-      h +=
-        '<div data-geode-css="font-size:9px;color:rgba(189,183,220,0.52);margin-bottom:' +
-        staleMb +
-        'px">' +
-        escHtmlLite('This check may be from earlier in the month.') +
-        '</div>';
-    }
-    if (rs.activitySinceCheck) {
-      h +=
-        '<div data-geode-css="font-size:9px;color:rgba(189,183,220,0.45);margin-bottom:10px">' +
-        escHtmlLite('Your month may have shifted a little since this check.') +
-        '</div>';
-    }
-  } else {
-    h += '<div data-geode-css="margin-bottom:10px"></div>';
-  }
-  try {
-    if (S.planCommitted) {
-      var _rpHome = (S && S.reductionPlan && typeof S.reductionPlan === 'object') ? S.reductionPlan : {};
-      var _totGapH = 0;
-      var _anyAppH = false;
-      for (var _kHome in _rpHome) {
-        if (Object.prototype.hasOwnProperty.call(_rpHome, _kHome) && _rpHome[_kHome] && _rpHome[_kHome].applied) {
-          _anyAppH = true;
-          var _pH = _rpHome[_kHome];
-          var _oH = Number(_pH.original) || 0;
-          var _tgH = Number(_pH.target) || 0;
-          var _dH =
-            typeof _pH.delta === 'number' && !isNaN(_pH.delta) ? _pH.delta : _oH - _tgH;
-          _totGapH += _dH > 0 ? _dH : 0;
-        }
-      }
-      if (_anyAppH) {
-        h += '<div data-geode-css="margin:10px 0 0;padding:8px 0 0;border-top:1px solid rgba(255,255,255,0.06)">' +
-          '<div data-geode-css="font-size:9px;color:rgba(189,183,220,0.32);line-height:1.35">See Plan for details.</div></div>';
-      }
-    }
-  } catch (_eHomeBi) {}
-  if (!rs.hasData) {
-    h += '<button type="button" class="btn-sm" onclick="geodeOpenRealityCheckModal()">Add reality check</button>';
-  } else {
-    h += '<div data-geode-css="display:flex;gap:8px;flex-wrap:wrap">' +
-         '<button type="button" class="btn-sm" onclick="geodeQuickConfirmRealityCheck()">Confirm still accurate</button>' +
-         '<button type="button" class="btn-sm" onclick="geodeOpenRealityCheckModal()">Update balance</button>' +
-         '</div>';
-  }
-  h += '</div>';
-  return h;
-}
-
 function geodeOpenRealityCheckModal() {
   openModal(geodeRealityCheckModalInnerHtml());
 }
 
-/** Inner HTML for the Reality Check modal (same content whether opening fresh or swapping from afford gate). */
+/** Inner HTML for the Reality Check modal. */
 function geodeRealityCheckModalInnerHtml() {
   var cur = S.realityCheck && S.realityCheck.ym === currentYM() ? S.realityCheck.amount : '';
   var h = mh('Reality check');
   h +=
     '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.45;margin:-4px 0 12px">' +
-    escHtmlLite('Add your latest balance. Beynd will use it to sense-check your plan before you schedule.') +
+    escHtmlLite('Note the balance you see today. It is saved with today\u2019s date; your plan stays the same.') +
     '</div>';
   h +=
-    '<div class="field"><label>Current balance (' +
+    '<div class="field"><label>Balance today (' +
     S.cur.code +
     ')</label><input type="number" id="rc_amount" class="fi" value="' +
     (cur !== '' ? cur : '') +
@@ -31801,8 +30831,7 @@ function geodeSaveRealityCheck() {
   render();
 }
 /** One-tap balance confirmation: re-saves the existing amount with a fresh date.
- *  Falls back to the full modal when no current-month balance exists.
- *  Does NOT change Reality Check calculations, confidence logic, or plan math. */
+ *  Falls back to the full modal when no current-month balance exists. */
 function geodeQuickConfirmRealityCheck() {
   var rc = S.realityCheck;
   if (!rc || rc.ym !== currentYM() || rc.amount == null || isNaN(Number(rc.amount))) {
@@ -31815,341 +30844,8 @@ function geodeQuickConfirmRealityCheck() {
   toast('Saved.');
 }
 
-/** Stage 55C-1: stable hash for current-month Reality check (no persist; preview engine only). */
-function geodeRealityPlanAlignmentInputsHash(state, rs) {
-  state = state || S;
-  rs = rs || null;
-  try {
-    var ym = currentYM();
-    var rc = state.realityCheck;
-    if (!rc || rc.ym !== ym) return '';
-    if (rc.amount == null || isNaN(Number(rc.amount))) return '';
-    var amt = Math.round(Number(rc.amount));
-    var dt = typeof rc.date === 'number' && isFinite(rc.date) ? rc.date : 0;
-    var gap = rs && typeof rs.gap === 'number' && isFinite(rs.gap) ? Math.round(rs.gap) : 0;
-    var feeling = '';
-    try {
-      feeling = geodeGetRealityFeeling() || '';
-    } catch (_eRpaHashFeel) {}
-    var mcSig = '';
-    try {
-      var mc = geodeGetMonthContext(state);
-      mcSig = [
-        String(mc && mc.protect || '').toLowerCase().trim().slice(0, 80),
-        String(mc && mc.worried || '').toLowerCase().trim().slice(0, 80),
-        String(mc && mc.success || '').toLowerCase().trim().slice(0, 80)
-      ].join(',');
-    } catch (_eRpaHashMc) {}
-    return ym + '|' + amt + '|' + dt + '|' + gap + '|' + feeling + '|' + mcSig;
-  } catch (_eRpaHash) {
-    return '';
-  }
-}
-
-/** Stage 55C-1: stable signature from getMonthPlan() steps (read-only; does not mutate plan). */
-function geodeRealityPlanAlignmentPlanSignature(plan) {
-  try {
-    var steps = plan && plan.steps ? plan.steps : [];
-    if (!steps.length) return '';
-    var parts = [];
-    var i;
-    for (i = 0; i < steps.length; i++) {
-      var st = steps[i];
-      if (!st) continue;
-      parts.push(String(st.label || '').trim() + ':' + Math.round(Number(st.amount) || 0));
-    }
-    return parts.join(';');
-  } catch (_eRpaSig) {
-    return '';
-  }
-}
-
-/** Stage 55C-1: read-only gates for Reality-to-Plan alignment preview (no UI; uses global S for getMonthPlan). */
-function geodeEligibilityForRealityPlanAlignment(state) {
-  state = state || S;
-  var out = { eligible: false, reasonCode: 'no_income', rs: null, plan: null };
-  try {
-    if (!state.incomeExplicitlySet || toNum(state.income) <= 0) {
-      out.reasonCode = 'no_income';
-      return out;
-    }
-    var leftover = calcMonthlyLeftover(state);
-    if (leftover < 0) {
-      out.reasonCode = 'over_budget';
-      return out;
-    }
-    var ym = currentYM();
-    var rc = state.realityCheck;
-    if (!rc || rc.ym !== ym || rc.amount == null || isNaN(Number(rc.amount))) {
-      out.reasonCode = 'no_reality_check';
-      return out;
-    }
-    var rs = null;
-    try {
-      rs = geodeRealityStatus();
-    } catch (_eRsEl) {
-      rs = { hasData: false };
-    }
-    if (!rs || !rs.hasData) {
-      out.reasonCode = 'no_reality_data';
-      out.rs = rs;
-      return out;
-    }
-    out.rs = rs;
-    if (geodeHasOverdue(state)) {
-      out.reasonCode = 'overdue';
-      return out;
-    }
-    if (state.planCommitted) {
-      var rp = state.reductionPlan && typeof state.reductionPlan === 'object' ? state.reductionPlan : {};
-      var rk;
-      for (rk in rp) {
-        if (Object.prototype.hasOwnProperty.call(rp, rk) && rp[rk] && rp[rk].applied) {
-          out.reasonCode = 'committed_reductions';
-          return out;
-        }
-      }
-    }
-    var plan = null;
-    try {
-      plan = getMonthPlan();
-    } catch (_eGpEl) {
-      plan = { steps: [] };
-    }
-    out.plan = plan;
-    var steps = plan && plan.steps ? plan.steps : [];
-    if (!steps.length) {
-      out.reasonCode = 'no_plan_steps';
-      return out;
-    }
-    var gap = typeof rs.gap === 'number' && isFinite(rs.gap) ? rs.gap : 0;
-    if (Math.abs(gap) <= 50) {
-      out.reasonCode = 'aligned';
-      return out;
-    }
-    if (gap > 50) {
-      out.reasonCode = 'positive_gap';
-      return out;
-    }
-    // Stage 55C-2E: stale only when the balance check is old — not low confidence or post-check activity.
-    if (typeof rs.daysOld === 'number' && rs.daysOld > 7) {
-      out.reasonCode = 'stale_reality';
-      return out;
-    }
-    if (gap >= -50) {
-      out.reasonCode = 'aligned';
-      return out;
-    }
-    out.eligible = true;
-    out.reasonCode = 'eligible';
-    return out;
-  } catch (_eElig) {
-    out.reasonCode = 'no_income';
-    return out;
-  }
-}
-
-/**
- * Stage 63A-1: read-only cap on Month Shift flex reductions (overlay preview only).
- * Uses existing feeling, posture, and month context — no new storage.
- */
-function geodeRealityShiftIntensityCap(state) {
-  state = state || S;
-  var feeling = '';
-  try {
-    feeling = geodeGetRealityFeeling() || '';
-  } catch (_eCapF) {}
-  var posture = null;
-  try {
-    posture = geodeGetContextPosture(state);
-  } catch (_eCapP) {}
-  var mc = null;
-  try {
-    mc = geodeGetMonthContext(state);
-  } catch (_eCapMc) {}
-  var p = posture && posture.posture ? posture.posture : '';
-  var tone = posture && posture.tone ? posture.tone : '';
-  var monthWorry = !!(mc && mc.worried);
-  var monthProtect = !!(mc && mc.protect);
-  var cap = 1;
-
-  if (feeling === 'still' || p === 'steady_progress' || p === 'growth_room') {
-    cap = 1;
-  } else if (
-    feeling === 'moved' ||
-    feeling === 'slow' ||
-    p === 'protect_flexibility' ||
-    monthWorry
-  ) {
-    cap = 0.55;
-  } else if (feeling === 'unsure' || p === 'review_first' || tone === 'cautious' || monthProtect) {
-    cap = 0.65;
-  }
-  try {
-    var memoryMods = geodeFinancialMemoryPlanModifiers(state, null, posture);
-    if (memoryMods && Number(memoryMods.realityShiftMultiplier) < 1) {
-      cap = Math.min(cap, Number(memoryMods.realityShiftMultiplier));
-    }
-  } catch (_eMemCap) {}
-  return cap;
-}
-
-/** Extra debt suggestions can flex; debt minimums are protected separately in affordability context. */
-function geodeRealityPlanAlignmentProtectedDebtStep(step) {
-  return false;
-}
-
-/**
- * Stage 55C-1: deterministic before/after plan-step preview (read-only).
- * No UI, no persist, no mutation of S/plan/payments/expenses. Returns null when not eligible.
- */
-function geodeBuildRealityPlanAlignmentPreview(state) {
-  state = state || S;
-  var elig = geodeEligibilityForRealityPlanAlignment(state);
-  if (!elig || !elig.eligible) return null;
-  try {
-    var rs = elig.rs || geodeRealityStatus();
-    if (!rs || !rs.hasData) return null;
-    var gap = typeof rs.gap === 'number' && isFinite(rs.gap) ? rs.gap : 0;
-    if (gap >= -50) return null;
-
-    var plan = elig.plan;
-    if (!plan || !plan.steps || !plan.steps.length) {
-      try {
-        plan = getMonthPlan();
-      } catch (_eGpPr) {
-        return null;
-      }
-    }
-    var steps = plan.steps || [];
-    if (!steps.length) return null;
-
-    var ym = currentYM();
-    var estimate = calcMonthlyLeftover(state);
-    var available = Number(state.realityCheck && state.realityCheck.amount) || 0;
-    var gapAbs = Math.abs(gap);
-    var need = gapAbs;
-    var rows = [];
-    var flexIndices = [];
-    var i;
-
-    for (i = 0; i < steps.length; i++) {
-      var step = steps[i];
-      var prog = geodePlanStepProgress(state, step);
-      var beforeAmount = toNum(prog.suggested);
-      if (beforeAmount <= 0 && step && step.amount != null) {
-        beforeAmount = toNum(step.amount);
-      }
-      var appliedAmount = toNum(prog.applied);
-      var remainingAmount = toNum(prog.remaining);
-      var phase = prog.phase || 'none';
-      var action = 'keep';
-      var afterAmount = beforeAmount;
-      var lockedReason = '';
-
-      if (beforeAmount <= 0) {
-        action = 'not_touched';
-        afterAmount = 0;
-        lockedReason = 'no_amount';
-      } else if (phase === 'done') {
-        action = 'keep';
-        afterAmount = beforeAmount;
-        lockedReason = 'completed';
-      } else if (geodeRealityPlanAlignmentProtectedDebtStep(step)) {
-        action = 'keep';
-        afterAmount = beforeAmount;
-        lockedReason = 'protected_debt';
-      } else if (remainingAmount > 0) {
-        flexIndices.push(i);
-      } else {
-        action = 'keep';
-        lockedReason = 'no_remaining';
-      }
-
-      rows.push({
-        stepIndex: i,
-        stepLabel: String(step.label || ''),
-        priority: step.priority != null ? step.priority : i + 1,
-        phase: phase,
-        beforeAmount: beforeAmount,
-        appliedAmount: appliedAmount,
-        remainingAmount: remainingAmount,
-        afterAmount: afterAmount,
-        delta: 0,
-        action: action,
-        lockedReason: lockedReason
-      });
-    }
-
-    flexIndices.sort(function (a, b) {
-      return b - a;
-    });
-
-    var intensityCap = 1;
-    try {
-      intensityCap = geodeRealityShiftIntensityCap(state);
-    } catch (_eCapIc) {
-      intensityCap = 1;
-    }
-    if (!isFinite(intensityCap) || intensityCap <= 0) intensityCap = 1;
-    if (intensityCap > 1) intensityCap = 1;
-
-    var closedAmount = 0;
-    var fi;
-    for (fi = 0; fi < flexIndices.length; fi++) {
-      if (closedAmount >= need) break;
-      var ix = flexIndices[fi];
-      var row = rows[ix];
-      var reducible = row.remainingAmount;
-      if (reducible <= 0) continue;
-      var maxReducible = reducible;
-      if (intensityCap < 1) {
-        maxReducible = Math.floor(reducible * intensityCap);
-        if (maxReducible <= 0) continue;
-      }
-      var take = Math.min(maxReducible, need - closedAmount);
-      if (take <= 0) continue;
-      if (take >= reducible) {
-        row.action = 'pause';
-        row.afterAmount = row.appliedAmount;
-      } else {
-        row.action = 'reduce';
-        row.afterAmount = Math.max(row.appliedAmount, row.beforeAmount - take);
-      }
-      row.delta = row.afterAmount - row.beforeAmount;
-      closedAmount += row.beforeAmount - row.afterAmount;
-    }
-
-    for (i = 0; i < rows.length; i++) {
-      if (rows[i].action === 'keep' || rows[i].action === 'not_touched') {
-        rows[i].delta = rows[i].afterAmount - rows[i].beforeAmount;
-      }
-    }
-
-    var shortfall = Math.max(0, need - closedAmount);
-    return {
-      version: 1,
-      ym: ym,
-      estimate: estimate,
-      available: available,
-      gap: gap,
-      gapAbs: gapAbs,
-      confidence: rs.confidence || 'estimated',
-      daysOld: typeof rs.daysOld === 'number' ? rs.daysOld : 0,
-      activitySinceCheck: !!rs.activitySinceCheck,
-      inputsHash: geodeRealityPlanAlignmentInputsHash(state, rs),
-      planSignature: geodeRealityPlanAlignmentPlanSignature(plan),
-      closedAmount: closedAmount,
-      shortfall: shortfall,
-      canFullyClose: shortfall <= 0,
-      rows: rows
-    };
-  } catch (_eBldPrev) {
-    return null;
-  }
-}
-
-/** Stage 55C-3: drop invalid month-scoped Reality plan alignment from state (no base plan mutation). */
+/** Drops a malformed or past-month Reality shift overlay. The shift is retired: a current-month overlay may stay
+ * stored until its month ends, but nothing reads, shows or applies it. */
 function geodeNormalizeRealityPlanAlignment(state) {
   state = state || S;
   try {
@@ -32168,10 +30864,6 @@ function geodeNormalizeRealityPlanAlignment(state) {
     }
     if (!Array.isArray(a.stepAdjustments) || !a.stepAdjustments.length) {
       delete state.realityPlanAlignment;
-      return;
-    }
-    if (geodeRealityPlanAlignmentIsStale(state, a)) {
-      delete state.realityPlanAlignment;
     }
   } catch (_eRpaNorm) {
     try {
@@ -32180,466 +30872,16 @@ function geodeNormalizeRealityPlanAlignment(state) {
   }
 }
 
-/** Stage 55C-3: true when approved alignment no longer matches Reality, plan, or step progress. */
-function geodeRealityPlanAlignmentIsStale(state, alignment) {
-  state = state || S;
-  if (!alignment || typeof alignment !== 'object') return true;
-  if (String(alignment.ym || '') !== currentYM()) return true;
-  var rs = null;
-  try {
-    rs = geodeRealityStatus();
-  } catch (_eRpaSt) {
-    rs = { hasData: false };
-  }
-  var curHash = '';
-  try {
-    curHash = geodeRealityPlanAlignmentInputsHash(state, rs);
-  } catch (_eRpaH) {
-    return true;
-  }
-  if (!curHash || curHash !== String(alignment.inputsHash || '')) return true;
-  var plan = null;
-  try {
-    plan = getMonthPlan();
-  } catch (_eRpaGp) {
-    return true;
-  }
-  var curSig = '';
-  try {
-    curSig = geodeRealityPlanAlignmentPlanSignature(plan);
-  } catch (_eRpaSg) {
-    return true;
-  }
-  if (!curSig || curSig !== String(alignment.planSignature || '')) return true;
-  var steps = plan && plan.steps ? plan.steps : [];
-  var adj = alignment.stepAdjustments || [];
-  var ai;
-  for (ai = 0; ai < adj.length; ai++) {
-    var ad = adj[ai];
-    if (!ad) continue;
-    var ix = ad.stepIndex;
-    if (typeof ix !== 'number' || ix < 0 || ix >= steps.length) return true;
-    var step = steps[ix];
-    if (String(ad.stepLabel || '') && String(step.label || '') !== String(ad.stepLabel || '')) return true;
-    var prog = null;
-    try {
-      prog = geodePlanStepProgress(state, step);
-    } catch (_eRpaPr) {
-      return true;
-    }
-    if (prog && prog.phase === 'done') return true;
-  }
-  return false;
-}
-
-/** Read-only: inspect approved alignment without mutating or deleting state.realityPlanAlignment (Stage 59C.6). */
-function geodePeekActiveRealityPlanAlignment(state) {
-  state = state || S;
-  try {
-    var a = state.realityPlanAlignment;
-    if (!a || typeof a !== 'object') return null;
-    if (a.status !== 'approved' || a.version !== 1) return null;
-    if (String(a.ym || '') !== currentYM()) return null;
-    if (!Array.isArray(a.stepAdjustments) || !a.stepAdjustments.length) return null;
-    if (geodeRealityPlanAlignmentIsStale(state, a)) return null;
-    return a;
-  } catch (_eRpaPeek) {
-    return null;
-  }
-}
-
-/** Stage 55C-3: active approved alignment for current month, or null after normalize/stale clear. */
-function geodeGetActiveRealityPlanAlignment(state) {
-  state = state || S;
-  geodeNormalizeRealityPlanAlignment(state);
-  var a = state.realityPlanAlignment;
-  if (!a || a.status !== 'approved') return null;
-  return a;
-}
-
 /** Stage 55C-3: clear overlay state only (does not change getMonthPlan or money records). */
 function geodeClearRealityPlanAlignment(opts) {
   opts = opts || {};
   try {
-    var hadApprovedOverlay =
-      !!(S.realityPlanAlignment && S.realityPlanAlignment.status === 'approved');
-    if (opts.revert && hadApprovedOverlay) {
-      geodeRecordBehaviourEvent('reality_shift_reverted', { hadOverlay: true });
-    }
     if (S.realityPlanAlignment) delete S.realityPlanAlignment;
     persistGeodeToLocalStorage();
-    if (opts.revert) {
-      toast('Back to your usual plan.', 'ok');
-    }
     if (!opts.silent && opts.render !== false) {
       render();
     }
   } catch (_eRpaClr) {}
-}
-
-/** Stage 55C-3: user revert from Plan banner. */
-function geodeRevertRealityPlanAlignment() {
-  geodeClearRealityPlanAlignment({ revert: true, silent: false });
-}
-
-/** Stage 55C-3: persist approved preview snapshot (reduce/pause rows only). */
-function geodeApproveRealityPlanAlignmentFromPreview() {
-  var preview = null;
-  try {
-    preview = geodeBuildRealityPlanAlignmentPreview(S);
-  } catch (_eRpaAp) {
-    toast('Nothing to apply this month.', 'warn');
-    return;
-  }
-  if (!preview || !preview.rows || !preview.rows.length) {
-    toast('Nothing to apply this month.', 'warn');
-    return;
-  }
-  var stepAdjustments = [];
-  var ri;
-  for (ri = 0; ri < preview.rows.length; ri++) {
-    var row = preview.rows[ri];
-    if (!row || (row.action !== 'reduce' && row.action !== 'pause')) continue;
-    stepAdjustments.push({
-      stepIndex: row.stepIndex,
-      action: row.action,
-      baselineAmount: toNum(row.beforeAmount),
-      displayAmount: toNum(row.afterAmount),
-      appliedAmountAtApproval: toNum(row.appliedAmount),
-      stepLabel: String(row.stepLabel || '')
-    });
-  }
-  if (!stepAdjustments.length) {
-    toast('Nothing flexible to shift this month.', 'warn');
-    return;
-  }
-  S.realityPlanAlignment = {
-    version: 1,
-    ym: currentYM(),
-    status: 'approved',
-    approvedAt: Date.now(),
-    source: 'reality_preview',
-    inputsHash: String(preview.inputsHash || ''),
-    planSignature: String(preview.planSignature || ''),
-    stepAdjustments: stepAdjustments
-  };
-  geodeRecordBehaviourEvent('reality_shift_approved', {
-    closedAmountRounded: Math.round(toNum(preview.closedAmount)),
-    shortfallRounded: Math.round(toNum(preview.shortfall)),
-    rowsCount: stepAdjustments.length
-  });
-  persistGeodeToLocalStorage();
-  closeModal();
-  render();
-  toast('This month\u2019s plan view updated.', 'ok');
-}
-
-/** Stage 55C-3: lookup one approved step adjustment (display overlay only). */
-function geodeGetRealityPlanStepAdjustment(state, stepIndex, stepLabel) {
-  var a = geodePeekActiveRealityPlanAlignment(state);
-  if (!a || !a.stepAdjustments) return null;
-  var list = a.stepAdjustments;
-  var i;
-  for (i = 0; i < list.length; i++) {
-    if (list[i] && list[i].stepIndex === stepIndex) return list[i];
-  }
-  return null;
-}
-
-/** Stage 55C-3: Plan stack/detail display overlay for approved Reality shift (no plan math change). */
-function geodePlanStepRealityDisplay(state, step, prog, stepIndex, existingAmount, existingCaption) {
-  var adj = geodeGetRealityPlanStepAdjustment(state, stepIndex, step && step.label);
-  if (!adj) {
-    return { amtShown: existingAmount, capShown: existingCaption || '' };
-  }
-  var baselineStr = '';
-  var displayStr = '';
-  try {
-    baselineStr = fm(adj.baselineAmount);
-    displayStr = fm(adj.displayAmount);
-  } catch (_eRpaFd) {
-    baselineStr = String(adj.baselineAmount);
-    displayStr = String(adj.displayAmount);
-  }
-  var applied = prog ? toNum(prog.applied) : toNum(adj.appliedAmountAtApproval);
-  var capShown = '';
-  var amtShown = existingAmount;
-  if (adj.action === 'pause') {
-    amtShown = 'Paused this month';
-    capShown = 'Usual step ' + baselineStr;
-  } else if (adj.action === 'reduce') {
-    amtShown = displayStr;
-    capShown = 'Was ' + baselineStr + ' \u00b7 from Reality';
-    if (applied > 0) {
-      try {
-        var leftOn = Math.max(0, toNum(adj.displayAmount) - applied);
-        amtShown = fm(leftOn);
-      } catch (_eRpaPc) {
-        amtShown = displayStr;
-      }
-    }
-  }
-  return { amtShown: amtShown, capShown: capShown };
-}
-
-/** Stage 55C-3: slim Plan banner when following approved Reality shift. */
-function geodeRealityPlanAlignmentPlanBannerHtml() {
-  if (!geodePeekActiveRealityPlanAlignment(S)) return '';
-  var h = '';
-  var _rpaPlanBannerHint = geodeBehaviourContinuityPlanBannerHint(S);
-  h +=
-    '<div data-geode-css="margin:0 0 14px;padding:10px 12px;border-radius:11px;border:1px solid rgba(155,127,232,0.22);background:rgba(155,127,232,0.06)">';
-  h +=
-    '<div data-geode-css="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:4px;opacity:0.85">' +
-    escHtmlLite('This month') +
-    '</div>';
-  h +=
-    '<div data-geode-css="font-size:12px;font-weight:600;color:var(--tx-1);line-height:1.4;margin-bottom:8px">' +
-    escHtmlLite('Following your Reality shift') +
-    '</div>';
-  if (_rpaPlanBannerHint) {
-    h +=
-      '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.72);line-height:1.45;margin-bottom:8px">' +
-      escHtmlLite(_rpaPlanBannerHint) +
-      '</div>';
-  }
-  h +=
-    '<button type="button" class="btn btn-s" data-geode-css="width:100%" onclick="geodeRevertRealityPlanAlignment()">' +
-    escHtmlLite('Use your usual plan this month') +
-    '</button>';
-  h += '</div>';
-  return h;
-}
-
-/** Stage 55C-4C: true when preview has at least one reduce/pause row (offer/modal eligible). */
-function geodeRealityPlanAlignmentHasShiftRows(preview) {
-  if (!preview || !preview.rows || !preview.rows.length) return false;
-  var i;
-  for (i = 0; i < preview.rows.length; i++) {
-    var row = preview.rows[i];
-    if (row && (row.action === 'reduce' || row.action === 'pause')) return true;
-  }
-  return false;
-}
-
-/** Stage 55C-2: compact Reality offer when alignment preview is available (read-only; no persist). */
-function geodeRealityPlanAlignmentOfferHtml() {
-  if (geodePeekActiveRealityPlanAlignment(S)) return '';
-  var preview = null;
-  try {
-    preview = geodeBuildRealityPlanAlignmentPreview(S);
-  } catch (_eRpaOff) {
-    return '';
-  }
-  if (!preview || !geodeRealityPlanAlignmentHasShiftRows(preview)) return '';
-  var h = '';
-  h +=
-    '<div data-geode-css="margin-bottom:16px;padding:10px 12px;border-radius:11px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02)">';
-  h +=
-    '<div data-geode-css="font-size:13px;font-weight:700;color:var(--tx-1);line-height:1.35;margin-bottom:6px;letter-spacing:-0.15px">' +
-    escHtmlLite('See how this month could shift') +
-    '</div>';
-  h +=
-    '<div data-geode-css="font-size:11px;color:rgba(189,183,220,0.72);line-height:1.45;margin-bottom:10px">' +
-    escHtmlLite('Minimum commitments stay in place in this preview.') +
-    '</div>';
-  h +=
-    '<button type="button" class="btn btn-s" data-geode-css="width:100%" onclick="geodeOpenRealityPlanAlignmentPreview()">' +
-    escHtmlLite('View shift') +
-    '</button>';
-  h += '</div>';
-  return h;
-}
-
-/** Stage 55C-2: open step-focused alignment preview modal (inspection only; no persist). */
-function geodeOpenRealityPlanAlignmentPreview() {
-  var preview = null;
-  try {
-    preview = geodeBuildRealityPlanAlignmentPreview(S);
-  } catch (_eRpaOpen) {
-    return;
-  }
-  if (!preview) return;
-  if (!geodeRealityPlanAlignmentHasShiftRows(preview)) {
-    openModal(
-      mh('How this month could shift') +
-        '<div data-geode-css="font-size:12px;color:rgba(189,183,220,0.72);line-height:1.45;margin-top:-4px">' +
-        escHtmlLite('Nothing flexible to shift this month.') +
-        '</div>' +
-        '<div data-geode-css="margin-top:14px">' +
-        '<button type="button" class="btn btn-s" data-geode-css="width:100%" onclick="closeModal()">' +
-        escHtmlLite('Not now') +
-        '</button></div>'
-    );
-    return;
-  }
-  var body = '';
-  try {
-    body = geodeRealityPlanAlignmentPreviewModalHtml(preview);
-  } catch (_eRpaMo) {
-    return;
-  }
-  if (!body) {
-    toast('Nothing flexible to shift this month.', 'warn');
-    return;
-  }
-  openModal(body);
-}
-
-/** Stage 55C-2: one plan-step row for alignment preview modal (display only). */
-function geodeRealityPlanAlignmentPreviewRowHtml(row, step, prog) {
-  if (!row) return '';
-  var title = '';
-  try {
-    title = geodePlanPageStepTitle(step, prog);
-  } catch (_eRpaRowT) {
-    title = String(row.stepLabel || '');
-  }
-  if (!title) title = String(row.stepLabel || 'Plan step');
-  var actionLabel = '';
-  if (row.action === 'reduce') actionLabel = 'Reduce';
-  else if (row.action === 'pause') actionLabel = 'Pause this month';
-  else if (row.action === 'keep' && row.lockedReason === 'protected_debt') actionLabel = 'Debt step stays in preview';
-  else if (row.action === 'keep') actionLabel = 'Keep';
-  else actionLabel = '';
-  var beforeStr = '';
-  var afterStr = '';
-  try {
-    beforeStr = fm(row.beforeAmount);
-    afterStr = fm(row.afterAmount);
-  } catch (_eRpaFm) {
-    beforeStr = String(row.beforeAmount);
-    afterStr = String(row.afterAmount);
-  }
-  var deltaNote = '';
-  if (row.action === 'reduce') {
-    var dMag = Math.abs(toNum(row.beforeAmount) - toNum(row.afterAmount));
-    if (dMag > 0) {
-      try {
-        deltaNote = 'Reduce by ' + fm(dMag);
-      } catch (_eRpaDm) {
-        deltaNote = 'Reduce by ' + dMag;
-      }
-    }
-  }
-  var h = '';
-  h +=
-    '<div data-geode-css="padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.06)">';
-  h +=
-    '<div data-geode-css="font-size:13px;font-weight:600;color:var(--tx-1);line-height:1.35;margin-bottom:6px">' +
-    escHtmlLite(title) +
-    '</div>';
-  if (actionLabel) {
-    h +=
-      '<div data-geode-css="font-size:10px;font-weight:600;color:rgba(189,183,220,0.72);letter-spacing:0.02em;margin-bottom:6px">' +
-      escHtmlLite(actionLabel) +
-      '</div>';
-  }
-  h +=
-    '<div data-geode-css="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;font-size:15px;font-weight:700;color:var(--tx-1);line-height:1.3">';
-  h += '<span data-geode-css="white-space:nowrap">' + escHtmlLite(beforeStr) + '</span>';
-  h +=
-    '<span data-geode-css="font-size:12px;font-weight:600;color:rgba(189,183,220,0.55)">\u2192</span>';
-  h += '<span data-geode-css="white-space:nowrap;color:#9b7fe8">' + escHtmlLite(afterStr) + '</span>';
-  h += '</div>';
-  if (deltaNote) {
-    h +=
-      '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.4;margin-top:5px">' +
-      escHtmlLite(deltaNote) +
-      '</div>';
-  }
-  h += '</div>';
-  return h;
-}
-
-/** Stage 55C-2: alignment preview modal body (changed steps; no figures strip; Done only). */
-function geodeRealityPlanAlignmentPreviewModalHtml(preview) {
-  if (!preview || !preview.rows || !preview.rows.length) return '';
-  var rows = preview.rows;
-  var plan = null;
-  try {
-    plan = getMonthPlan();
-  } catch (_eRpaGp) {
-    plan = { steps: [] };
-  }
-  var steps = plan && plan.steps ? plan.steps : [];
-  var changed = [];
-  var unchangedCount = 0;
-  var hasProtected = false;
-  var i;
-  for (i = 0; i < rows.length; i++) {
-    var r = rows[i];
-    if (r.action === 'reduce' || r.action === 'pause') {
-      changed.push(r);
-    } else {
-      unchangedCount++;
-      if (r.lockedReason === 'protected_debt') hasProtected = true;
-    }
-  }
-  if (!changed.length) return '';
-  var showAll = rows.length <= 4;
-  var displayRows = showAll ? rows : changed;
-  var h = mh('How this month could shift');
-  h += '<div data-geode-css="margin-top:-6px">';
-  for (i = 0; i < displayRows.length; i++) {
-    var row = displayRows[i];
-    var step = steps[row.stepIndex] || { label: row.stepLabel };
-    var prog = null;
-    try {
-      prog = geodePlanStepProgress(S, step);
-    } catch (_eRpaPr) {
-      prog = { phase: row.phase || 'none', suggested: row.beforeAmount, applied: row.appliedAmount, remaining: row.remainingAmount };
-    }
-    h += geodeRealityPlanAlignmentPreviewRowHtml(row, step, prog);
-  }
-  h += '</div>';
-  if (!showAll && unchangedCount > 0) {
-    var sumLine =
-      unchangedCount +
-      (unchangedCount === 1 ? ' earlier step unchanged' : ' earlier steps unchanged');
-    if (hasProtected) sumLine += ' \u00b7 Minimum commitments stay unchanged in this preview';
-    h +=
-      '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.45;padding:10px 0 4px">' +
-      escHtmlLite(sumLine) +
-      '</div>';
-  } else if (showAll && hasProtected) {
-    h +=
-      '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.58);line-height:1.45;padding:10px 0 4px">' +
-      escHtmlLite('Minimum commitments stay unchanged in this preview.') +
-      '</div>';
-  }
-  if (preview.canFullyClose === false) {
-    var shortfallStr = '';
-    try {
-      shortfallStr = fm(preview.shortfall);
-    } catch (_eRpaSf) {
-      shortfallStr = String(preview.shortfall);
-    }
-    h +=
-      '<div data-geode-css="font-size:11px;color:rgba(189,183,220,0.72);line-height:1.5;padding:8px 0 4px">' +
-      escHtmlLite(
-        'About ' +
-          shortfallStr +
-          ' would still sit outside these shifts. Minimum commitments stay unchanged in this preview.'
-      ) +
-      '</div>';
-  }
-  var _rpaModalHelper = 'This adjusts your Plan view for this month only. Your usual plan stays available.';
-  h +=
-    '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.72);line-height:1.45;margin-top:12px">' +
-    escHtmlLite(_rpaModalHelper) +
-    '</div>';
-  h += '<div data-geode-css="display:flex;flex-direction:column;gap:8px;margin-top:10px">';
-  h +=
-    '<button type="button" class="btn btn-p" data-geode-css="width:100%" onclick="geodeApproveRealityPlanAlignmentFromPreview()">' +
-    escHtmlLite('Apply this shift this month') +
-    '</button>';
-  h +=
-    '<button type="button" class="btn btn-s" data-geode-css="width:100%" onclick="closeModal()">' +
-    escHtmlLite('Not now') +
-    '</button>';
-  h += '</div>';
-  return h;
 }
 
 // ── END REALITY CHECK ──────────────────────────────────────────────────────
@@ -32803,17 +31045,12 @@ function geodeContextPostureReasonPhrase(code) {
   var phrases = {
     irregular_income: 'variable income',
     dependants: 'income supports others',
-    reality_below: 'today looks tighter than the monthly estimate',
-    reality_above: 'today looks stronger than the monthly estimate',
     feeling_still: 'feels on track today',
     feeling_moved: 'things moved today',
     feeling_slow: 'slow down today',
     feeling_unsure: 'unsure today',
-    no_reality_check: 'reality check not added yet',
     growth_strategy: 'growth plan strategy',
-    stable_income: 'stable income',
-    reality_aligned: 'reality aligned with estimate',
-    reality_check_present: 'reality check on file'
+    stable_income: 'stable income'
   };
   return phrases[code] || '';
 }
@@ -32854,9 +31091,6 @@ function geodeFormatAskBeyndContextPostureBlock() {
     lines.push('Plan strategy: ' + stratWord);
     lines.push('Income type: ' + incWord);
     lines.push('Income supports others: ' + supportWord);
-    lines.push(
-      inputs.realityHasData ? 'Reality check: on file this month' : 'Reality check: not added yet'
-    );
     if (inputs.realityFeeling) {
       var feelMap = {
         still: 'still on track',
@@ -32900,88 +31134,32 @@ function geodeFormatAskBeyndContextPostureBlock() {
 /**
  * Human-safe month pacing lines for Ask Beynd only (read-only). Never exposes PAO field names.
  */
-function geodeFormatAskBeyndPaoContextBlock(pao, rs) {
+function geodeFormatAskBeyndPaoContextBlock(pao) {
   if (!pao || !pao.signals) return '';
-  rs = rs || { hasData: false };
 
   var sig = pao.signals;
   var hasOverdue = !!sig.hasOverdue;
   var left = Number(sig.leftover) || 0;
   var band = pao.band;
-  var bandConf = pao.bandConfidence;
-  var expenseCompleteness = sig.expenseCompleteness;
   var recoveryPhase = pao.recovery && pao.recovery.phase;
   var pacingMode = pao.outputs && pao.outputs.pacingMode;
 
-  if (
-    band === 'open' &&
-    bandConf === 'high' &&
-    !hasOverdue &&
-    rs.hasData &&
-    expenseCompleteness !== 'minimal' &&
-    recoveryPhase !== 'emerging'
-  ) {
-    return '';
-  }
-
-  var balanceSaysTighter = false;
-  var balanceCaution = false;
-  if (!rs.hasData) {
-    balanceCaution = true;
-  } else {
-    var gap = typeof rs.gap === 'number' ? rs.gap : null;
-    if (gap != null && gap < -50) balanceSaysTighter = true;
-    if (
-      rs.confidence === 'low' ||
-      rs.activitySinceCheck ||
-      (typeof rs.daysOld === 'number' && rs.daysOld > 3)
-    ) {
-      balanceCaution = true;
-    }
-  }
-
-  try {
-    var po = geodeGetContextPosture(S);
-    var codes = po && po.reasonCodes ? po.reasonCodes : [];
-    var ci;
-    for (ci = 0; ci < codes.length; ci++) {
-      if (codes[ci] === 'reality_below') balanceSaysTighter = true;
-    }
-  } catch (_ePaoDedup) {}
-
   var lines = [];
 
-  if ((!rs.hasData || expenseCompleteness === 'minimal') && lines.length < 4) {
-    lines.push('This picture is built from what they entered; live bank data is not connected.');
-  }
+  lines.push('This picture is built from what they entered; live bank data is not connected.');
 
   if (hasOverdue && lines.length < 4) {
     lines.push('Anything overdue may need attention before suggesting new commitments.');
   }
 
   if (lines.length < 4) {
-    if (left < 0 && !balanceSaysTighter) {
+    if (left < 0) {
       lines.push('Headroom on the plan looks thin this month.');
-    } else if (
-      (band === 'narrow' || pacingMode === 'gentle') &&
-      !balanceSaysTighter &&
-      !hasOverdue
-    ) {
+    } else if ((band === 'narrow' || pacingMode === 'gentle') && !hasOverdue) {
       lines.push('This month may be easier with gentler pacing.');
     } else if (band === 'unknown') {
       lines.push('Keep guidance practical until they add a fuller monthly picture.');
-    } else if (
-      (band !== 'open' && band !== 'narrow' && band !== 'unknown') &&
-      left >= 0 &&
-      !balanceSaysTighter &&
-      !balanceCaution
-    ) {
-      lines.push('Plan headroom may feel constrained this month.');
     }
-  }
-
-  if (bandConf === 'low' && !balanceCaution && rs.hasData && lines.length < 4) {
-    lines.push('Treat the monthly picture as approximate unless their balance check is fresh.');
   }
 
   if (recoveryPhase === 'emerging' && lines.length < 4) {
@@ -33049,10 +31227,6 @@ function geodeFormatAskBeyndOrchestrationBlock(state) {
     pushLine(
       'Coaching emphasis: Help them sense-check this move before scheduling. Explore trade-offs, not certainty.'
     );
-  } else if (mode === 'reality_mismatch') {
-    pushLine(
-      'Plan and balance check may tell slightly different stories. Stay observational and do not imply automatic changes.'
-    );
   } else if (mode === 'still_deciding') {
     pushLine('They may still be deciding. Help them find the smallest useful next step.');
   } else if (mode === 'explain_plan') {
@@ -33062,12 +31236,6 @@ function geodeFormatAskBeyndOrchestrationBlock(state) {
   } else if (mode === 'second_opinion') {
     pushLine(
       'Coaching emphasis: Offer a calm second opinion before they act — what matters first, what can wait.'
-    );
-  }
-
-  if (decision === 'aligning') {
-    pushLine(
-      'They may be reviewing a plan adjustment after a balance sense-check. Describe options; do not apply changes.'
     );
   }
 
@@ -33086,7 +31254,7 @@ function geodeFormatAskBeyndOrchestrationBlock(state) {
   var hasHomeOrDecisionEmphasis = false;
   if (focusLabel) hasHomeOrDecisionEmphasis = true;
   if (mode !== 'neutral') hasHomeOrDecisionEmphasis = true;
-  if (decision === 'aligning' || decision === 'scheduling' || decision === 'review') {
+  if (decision === 'scheduling' || decision === 'review') {
     hasHomeOrDecisionEmphasis = true;
   }
   if (!hasHomeOrDecisionEmphasis) {
@@ -33119,66 +31287,15 @@ function geodePlanRationalePlainTextFromHtml(html) {
     .trim();
 }
 
-/** Mirrors Ask Beynd balance sense labels; shadow export only. */
-function geodePlanRationaleSenseLabel(rs) {
-  if (!rs || !rs.hasData) return '';
-  var senseLabel = 'Go gently here';
-  if (rs.confidence === 'high' && !rs.activitySinceCheck) {
-    senseLabel = 'Looks steady';
-  } else if (rs.confidence === 'moderate' || (typeof rs.daysOld === 'number' && rs.daysOld > 3)) {
-    senseLabel = 'Worth another look';
-  }
-  return senseLabel;
-}
-
-/** Shadow export only: approved Reality plan alignment (peek read; no normalize/preview/approve). */
+/** Shadow export only. The Reality shift is retired, so a stored overlay is never active. */
 function geodePlanRationaleAlignmentBlock(state, stepsOut, monthKey) {
-  state = state || S;
-  monthKey = monthKey || currentYM();
-  var out = {
+  return {
     active: false,
     status: 'none',
-    ym: monthKey,
+    ym: monthKey || currentYM(),
     summary: '',
     stepAdjustments: []
   };
-  var a = null;
-  try {
-    a = geodePeekActiveRealityPlanAlignment(state);
-  } catch (_ePrAlPeek) {
-    a = null;
-  }
-  if (!a || !Array.isArray(a.stepAdjustments) || !a.stepAdjustments.length) {
-    return out;
-  }
-  out.active = true;
-  out.status = 'approved';
-  out.ym = String(a.ym || monthKey);
-  out.summary = 'Following your Reality shift';
-  var stepIdByIndex = {};
-  var i;
-  for (i = 0; i < (stepsOut || []).length; i++) {
-    if (stepsOut[i] && stepsOut[i].index != null) {
-      stepIdByIndex[stepsOut[i].index] = stepsOut[i].stepId || '';
-    }
-  }
-  var adjOut = [];
-  for (i = 0; i < a.stepAdjustments.length; i++) {
-    var adj = a.stepAdjustments[i];
-    if (!adj) continue;
-    var ix = adj.stepIndex;
-    adjOut.push({
-      stepIndex: typeof ix === 'number' ? ix : -1,
-      stepId: typeof ix === 'number' && stepIdByIndex[ix] ? stepIdByIndex[ix] : '',
-      stepLabel: String(adj.stepLabel || ''),
-      action: String(adj.action || ''),
-      baselineAmount: toNum(adj.baselineAmount),
-      displayAmount: toNum(adj.displayAmount),
-      appliedAmountAtApproval: toNum(adj.appliedAmountAtApproval)
-    });
-  }
-  out.stepAdjustments = adjOut;
-  return out;
 }
 
 /**
@@ -33222,7 +31339,6 @@ function geodePlanRationaleSnapshot(state, opts) {
       affCopy.realityAdjustment = {
         suggestableBeforeReality: toNum(aff.realityAdjustment.suggestableBeforeReality),
         suggestableAfterReality: toNum(aff.realityAdjustment.suggestableAfterReality),
-        realityGapAdjustment: toNum(aff.realityAdjustment.realityGapAdjustment),
         postureMultiplier: toNum(aff.realityAdjustment.postureMultiplier, 1),
         reasonCodes: Array.isArray(aff.realityAdjustment.reasonCodes)
           ? aff.realityAdjustment.reasonCodes.slice()
@@ -33294,24 +31410,12 @@ function geodePlanRationaleSnapshot(state, opts) {
     }
     if (!rs) rs = { hasData: false };
 
-    var balance = null;
-    if (
-      state.realityCheck &&
-      state.realityCheck.amount != null &&
-      !isNaN(Number(state.realityCheck.amount))
-    ) {
-      balance = Number(state.realityCheck.amount);
-    }
-
+    // Evidence only: the balance and when it was recorded. Never compared with the plan.
     var reality = {
       hasData: !!rs.hasData,
-      balance: balance,
-      gap: rs.hasData && typeof rs.gap === 'number' && isFinite(rs.gap) ? rs.gap : null,
-      status: rs.hasData && rs.status ? String(rs.status) : '',
-      confidence: rs.hasData && rs.confidence ? String(rs.confidence) : 'estimated',
-      daysOld: typeof rs.daysOld === 'number' ? rs.daysOld : 0,
-      activitySinceCheck: !!rs.activitySinceCheck,
-      senseLabel: rs.hasData ? geodePlanRationaleSenseLabel(rs) : ''
+      balance: rs.hasData ? toNum(rs.amount) : null,
+      recordedAt: rs.hasData ? toNum(rs.date) : 0,
+      daysOld: rs.hasData && typeof rs.daysOld === 'number' ? rs.daysOld : 0
     };
 
     var cautionSeen = {};
@@ -33328,17 +31432,6 @@ function geodePlanRationaleSnapshot(state, opts) {
     }
     if (affCopy.planRoom <= 0 && !cautionSeen.plan_room_negative) {
       cautionsOut.push('plan_room_negative');
-    }
-    if (rs.hasData && rs.activitySinceCheck && !cautionSeen.activity_since_reality_check) {
-      cautionsOut.push('activity_since_reality_check');
-    }
-    if (
-      rs.hasData &&
-      typeof rs.daysOld === 'number' &&
-      rs.daysOld > 7 &&
-      !cautionSeen.reality_check_older_than_week
-    ) {
-      cautionsOut.push('reality_check_older_than_week');
     }
 
     var askBeyndGuidance = [
@@ -33378,10 +31471,8 @@ function geodePlanRationaleSnapshot(state, opts) {
       audit: {
         shadowOnly: true,
         planCallCount: opts.plan ? 0 : 1,
-        alignmentPeekUsed: true,
-        sideEffectsAcknowledged: opts.plan
-          ? ['geodePeekActiveRealityPlanAlignment_stale_check_may_recall_plan']
-          : ['getMonthPlan_maintenance_sync', 'geodePeekActiveRealityPlanAlignment_stale_check_may_recall_plan']
+        alignmentPeekUsed: false,
+        sideEffectsAcknowledged: opts.plan ? [] : ['getMonthPlan_maintenance_sync']
       }
     };
 
@@ -33914,14 +32005,10 @@ function geodeStabilityRoomSnapshot(state, opts) {
       planSnap && planSnap.reality
         ? {
             hasData: !!planSnap.reality.hasData,
-            gap: planSnap.reality.gap,
-            status: planSnap.reality.status || '',
-            confidence: planSnap.reality.confidence || 'estimated',
             daysOld: typeof planSnap.reality.daysOld === 'number' ? planSnap.reality.daysOld : 0,
-            activitySinceCheck: !!planSnap.reality.activitySinceCheck,
             balanceEntered: planSnap.reality.balance
           }
-        : { hasData: false, confidence: 'estimated' };
+        : { hasData: false };
 
     var planFocus = {
       strategyKey:
@@ -33966,7 +32053,7 @@ function geodeStabilityRoomSnapshot(state, opts) {
       modifiers: orch.askBeyndModifiers ? orch.askBeyndModifiers.slice() : [],
       canExplain: [
         'plan priorities',
-        'reality sense-check',
+        'balance you entered',
         'month context',
         'items held back from Home'
       ],
@@ -36385,10 +34472,6 @@ function geodeStabilityRoomVisualModel(snapshot, opts) {
     var heldBackSignals =
       disclosure.length > 0 || deferredWithCopy || mutedLines.length > 0;
     var realityHasData = !!reality.hasData;
-    var alignmentActive = !!(
-      planFocus.alignment &&
-      planFocus.alignment.active === true
-    );
     var planHasFocus = !!(
       (Array.isArray(planFocus.topSteps) && planFocus.topSteps.length > 0) ||
       String(planFocus.headlineSummary || '').trim()
@@ -36470,10 +34553,10 @@ function geodeStabilityRoomVisualModel(snapshot, opts) {
     sections.push(
       section(
         'what_reality_changed',
-        realityHasData || alignmentActive,
+        realityHasData,
         3,
         'review',
-        'What Reality says'
+        'Balance you entered'
       )
     );
     sections.push(
@@ -36506,7 +34589,7 @@ function geodeStabilityRoomVisualModel(snapshot, opts) {
       } else if (heldBackSignals) {
         entrySuggest = 'See what stayed quiet on Home';
       } else if (realityHasData) {
-        entrySuggest = 'Continue from your balance check';
+        entrySuggest = 'Continue from the balance you noted';
       } else {
         entrySuggest = 'A quieter read of this month';
       }
@@ -36617,9 +34700,6 @@ function geodeStabilityRoomEntryGate(snapshot, visualModel, opts) {
         break;
       }
     }
-    var alignmentActive = !!(
-      planFocus.alignment && planFocus.alignment.active === true
-    );
     var planHasFocus = !!(
       (Array.isArray(planFocus.topSteps) && planFocus.topSteps.length > 0) ||
       String(planFocus.headlineSummary || '').trim()
@@ -36629,7 +34709,6 @@ function geodeStabilityRoomEntryGate(snapshot, visualModel, opts) {
       disclosure.length > 0 ||
       deferredWithCopy ||
       mutedLines.length > 0 ||
-      (!!reality.hasData && alignmentActive) ||
       planHasFocus;
 
     var visibleSectionCount = 0;
@@ -37394,28 +35473,6 @@ function geodeFormatPlanRationaleContextBlock(snap, sym) {
     );
   }
 
-  var al = snap.alignment && typeof snap.alignment === 'object' ? snap.alignment : {};
-  if (al.active) {
-    lines.push(
-      'Reality shift: active this month' +
-        (al.summary ? ' (' + String(al.summary) + ')' : '') +
-        '. For adjusted steps, state BOTH the usual plan amount and the Reality-adjusted amount for this month only. The usual plan remains available.'
-    );
-  } else {
-    lines.push('Reality shift: not active; use usual plan amounts only.');
-  }
-
-  var adjByIx = {};
-  if (al.active && Array.isArray(al.stepAdjustments)) {
-    var ai;
-    for (ai = 0; ai < al.stepAdjustments.length; ai++) {
-      var adjRow = al.stepAdjustments[ai];
-      if (adjRow && typeof adjRow.stepIndex === 'number') {
-        adjByIx[adjRow.stepIndex] = adjRow;
-      }
-    }
-  }
-
   var steps = Array.isArray(snap.steps) ? snap.steps : [];
   var stepLimit = Math.min(3, steps.length);
   if (!stepLimit) {
@@ -37431,19 +35488,9 @@ function geodeFormatPlanRationaleContextBlock(snap, sym) {
     for (si = 0; si < stepLimit; si++) {
       var st = steps[si];
       if (!st) continue;
-      var stIx = st.index != null ? st.index : si;
       var lbl = String(st.label || '').replace(/\u2011/g, '-');
       var usualAmt = Math.round(toNum(st.amount));
       var row = '  ' + (si + 1) + '. ' + lbl + ' | usual plan: ' + sym + usualAmt;
-      var stAdj = adjByIx[stIx];
-      if (stAdj) {
-        if (String(stAdj.action) === 'pause') {
-          row += ' | Reality view this month: paused';
-        } else {
-          row += ' | Reality view this month: ' + sym + Math.round(toNum(stAdj.displayAmount));
-        }
-        row += ' (baseline at approval: ' + sym + Math.round(toNum(stAdj.baselineAmount)) + ')';
-      }
       lines.push(row);
       var whyLine = st.reasonHeadline || st.reasonDetail || st.notePlain || '';
       whyLine = geodePlanRationaleTruncateLine(whyLine, 160);
@@ -37502,22 +35549,11 @@ function geodeFormatPlanRationaleContextBlock(snap, sym) {
     'Assistant rules: For goals, buffer, and investing, skipping may slow progress; do not quantify months or amounts skipped.'
   );
   lines.push(
-    'Assistant rules: If the month looks tight or a Reality shift is active, favour flexibility and smaller steps; suggest reviewing Plan or refreshing Reality — do not simulate a new plan.'
+    'Assistant rules: If the month looks tight, favour flexibility and smaller steps; suggest reviewing Plan — do not simulate a new plan.'
   );
-  if (al.active) {
-    lines.push(
-      'Assistant rules: Never describe only the usual plan amount for a Reality-adjusted step; include both usual and Reality-adjusted views.'
-    );
-    lines.push(
-      'Assistant rules: Reality-adjusted amounts are this month\'s view only; not a skip simulation.'
-    );
-  }
-  var rv = snap.reality && typeof snap.reality === 'object' ? snap.reality : {};
-  if (!rv.hasData) {
-    lines.push('Assistant rules: No balance sense-check this month; avoid stating affordability as fact.');
-  } else if (rv.activitySinceCheck) {
-    lines.push('Assistant rules: Balance check may be outdated after recent activity.');
-  }
+  lines.push(
+    'Assistant rules: Any balance the user entered is a dated snapshot, not checked against the plan; avoid stating affordability as fact.'
+  );
 
   var out = lines.join('\n');
   if (out.length > MAX_BLOCK) out = out.slice(0, MAX_BLOCK - 3) + '...';
@@ -37691,48 +35727,22 @@ function geodeBuildCoachingContext() {
     }
     if (!rs) rs = { hasData: false };
 
-    var balanceCtxLines = ['BALANCE SENSE-CHECK (optional, user entered)'];
+    // The balance is a dated snapshot the user typed in. It is never compared with the plan here.
+    var balanceCtxLines = ['BALANCE YOU ENTERED (optional, user entered; not compared with the plan)'];
     if (!rs.hasData) {
-      balanceCtxLines.push('Balance you added: none this month');
-      balanceCtxLines.push('Plan leftover this month (estimate): ' + sym + Math.round(left));
+      balanceCtxLines.push('User-entered balance snapshot: none this month.');
     } else {
-      var balAmt = 0;
-      try {
-        if (S.realityCheck && S.realityCheck.amount != null && !isNaN(Number(S.realityCheck.amount))) {
-          balAmt = Number(S.realityCheck.amount);
-        }
-      } catch (_eBal) {}
-      balanceCtxLines.push('Balance you added: ' + sym + Math.round(balAmt));
-      balanceCtxLines.push('Checked: ' + geodeRealityLastCheckedLabel(rs.daysOld));
-      balanceCtxLines.push('Plan leftover this month (estimate): ' + sym + Math.round(left));
-      var gap = typeof rs.gap === 'number' ? rs.gap : null;
-      if (gap != null && isFinite(gap)) {
-        var gapAbs = Math.abs(gap);
-        if (gapAbs <= 50) {
-          balanceCtxLines.push('Compared with your plan: close');
-        } else if (gap > 50) {
-          balanceCtxLines.push('Compared with your plan: about ' + sym + Math.round(gapAbs) + ' more room');
-        } else {
-          balanceCtxLines.push('Compared with your plan: about ' + sym + Math.round(gapAbs) + ' tighter');
-        }
-      }
-      var senseLabel = 'Go gently here';
-      if (rs.confidence === 'high' && !rs.activitySinceCheck) {
-        senseLabel = 'Looks steady';
-      } else if (rs.confidence === 'moderate' || (typeof rs.daysOld === 'number' && rs.daysOld > 3)) {
-        senseLabel = 'Worth another look';
-      }
-      balanceCtxLines.push(senseLabel);
-      if (rs.activitySinceCheck) {
-        balanceCtxLines.push('A few things changed after this balance was added.');
-      }
+      var balDay = geodeRealityRecordedDay(rs);
+      balanceCtxLines.push(
+        'User-entered balance snapshot: ' + sym + Math.round(toNum(rs.amount)) + (balDay ? ' on ' + balDay : '') + '.'
+      );
     }
     var balanceBlock = balanceCtxLines.join('\n');
 
     var paoBlock = '';
     try {
       var paoAsk = assessPressure(S);
-      paoBlock = geodeFormatAskBeyndPaoContextBlock(paoAsk, rs);
+      paoBlock = geodeFormatAskBeyndPaoContextBlock(paoAsk);
     } catch (_ePaoAskCtx) {}
 
     var ctx = [
@@ -37742,6 +35752,7 @@ function geodeBuildCoachingContext() {
       'Dependants: ' + deps,
       'Net worth: ' + sym + Math.round(net),
       'Monthly spending total: ' + sym + Math.round(tSpend),
+      'Plan leftover this month (estimate): ' + sym + Math.round(left),
       '',
       balanceBlock,
       '',
@@ -38041,14 +36052,6 @@ function geodeGetAskBeyndModeCopyFallback(mode) {
         'What would make this payment feel safer?',
         'What trade-offs should I consider?',
         'What does my plan assume I still have room for?'
-      ]
-    },
-    reality_mismatch: {
-      intro: 'Your plan and balance check tell slightly different stories. I can help you think through that.',
-      starters: [
-        'Help me understand this gap.',
-        'What might have changed since my balance check?',
-        'Should I adjust anything, or just watch for now?'
       ]
     },
     still_deciding: {
@@ -39646,11 +37649,11 @@ function rHome() {
         escHtmlLite('Your first plan is ready') +
         '</div>' +
         '<div data-geode-css="font-size:11px;color:rgba(237,234,255,0.82);line-height:1.45;margin-bottom:12px">' +
-        escHtmlLite('Want to sense-check it against today? Reality check is optional and manual.') +
+        escHtmlLite('Want to note the balance you see today? It is optional and manual; your plan is tracked separately.') +
         '</div>' +
         '<div data-geode-css="display:flex;gap:8px;flex-wrap:wrap">' +
         '<button type="button" class="btn btn-p" data-geode-css="flex:1;min-width:120px" onclick="geodePostQsRealityCheckNow()">' +
-        escHtmlLite('Check reality') +
+        escHtmlLite('Add a balance') +
         '</button>' +
         '<button type="button" class="btn btn-s" data-geode-css="flex:1;min-width:100px" onclick="geodeDismissPostQsRealityPrompt()">' +
         escHtmlLite('Not now') +
@@ -40171,27 +38174,23 @@ function rPlan() {
     h += geodePlanPageStyleSectionHtml();
 
     h +=
-      '<div tabindex="0" role="button" onclick="geodeNavigateToReality(\'plan\')" onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeNavigateToReality(\'plan\');}}catch(__rp){}" data-geode-css="margin:0 0 14px;padding:10px 12px;border-radius:11px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);cursor:pointer;outline:none" aria-label="Sense-check this month\u2019s plan">' +
+      '<div tabindex="0" role="button" onclick="geodeNavigateToReality(\'plan\')" onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeNavigateToReality(\'plan\');}}catch(__rp){}" data-geode-css="margin:0 0 14px;padding:10px 12px;border-radius:11px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);cursor:pointer;outline:none" aria-label="Note the balance you see today">' +
       '<div data-geode-css="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">' +
       '<div data-geode-css="min-width:0">' +
       '<div data-geode-css="font-size:9px;font-weight:700;color:var(--tx-3);letter-spacing:0.9px;text-transform:uppercase;margin-bottom:4px;opacity:0.85">' +
-      escHtmlLite('Sense-check against Reality') +
+      escHtmlLite('Reality') +
       '</div>' +
       '<div data-geode-css="font-size:11px;color:rgba(189,183,220,0.72);line-height:1.4">' +
-      escHtmlLite('Sense-check this month\u2019s plan.') +
+      escHtmlLite('Note the balance you see today. Your plan is tracked separately.') +
       '</div></div>' +
       '<span data-geode-css="font-size:16px;color:rgba(189,183,220,0.45);line-height:1;margin-top:2px;flex-shrink:0" aria-hidden="true">\u203a</span>' +
       '</div></div>';
-
-    h += geodeRealityPlanAlignmentPlanBannerHtml();
 
     var _planLeftover = calcMonthlyLeftover(S);
     if (_planLeftover >= 0) {
       h += geodePlanPageOverviewHtml(plan);
       var _paceNote = '';
       try {
-        var _rsPlan = geodeRealityStatus();
-        if (!_rsPlan) _rsPlan = { hasData: false };
         var _plAlign = geodeHomePressureLevel();
         var _paceOpts = {
           skipStrongAlignment: _plAlign === 'strong',
@@ -40201,7 +38200,7 @@ function rPlan() {
         try {
           if (geodeGetIncomeContext(S) === 'IRREGULAR') _paceOpts.hasIrregularHint = true;
         } catch (_ePaceIr) {}
-        _paceNote = geodeFormatPlanPagePacingNote(assessPressure(S), _rsPlan, _paceOpts);
+        _paceNote = geodeFormatPlanPagePacingNote(assessPressure(S), _paceOpts);
       } catch (_ePacePlan) {}
       try {
         geodeCrossSurfacePacingSessionWriteFromNote(_paceNote);
@@ -41099,7 +39098,7 @@ function rMoney() {
     '</div>' +
     '</div>';
   h +=
-    '<div tabindex="0" role="button" onclick="geodeNavigateToReality(\'money\')" onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeNavigateToReality(\'money\');}}catch(__rk){}" data-geode-css="margin:0 0 14px;padding:12px 14px;border-radius:13px;border:1px solid rgba(155,127,232,0.22);background:rgba(155,127,232,0.06);cursor:pointer" aria-label="This month balance check">' +
+    '<div tabindex="0" role="button" onclick="geodeNavigateToReality(\'money\')" onkeydown="try{if(event&&((event.key||\'\')===\'Enter\'||(event.key||\'\')===\' \')){event.preventDefault();geodeNavigateToReality(\'money\');}}catch(__rk){}" data-geode-css="margin:0 0 14px;padding:12px 14px;border-radius:13px;border:1px solid rgba(155,127,232,0.22);background:rgba(155,127,232,0.06);cursor:pointer" aria-label="This month: the balance you noted">' +
     '<div data-geode-css="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">' +
     '<div data-geode-css="min-width:0">' +
     '<div data-geode-css="font-size:10px;font-weight:700;color:rgba(155,127,232,0.95);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px">' +
@@ -41904,7 +39903,7 @@ function geodeQuickSetupRender() {
     body+='<div data-geode-css="font-size:11px;color:var(--tx-3);margin-bottom:8px;line-height:1.5">Rough figures are fine. Beynd will coach from here.</div>';
     body+=
       '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.4;margin-bottom:14px;opacity:0.88">' +
-      escHtmlLite('Your first plan is based on what you enter. You can sense-check later in Money \u2014 Reality (optional, manual).') +
+      escHtmlLite('Your first plan is based on what you enter. You can note a balance later in Money \u2014 Reality (optional, manual).') +
       '</div>';
     var exp=qd.expenses||{};
     [['housing','Housing / rent','Rent or mortgage'],['food','Food and groceries','Weekly shop x 4'],
