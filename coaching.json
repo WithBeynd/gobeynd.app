@@ -94,7 +94,7 @@
     }
   },
   "sinceLastVisit": {
-    "updated": "You made updates recently. Your plan has adjusted.",
+    "updated": "You made updates since your last visit.",
     "noIncomeUpdated": "You made updates recently. Your snapshot reflects those changes.",
     "stale": "It\u2019s been a few days. Your plan still reflects your last setup.",
     "noIncomeStale": "It\u2019s been a few days. Your last setup is still what we\u2019re showing.",
@@ -136,17 +136,17 @@
       "explain": "Scheduled payments and expenses count against income, so a negative left-this-month means the plan reads strained for this month."
     },
     "spending_update": {
-      "title": "Spending",
+      "title": "Expense plan",
       "type": "neutral",
       "topic": "spending_update",
       "variants": [
-        "Left this month shifted after that spending change.",
-        "Spending moved \u2014 quick check on left this month.",
-        "Spending totals changed \u2014 plan room moved with them."
+        "Left this month on your plan moved with that expense change.",
+        "Your expense plan changed \u2014 quick check on left this month.",
+        "Expense plan totals changed \u2014 plan room moved with them."
       ],
-      "strongMessage": "Spending shifted \u2014 left this month reads tighter on your plan.",
-      "mildMessage": "Spending nudged up \u2014 left this month moved.",
-      "easedMessage": "Spending eased a little \u2014 a bit more left this month.",
+      "strongMessage": "Your expense plan changed \u2014 this month reads tight on your plan.",
+      "mildMessage": "Your expense plan changed \u2014 left this month on your plan moved.",
+      "easedMessage": "Your expense plan changed \u2014 left this month on your plan moved.",
       "explain": "Expenses count toward monthly outflows, so they change left this month on your plan until the month resets."
     },
     "debt_action_home": {

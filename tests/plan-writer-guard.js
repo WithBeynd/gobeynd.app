@@ -581,6 +581,17 @@ function checksFor(src) {
   check('changes.wording', 'Their documentation describes plan movement only: never spent, spending, logged, transaction, better or worse',
     (chDocs.match(/\bspent\b|spending|\blogged\b|transaction|\bbetter\b|\bworse\b/gi) || []), []);
 
+  section('PLAN CHANGE EXPLANATION (P3-4E) — the words come from model.changes alone; no confirmed-only narrative survives');
+  const EX_PURE = ['geodeMonthChangeView', 'geodeMonthChangeDay'];
+  check('explain.changes-only', 'Only the detail view builds the explanation, and from model.changes',
+    [callersOf('geodeMonthChangeView'), /changes: geodeMonthChangeView\(model\.changes\)/.test(body('geodeMonthDetailView'))], [['geodeMonthDetailView'], true]);
+  check('explain.pure', 'The explanation reads no record, plan row, income, ledger, gap, snapshot, activity log, page state, clock or storage, and writes nothing',
+    EX_PURE.map(n => [n, /monthBaseline|\.payments\b|\.expenses\b|\.income\b|Events\b|expectationGaps|lastSnapshot|activityLog|(?<![\w$.])(?:S|state|model)\b|Date\.now|new Date\(\)|localStorage|sessionStorage|document|(?:changes|c)\s*(?:\.\s*[\w$]+|\[[^\]]+\])+\s*(?:=(?!=)|\+\+|--|[-+*/]=)/.test(body(n))]),
+    EX_PURE.map(n => [n, false]));
+  check('explain.confirmed-only', 'calcMonthlyLeftoverConfirmedOnly serves only the affordability engine and the snapshot record; no surface compares a stored confirmed-only remainder',
+    [callersOf('calcMonthlyLeftoverConfirmedOnly').slice().sort(), /(?:ls|base|prev|_pendingCompareBaseline)\s*\.\s*leftThisMonth/.test(M.noComments)],
+    [['computeAffordabilityContext', 'extendLastSnapshotFigures'], false]);
+
   section('HANDLERS AND PURE MODULES — no plan write outside the inline functions');
   const handlerWrites = [];
   const handlerRe = /\son[a-z]+\s*=\s*(\\?["'])([\s\S]*?)\1/g;
@@ -660,7 +671,12 @@ const MUTANTS = {
   'changes repair the record': ["  if (!current) return { available: false, reason: 'plan_not_ready' };", "  if (!current) return { available: false, reason: 'plan_not_ready' };\n  baseline.kind = 'first_observed';"],
   'second copy of the component math': ['    outgoings: c.outgoings,', '    outgoings: model.plan.paymentsCountedTotal - c.allocations - c.fromEarlier,'],
   'comparison reads the clock': ['  var status = geodeMonthBaselineStatus(baseline, ym);', '  var status = geodeMonthBaselineStatus(baseline, currentYM());'],
-  'prepare after the action opens': ['  geodeMonthBaselinePrepare();\n  var token = ++_geodeFinancialActionSeq;', '  var token = ++_geodeFinancialActionSeq;\n  geodeMonthBaselinePrepare();']
+  'prepare after the action opens': ['  geodeMonthBaselinePrepare();\n  var token = ++_geodeFinancialActionSeq;', '  var token = ++_geodeFinancialActionSeq;\n  geodeMonthBaselinePrepare();'],
+  'explanation reads the record': ['  var rows = [];\n  var planned = false;', '  var rows = [];\n  var planned = !!S.monthBaseline;'],
+  'explanation rewrites the model': ['    if (c.baseline !== 0) planned = true;', '    if (c.baseline !== 0) planned = true;\n    c.changed = true;'],
+  'explanation from the page state': ['    changes: geodeMonthChangeView(model.changes)', '    changes: geodeMonthChangeView(geodeLivingMonthModel(S, Date.now()).changes)'],
+  'confirmed-only comparison returns': ['  var dn = geodeSnapshotFiguresSameVersion(ls, cur) ? cur.netWorth - ls.netWorth : 0;',
+    '  var dn = geodeSnapshotFiguresSameVersion(ls, cur) ? cur.netWorth - ls.netWorth : 0;\n  if (calcMonthlyLeftoverConfirmedOnly(S) < ls.leftThisMonth) return \'Less left this month.\';']
 };
 
 function main() {

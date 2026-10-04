@@ -3818,161 +3818,10 @@ function geodeSnapshotFiguresEffectivelyEmpty(fig) {
   return true;
 }
 
-function getSinceLastUpdateSummary(dashboardProminent) {
-  var ls = _pendingCompareBaseline != null ? _pendingCompareBaseline : S.lastSnapshot;
-  if (!ls || typeof ls !== 'object') return '';
-  if (typeof ls.totalDebt !== 'number' || typeof ls.totalSaved !== 'number' || typeof ls.totalInvestments !== 'number' || typeof ls.netWorth !== 'number') return '';
-  if (isEmptyFinancialProfile(S)) return '';
-  var cur = computeSnapshotFigures();
-  var curFull = extendLastSnapshotFigures(cur);
-  if (geodeSnapshotFiguresEffectivelyEmpty(ls) && geodeSnapshotFiguresEffectivelyEmpty(curFull)) return '';
-  var cls = dashboardProminent ? 'dash-progress-line dash-progress-line--prominent' : 'dash-progress-line';
-  var dd = cur.totalDebt - ls.totalDebt;
-  if (dd < 0) return '<div class="' + cls + '">Since your last update, your debt is down ' + fm(Math.abs(dd)) + '.</div>';
-  var cmpSn = geodeSnapshotFiguresSameVersion(ls, cur);
-  if (cmpSn) {
-    var ds = cur.totalSaved - ls.totalSaved;
-    if (ds > 0) return '<div class="' + cls + '">Since your last update, your savings are up ' + fm(ds) + '.</div>';
-    var di = cur.totalInvestments - ls.totalInvestments;
-    if (di > 0 && !geodeIsNoIncomeMode()) {
-      return '<div class="' + cls + '">Since your last update, your investments are up ' + fm(di) + '.</div>';
-    }
-  }
-  if (typeof ls.leftThisMonth === 'number' && !geodeIsNoIncomeMode()) {
-    var curLeft = calcMonthlyLeftoverConfirmedOnly(S);
-    var dLeft = curLeft - ls.leftThisMonth;
-    if (dLeft > 0) return '<div class="' + cls + '">Since your last update, you have ' + fm(dLeft) + ' more left this month.</div>';
-    if (dLeft < 0) return '<div class="' + cls + '">Since your last update, you have ' + fm(Math.abs(dLeft)) + ' less left this month.</div>';
-  }
-  if (geodeSnapshotFiguresEffectivelyEmpty(ls) || geodeSnapshotFiguresEffectivelyEmpty(curFull)) return '';
-  return '<div class="' + cls + '">Since your last update, there\'s been little change.</div>';
-}
-
-/** Dashboard only: prominent “since last update”, then optional month-over-month line (no duplicate net-worth story). */
-function getDashboardProgressSummary() {
-  var since = getSinceLastUpdateSummary(true);
-  var monthly = getMonthlyProgressSummary(true, true);
-  var out = '';
-  if (since) {
-    out +=
-      '<div class="dash-progress-card">' +
-      since +
-      '</div>';
-  }
-  var secondary = [];
-  if (monthly) secondary.push(monthly);
-  if (secondary.length) {
-    out +=
-      '<div class="dash-progress-secondary">' +
-      secondary.join('') +
-      '</div>';
-  }
-  return out;
-}
-
-/** Dashboard V2: one line under net worth from last snapshot vs current (display-only). */
-function geodeDashboardV2NetWorthTrendLine() {
-  var ls = S.lastSnapshot;
-  var cur = computeSnapshotFigures();
-  if (!ls || typeof ls.netWorth !== 'number') {
-    return '<div class="dash-trend-line">No change since last update</div>';
-  }
-  if (!geodeSnapshotFiguresSameVersion(ls, cur)) {
-    return '<div class="dash-trend-line">Net worth updated. Open Money for the latest breakdown.</div>';
-  }
-  var eps = 5;
-  var dn = cur.netWorth - ls.netWorth;
-  if (Math.abs(dn) < eps) {
-    return '<div class="dash-trend-line">No change since last update</div>';
-  }
-  var sign = dn > 0 ? '+' : '';
-  return (
-    '<div class="dash-trend-line ' +
-    (dn >= 0 ? 'dash-trend-line--good' : 'dash-trend-line--bad') +
-    '">' +
-    escHtmlLite(sign + fm(dn) + ' since last update') +
-    '</div>'
-  );
-}
-
-/** Dashboard V2: “Since your last update” three-line block (reads snapshot vs current only). */
-function geodeDashboardV2SinceLastUpdateBlock() {
-  var ls = _pendingCompareBaseline != null ? _pendingCompareBaseline : S.lastSnapshot;
-  var cur = extendLastSnapshotFigures(computeSnapshotFigures());
-  var hdr =
-    '<div class="dash-update-title">Since your last update</div>';
-  if (!ls || typeof ls.totalDebt !== 'number') {
-    return (
-      '<div class="dash-update-card">' +
-      hdr +
-      '<div class="dash-update-copy">Save a money change to see saved, spending, and net impact here.</div></div>'
-    );
-  }
-  if (geodeSnapshotFiguresEffectivelyEmpty(ls) && geodeSnapshotFiguresEffectivelyEmpty(cur)) return '';
-  var eps = 5;
-  var cmpBlk = geodeSnapshotFiguresSameVersion(ls, cur);
-  var ds = cmpBlk ? cur.totalSaved - ls.totalSaved : 0;
-  var curLeft = calcMonthlyLeftoverConfirmedOnly(S);
-  var hasLeft = typeof ls.leftThisMonth === 'number' && !geodeIsNoIncomeMode();
-  var dLeft = hasLeft ? curLeft - ls.leftThisMonth : 0;
-  var dn = cmpBlk ? cur.netWorth - ls.netWorth : 0;
-
-  var l1;
-  if (!cmpBlk) l1 = '—';
-  else if (Math.abs(ds) < eps) l1 = fm(0) + ' saved';
-  else if (ds > 0) l1 = '+' + fm(ds) + ' saved';
-  else l1 = '-' + fm(Math.abs(ds)) + ' saved';
-  var c1 = !cmpBlk ? 'rgba(189,183,220,0.45)' : ds >= 0 ? '#34d5a0' : '#f07070';
-
-  var l2;
-  var c2;
-  if (hasLeft && Math.abs(dLeft) >= eps) {
-    if (dLeft < 0) {
-      l2 = '-' + fm(Math.abs(dLeft)) + ' spent';
-      c2 = '#f5c234';
-    } else {
-      l2 = '+' + fm(dLeft) + ' plan room';
-      c2 = '#34d5a0';
-    }
-  } else {
-    l2 = '—';
-    c2 = 'rgba(189,183,220,0.45)';
-  }
-
-  var l3 = !cmpBlk ? '—' : dn >= 0 ? 'Net: +' + fm(Math.abs(dn)) : 'Net: ' + fm(dn);
-  var c3 = !cmpBlk ? 'rgba(189,183,220,0.45)' : dn >= 0 ? '#34d5a0' : '#f07070';
-
-  function toneClass(color) {
-    if (color === '#34d5a0') return ' t-ok';
-    if (color === '#f07070') return ' t-danger';
-    if (color === '#f5c234') return ' t-warn';
-    return ' t-faint';
-  }
-  function row(label, val, color) {
-    return (
-      '<div class="dash-update-row">' +
-      '<span class="dash-update-label">' +
-      escHtmlLite(label) +
-      '</span>' +
-      '<span class="dash-update-value' +
-      toneClass(color) +
-      '">' +
-      escHtmlLite(val) +
-      '</span></div>'
-    );
-  }
-
-  return (
-    '<div class="dash-update-card dash-update-card--accent">' +
-    hdr +
-    row('Money saved', l1, c1) +
-    row('Spending change', l2, c2) +
-    row('Net impact', l3, c3) +
-    '</div>'
-  );
-}
-
-/** Dashboard V2: single behavioural line from snapshot deltas (display-only). */
+/**
+ * Dashboard V2: single line from snapshot deltas (display-only). Debt and net worth only: month-plan movement is the
+ * Living Month's to explain (P3-4E), never a confirmed-only remainder read as spending.
+ */
 function geodeDashboardV2SingleInsight() {
   var ls = S.lastSnapshot;
   var cur = extendLastSnapshotFigures(computeSnapshotFigures());
@@ -3982,10 +3831,7 @@ function geodeDashboardV2SingleInsight() {
   var eps = 5;
   var dd = cur.totalDebt - ls.totalDebt;
   var dn = geodeSnapshotFiguresSameVersion(ls, cur) ? cur.netWorth - ls.netWorth : 0;
-  var curLeft = calcMonthlyLeftoverConfirmedOnly(S);
-  var dLeft = typeof ls.leftThisMonth === 'number' && !geodeIsNoIncomeMode() ? curLeft - ls.leftThisMonth : 0;
   if (dd < -eps) return 'You reduced your debt since your last update.';
-  if (dLeft < -eps) return 'Spending increased. Worth a quick look at your plan.';
   if (geodeSnapshotFiguresSameVersion(ls, cur)) {
     if (dn < -eps) return 'Net worth dipped. Review debt and cash flow when you have a moment.';
     if (dn > eps) return 'Net worth is up since your last update.';
@@ -4046,12 +3892,13 @@ function geodeMicroConfirmPickMessage(kind, extras) {
   return '';
 }
 
-/** Micro-confirmation first, then Stage J delta line, then default (same snapshot hooks as before). */
+/**
+ * Micro-confirmation first, then the default. No before/after comparison: a save is not read as a change to the month
+ * (P3-4E — plan changes are the Living Month's to explain).
+ */
 function geodeStageLToastAfterSave(defaultMsg, kind, extras) {
   var micro = geodeMicroConfirmPickMessage(kind || '', extras || {});
   if (micro) return micro;
-  var jLine = geodeStageJToastAfterSave(defaultMsg);
-  if (jLine && String(jLine).trim() !== '') return jLine;
   return defaultMsg || '';
 }
 
@@ -11538,7 +11385,7 @@ function geodeRenderSinceLastVisit(prevVisitTs) {
   if (geodeActivityLogSince(prevVisitTs)) {
     msg = geodeIsNoIncomeMode()
       ? geodeCopy('sinceLastVisit.noIncomeUpdated', 'You made updates recently. Your snapshot reflects those changes.')
-      : geodeCopy('sinceLastVisit.updated', 'You made updates recently. Your plan has adjusted.');
+      : geodeCopy('sinceLastVisit.updated', 'You made updates since your last visit.');
   } else if (now - prevVisitTs > 3 * 24 * 60 * 60 * 1000) {
     msg = geodeIsNoIncomeMode()
       ? geodeCopy('sinceLastVisit.noIncomeStale', 'It\u2019s been a few days. Your last setup is still what we\u2019re showing.')
@@ -12722,32 +12569,6 @@ function mintCost(debt) { return monthlyInterest(debt && debt.apr, debt && debt.
 function annInt() { return S.debts.reduce(function(s,d){ return s + mintCost(d)*12; }, 0); }
 
 // ── TOAST ─────────────────────────────────────────
-/** Stage J: one-line feedback after a real save; uses snapshot baseline from setLastSnapshotBeforeChange + save(). */
-function geodeStageJToastAfterSave(defaultMsg) {
-  var base = _pendingCompareBaseline;
-  var now = extendLastSnapshotFigures(computeSnapshotFigures());
-  if (!base || typeof base.leftThisMonth !== 'number') {
-    return defaultMsg || '';
-  }
-  var eps = 0.5;
-  var dLeft = now.leftThisMonth - base.leftThisMonth;
-  if (Math.abs(dLeft) >= eps) {
-    var arrow = dLeft > 0 ? '\u2191' : '\u2193';
-    return 'Left this month ' + arrow + ' ' + fm(Math.abs(dLeft));
-  }
-  var dNW = geodeSnapshotFiguresSameVersion(base, now) ? now.netWorth - base.netWorth : 0;
-  var assetsMoved =
-    geodeSnapshotFiguresSameVersion(base, now) &&
-    Math.abs(now.totalSaved + now.totalInvestments - base.totalSaved - base.totalInvestments) >= 3;
-  if (
-    (geodeSnapshotFiguresSameVersion(base, now) && Math.abs(dNW) >= 3) ||
-    Math.abs(now.totalDebt - base.totalDebt) >= 3 ||
-    assetsMoved
-  ) {
-    return 'Your plan numbers shifted.';
-  }
-  return defaultMsg || '';
-}
 
 var GEODE_COMPLETION_NOTE_MS = 3000;
 var GEODE_DEBT_DUAL_LEDGER_TOAST_MS = 3000;
@@ -12919,9 +12740,9 @@ function geodeSuccessToast(msg) {
 function checkAlerts() {
   if (geodeShouldSuppressPostSaveAlerts()) return;
   syncRecurringPayments();
-  var left = calcMonthlyLeftoverConfirmedOnly(S);
+  var left = calcMonthlyLeftover(S);
   var inc = toNum(S.income);
-  if (left < 0) toast('Left this month is ' + fm(Math.abs(left)) + ' below your plan.', 'warn');
+  if (left < 0) toast('Your current plan is ' + fm(Math.abs(left)) + ' over.', 'warn');
   else if (geodeHasPositiveIncome() && left < inc * 0.1)
     toast('Left this month is tight: ' + fm(left) + ' on your plan.', 'warn');
 }
@@ -15654,18 +15475,18 @@ function geodeSyntheticCashPressure() {
 function geodeSyntheticSpending(latest, pressure) {
   var reps = geodeNudgeRepeatIndex('spending_update', 12);
   var msgs = geodeCopy('nudges.spending_update.variants', [
-    'Left this month shifted after that spending change.',
-    'Spending moved \u2014 quick check on left this month.',
-    'Spending totals changed \u2014 plan room moved with them.'
+    'Left this month on your plan moved with that expense change.',
+    'Your expense plan changed \u2014 quick check on left this month.',
+    'Expense plan totals changed \u2014 plan room moved with them.'
   ]);
   var msg = msgs[reps % msgs.length];
   var d = latest ? toNum(latest.delta) : 0;
   if (d > 0 && pressure === 'strong')
-    msg = geodeCopy('nudges.spending_update.strongMessage', 'Spending shifted \u2014 left this month reads tighter on your plan.');
-  else if (d > 0 && pressure === 'mild') msg = geodeCopy('nudges.spending_update.mildMessage', 'Spending nudged up \u2014 left this month moved.');
-  else if (d < 0 && pressure === 'ok') msg = geodeCopy('nudges.spending_update.easedMessage', 'Spending eased a little \u2014 a bit more left this month.');
+    msg = geodeCopy('nudges.spending_update.strongMessage', 'Your expense plan changed \u2014 this month reads tight on your plan.');
+  else if (d > 0 && pressure === 'mild') msg = geodeCopy('nudges.spending_update.mildMessage', 'Your expense plan changed \u2014 left this month on your plan moved.');
+  else if (d < 0 && pressure === 'ok') msg = geodeCopy('nudges.spending_update.easedMessage', 'Your expense plan changed \u2014 left this month on your plan moved.');
   return {
-    title: geodeCopy('nudges.spending_update.title', 'Spending'),
+    title: geodeCopy('nudges.spending_update.title', 'Expense plan'),
     message: msg,
     type: pressure === 'strong' ? 'warning' : 'neutral',
     topic: geodeCopy('nudges.spending_update.topic', 'spending_update'),
@@ -38594,6 +38415,50 @@ function geodeMonthPulseDay(iso) {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) && month ? Number(s.slice(8, 10)) + ' ' + month.slice(0, 3) : '';
 }
 
+/** P3-4E: "8 Oct" for the local day of an epoch-ms instant the model supplies, or ''. Reads no clock. */
+function geodeMonthChangeDay(ms) {
+  if (typeof ms !== 'number' || !isFinite(ms)) return '';
+  var t = new Date(ms);
+  return geodeMonthPulseDay(t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2));
+}
+
+/**
+ * P3-4E: what the Living Month says about plan changes, read from model.changes alone — or null when they are
+ * unavailable, or when the baseline holds no plan at all (every component £0, as before a first setup): there is
+ * nothing to compare with. Plan language only: each amount is the model's own delta, shown as its size with "higher"
+ * or "lower"; unchanged components are left out. A plan that changed while its remainder did not is said to have
+ * changed — never "no change".
+ */
+function geodeMonthChangeView(changes) {
+  if (!changes || changes.available !== true || !changes.baseline || !changes.components) return null;
+  var labels = [['income', 'Planned income'], ['outgoings', 'Scheduled payments'], ['allocations', 'Planned contributions'],
+    ['fromEarlier', 'From earlier months'], ['expensesRegular', 'Regular expense plan'], ['expensesOneOff', 'One-off expense plan']];
+  var rows = [];
+  var planned = false;
+  for (var i = 0; i < labels.length; i++) {
+    var c = changes.components[labels[i][0]];
+    if (!c || typeof c.delta !== 'number' || !isFinite(c.delta) || typeof c.baseline !== 'number') return null;
+    if (c.baseline !== 0) planned = true;
+    if (c.changed) rows.push({ key: labels[i][0], label: labels[i][1], text: fmExact(Math.abs(c.delta)) + (c.delta > 0 ? ' higher' : ' lower') });
+  }
+  if (!planned || typeof changes.monthlyLeftDelta !== 'number' || !isFinite(changes.monthlyLeftDelta)) return null;
+  var month = geodeMonthPulseMonthName(changes.baseline.ym);
+  var opened = changes.baseline.kind === 'month_open';
+  var day = opened ? '' : geodeMonthChangeDay(changes.baseline.observedAt);
+  if (!month || (!opened && (changes.baseline.kind !== 'first_observed' || !day))) return null;
+  var moved = changes.direction === 'higher' || changes.direction === 'lower';
+  var remainder = moved ? 'Your plan remainder is ' + fmExact(Math.abs(changes.monthlyLeftDelta)) + ' ' + changes.direction + ' ' : '';
+  return {
+    changed: changes.changed === true,
+    cue: moved ? remainder + (opened ? 'since the start of ' + month : 'since ' + day) + '.' : '',
+    summary: moved ? remainder + (opened ? 'since the start of ' + month : 'since Beynd first recorded this month\u2019s plan on ' + day) + '.'
+      : changes.changed === true
+        ? 'Your plan has changed ' + (opened ? 'since the start of ' + month : 'since Beynd first recorded it on ' + day) + ', but the overall plan remainder is unchanged.'
+        : 'Your month plan hasn\u2019t changed ' + (opened ? 'since the start of ' + month : 'since Beynd first recorded it on ' + day) + '.',
+    rows: rows
+  };
+}
+
 /**
  * P3-3 Happened vs Still ahead: the detail beneath the Month Pulse, from a ready Living Month model only.
  * Happened is payments.done (the completions Monthly Left counts, totalling doneTotal), then "also recorded": the model's
@@ -38627,7 +38492,8 @@ function geodeMonthDetailView(model) {
     ahead: byDueDate(payments.ahead),
     aheadTotal: payments.aheadTotal,
     unplaced: (payments.unplaced || []).slice(),
-    earlierGapCount: earlier.gapCount > 0 ? earlier.gapCount : 0
+    earlierGapCount: earlier.gapCount > 0 ? earlier.gapCount : 0,
+    changes: geodeMonthChangeView(model.changes)
   };
 }
 
@@ -38637,9 +38503,11 @@ function geodeMonthDetailView(model) {
  * is when Beynd recorded it. Contributions read as contributions, not spending; a debt payment never implies a balance;
  * a release is money released from a goal or investment; a valuation is a recorded value, not a flow. Amounts in the
  * right-hand column are exactly the items each section total counts.
+ * P3-4E: What changed follows Still ahead — the change view's sentence and its changed components, plan figures only.
  */
 function geodeMonthDetailHtml(d) {
-  if (!d || !(d.done.length || d.also.length || d.ahead.length || d.unplaced.length || d.earlierGapCount)) return '';
+  var changed = !!(d && d.changes && d.changes.changed);
+  if (!d || !(d.done.length || d.also.length || d.ahead.length || d.unplaced.length || d.earlierGapCount || changed)) return '';
   function kindLabel(x) {
     return x.kind === 'debt' ? 'Debt payment' : x.kind === 'goal_contribution' ? 'Goal contribution'
       : x.kind === 'investment_contribution' ? 'Investment contribution' : '';
@@ -38727,6 +38595,20 @@ function geodeMonthDetailHtml(d) {
     h += heading('Still ahead', '');
     h += note('Nothing still ahead.');
   }
+  if (d.changes) {
+    h += heading('What changed', '');
+    h += note(d.changes.summary);
+    if (d.changes.rows.length) {
+      h += list('changes', d.changes.rows.map(function (c) {
+        return (
+          '<li data-geode-css="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:7px 0;border-top:1px solid var(--bd)">' +
+          '<span data-geode-css="min-width:0;overflow-wrap:anywhere;font-size:12px;font-weight:600;color:var(--tx-1);line-height:1.4">' + escHtmlLite(c.label) + '</span>' +
+          '<span data-geode-css="flex-shrink:0;font-size:12px;color:var(--tx-2);white-space:nowrap">' + escHtmlLite(c.text) + '</span>' +
+          '</li>'
+        );
+      }));
+    }
+  }
   if (d.unplaced.length) {
     h += heading('Completed, month unknown', '');
     h += note('Not counted in this month\u2019s figures.');
@@ -38747,6 +38629,7 @@ function geodeMonthDetailHtml(d) {
  * balance or money that is safe to spend. Completed / still ahead are the model's done / ahead totals of scheduled
  * payments and contributions, not spending. Income received is not evidenced before P3-5, so no received figure is shown.
  * opts.dueShownElsewhere: Home's needs-attention card already lists the due items.
+ * P3-4E: one plan-change cue when the remainder moved — the change view's, never a figure formed here.
  */
 function geodeMonthPulseHtml(view, opts) {
   if (!view) return '';
@@ -38776,6 +38659,13 @@ function geodeMonthPulseHtml(view, opts) {
       '</span> <span data-geode-css="font-size:12px;color:var(--tx-2)">' +
       escHtmlLite('left if the month goes to plan') +
       '</span></div>';
+  }
+  var change = view.detail && view.detail.changes;
+  if (change && change.cue) {
+    h +=
+      '<div data-geode-month-pulse-change="1" data-geode-css="margin-top:6px;font-size:11px;color:var(--tx-2);line-height:1.45;overflow-wrap:anywhere">' +
+      escHtmlLite(change.cue) +
+      '</div>';
   }
   if (view.done.count || view.ahead.count) {
     var doneText = view.done.count ? fm(view.done.total) + ' completed' : 'Nothing completed yet';
@@ -38808,7 +38698,7 @@ function geodeMonthPulseHtml(view, opts) {
     h +=
       '<details data-geode-month-detail="1" data-geode-css="margin-top:10px">' +
       '<summary data-geode-css="font-size:11px;font-weight:600;color:rgba(155,127,232,0.88);cursor:pointer;line-height:1.45">' +
-      escHtmlLite('See what\u2019s happened and what\u2019s ahead') +
+      escHtmlLite(change && change.changed ? 'See what\u2019s happened, what\u2019s ahead and what changed' : 'See what\u2019s happened and what\u2019s ahead') +
       '</summary>' +
       detail +
       '</details>';
