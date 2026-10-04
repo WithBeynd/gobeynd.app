@@ -132,14 +132,19 @@ const PRODUCTION_FUNCTIONS = [
   // activity log
   'appendActivityLog', 'trimActivityLogForRetention',
   // modal commit guard (P1-CLOSE): the modal as openModal builds it and closeModal closes it, and its one commit
-  'openModal', 'removeModalDom', 'closeModal', 'geodeModalCommitOpen', 'geodeModalCommitBegin', 'geodeModalCommitRelease'
+  'openModal', 'removeModalDom', 'closeModal', 'geodeModalCommitOpen', 'geodeModalCommitBegin', 'geodeModalCommitRelease',
+  // month baseline (P3-4C): captured from the Living Month model inside the guarded write; nothing financial reads it
+  'geodeMonthBaselineMonthStart', 'geodeMonthBaselineValid', 'geodeMonthBaselineKind', 'geodeMonthBaselineStatus', 'geodeMonthBaselineFromModel',
+  'geodeMonthBaselineCapture', 'geodeMonthBaselinePrepare', 'geodeMonthBaselineStage', 'geodeLivingMonthModel',
+  'geodeLivingMonthCalendar', 'geodeLivingMonthIncome', 'geodeLivingMonthEvidenceIndex', 'geodeLivingMonthPaymentItem',
+  'geodeLivingMonthExpenses', 'geodeLivingMonthHappened', 'geodeLivingMonthEarlierGaps', 'geodeLivingMonthPaymentEvidence'
 ];
 
 /** Production top-level constants the extracted base functions read. */
 const BASE_CONSTANTS = ['GEODE_SCHEMA_VERSION', 'BEYND_RUNTIME_VERSION', '_geodeRuntimeStale', '_geodeFinancialKeySeen',
   '_geodeKnownRaw', '_geodeKnownRev', '_geodeRevN', '_geodeRevWriter', '_geodeBoundaryHoldAttempts', '_geodeBoundaryHoldNotice',
   '_geodeBoundaryHoldReady', '_geodeFinancialActionOpen', '_geodeFinancialActionSeq', '_geodeBoundaryChangedRows',
-  '_geodeCommittedText', '_geodeWriteFailedTask', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
+  '_geodeCommittedText', '_geodeWriteFailedTask', '_geodeMonthBaselinePending', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
 
 /**
  * Read-only structural checks: the reload and render shims below must mirror these production bodies, and the
@@ -185,7 +190,9 @@ var __store = null;
  */
 function save() {
   if (!geodeFinancialWriteAllowed()) return 'refused';
+  var actionWasOpen = !!_geodeFinancialActionOpen;
   geodeEndFinancialAction();
+  geodeMonthBaselineStage(actionWasOpen);
   __saving = true;
   try { return geodeStoreFinancialState(); } finally { __saving = false; }
 }
@@ -285,6 +292,7 @@ function __reload() {
   _geodeBoundaryHoldAttempts = 0; _geodeBoundaryHoldNotice = false; _geodeBoundaryHoldReady = false;
   _geodeFinancialActionOpen = 0; _geodeBoundaryChangedRows = null; _geodeWriteFailedTask = false;
   _geodeRevN = 0; _geodeRevWriter = geodeRevWriterToken(); // P2-10: a new page's revision counter and writer token
+  _geodeMonthBaselinePending = null; // P3-4C: page memory
   geodeNoteFinancialBoot(__store);
   S = JSON.parse(__store);
   S._schemaVersion = geodePersistedSchemaVersion(S._schemaVersion);
@@ -3687,7 +3695,9 @@ const carryView = (app, goalId) => {
 /** [toasts the action showed, stored state unchanged] */
 /** Toasts plus whether the action changed state. _rev is excluded: a refused action can still reach save(), and a successful save records a revision without being a financial edit. */
 const stateApartFromRev = s => { const c = JSON.parse(JSON.stringify(s)); delete c._rev; return c; };
-const attempt = (app, act) => { app.run('__toasts = [];'); const before = app.state(); act(app); return [JSON.parse(app.run('JSON.stringify(__toasts)')), same(stateApartFromRev(app.state()), stateApartFromRev(before))]; };
+/** A refused action changes nothing but write metadata: its write may record the month's first baseline (P3-4C), never change one. */
+const stateApartFromWrite = (s, before) => { const c = stateApartFromRev(s); if (before.monthBaseline === undefined) delete c.monthBaseline; return c; };
+const attempt = (app, act) => { app.run('__toasts = [];'); const before = app.state(); act(app); return [JSON.parse(app.run('JSON.stringify(__toasts)')), same(stateApartFromWrite(app.state(), before), stateApartFromRev(before))]; };
 /** The carry, if any, whose occurrence the row's paid state still is. */
 const heldCarry = (app, id) => JSON.parse(app.run('JSON.stringify(geodeContributionCarryForRow(S, geodeContributionEventSnapshot(S.payments.filter(function (p) { return p.id === ' + JSON.stringify(id) + '; })[0])))'));
 const REFUSED_AMOUNT = 'A contribution needs an amount above \u00a30. Nothing has been changed.';
@@ -4691,13 +4701,13 @@ function fa3ccCrash() {
       app.at(reopen); app.run('__reload()');
       const whole = new App(FA3CC_MIX, clock);
       whole.at(reopen); whole.run('__reload()');
-      const finance = s => Object.assign({}, s, { expectationGaps: null, expectationFloorYm: null, _rev: null });
-      const evidence = s => [s.expectationFloorYm, s.expectationGaps.map(g => [g.paymentId, g.fromYm, g.toYm])];
+      const finance = s => Object.assign({}, s, { expectationGaps: null, expectationFloorYm: null, _rev: null, monthBaseline: null });
+      const evidence = s => [s.expectationFloorYm, s.expectationGaps.map(g => [g.paymentId, g.fromYm, g.toYm]), (s.monthBaseline || {}).kind || null];
       return [committed, same(finance(app.state()), finance(whole.state())), app.snap().goal, evidence(app.state()), evidence(whole.state())];
     };
-    invariant('FA3CC.c2.crash.before-sync', 'The app dies after the schema-2 write but before the schema-3 transition, recurring sync and the recompute: reopening the same day or on 2 September (past the carries\' month) gives exactly the financial state of an uninterrupted boot followed by the same reopen; Holiday £1,450, Car £540. Only expectation evidence may differ (P2-5): the interrupted boot reaches schema 3 on reopen, so its floor is that month and it can claim nothing before it; neither records a period here (the monthly row settled August, and rows with no known occurrence record nothing)',
+    invariant('FA3CC.c2.crash.before-sync', 'The app dies after the schema-2 write but before the schema-3 transition, recurring sync and the recompute: reopening the same day or on 2 September (past the carries\' month) gives exactly the financial state of an uninterrupted boot followed by the same reopen; Holiday £1,450, Car £540. Only expectation evidence may differ (P2-5): the interrupted boot reaches schema 3 on reopen, so its floor is that month and it can claim nothing before it; neither records a period here (the monthly row settled August, and rows with no known occurrence record nothing). The September month baseline (P3-4C) has the same figures in both, but the interrupted boot\'s roll replaces the schema-3 transition write of 2 September, so it cannot prove the opening plan: first_observed, where the uninterrupted boot replaces August text: month_open. Neither boot writes a baseline on the 20th (nothing to store)',
       ['2026-08-20', '2026-09-02'].map(interrupted),
-      [[true, true, { gH: 1450, gB: 540 }, ['2026-08', []], ['2026-08', []]], [true, true, { gH: 1450, gB: 540 }, ['2026-09', []], ['2026-08', []]]]);
+      [[true, true, { gH: 1450, gB: 540 }, ['2026-08', [], null], ['2026-08', [], null]], [true, true, { gH: 1450, gB: 540 }, ['2026-09', [], 'first_observed'], ['2026-08', [], 'month_open']]]);
 
     const broken = JSON.parse(JSON.stringify(fa3cbFixture('one-off')[2]));
     broken._schemaVersion = 2;
@@ -9208,4 +9218,11 @@ function main() {
   process.exit(bad ? 1 : 0);
 }
 
-main();
+if (require.main === module) main();
+
+/** The simulated app and its production extraction, for suites that build on this harness (tests/month-baseline.js). */
+module.exports = {
+  init() { PROGRAM = PROGRAM || buildProgram(); return PROGRAM; },
+  App, HarnessError, TEST_SHIMS, PRODUCTION_FUNCTIONS, BASE_CONSTANTS, INDEX_HTML, FOUNDATION_JS,
+  readSource, extractFunction, extractConstant, calledNames
+};

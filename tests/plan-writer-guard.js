@@ -526,6 +526,44 @@ function checksFor(src) {
       failsClosed('geodeQuickSetupLiveLeft', /var temp = geodeQuickSetupBuildTempState\(qs\);\s*if \(!temp\) return '';/)],
     [['geodeExpModalImpactRefresh', 'geodePayModalImpactRefresh', 'geodeQuickSetupBuildTempState'], [], ['geodeQuickSetupLiveLeft'], [], true, true, true, true]);
 
+  section('MONTH BASELINE (P3-4C) — evidence only: written once inside the guarded write, read by nothing financial');
+  const BL_PURE = ['geodeMonthBaselineMonthStart', 'geodeMonthBaselineValid', 'geodeMonthBaselineKind', 'geodeMonthBaselineStatus', 'geodeMonthBaselineFromModel'];
+  const blRefs = [];
+  const blRe = /(?<![\w$])monthBaseline(?![\w$])/g;
+  let bm;
+  while ((bm = blRe.exec(M.code))) blRefs.push((M.ownerAt(bm.index) || { name: '(top level)' }).name);
+  const blWrites = (M.code.match(/\.\s*monthBaseline\s*(?:=(?!=)|\[)|delete\s+[\w$.\[\]'"]*monthBaseline/g) || []).length;
+  const blOwnerOfWrite = [];
+  const blWriteRe = /\.\s*monthBaseline\s*=(?!=)/g;
+  while ((bm = blWriteRe.exec(M.code))) blOwnerOfWrite.push((M.ownerAt(bm.index) || { name: '(top level)' }).name);
+  check('baseline.readers', 'Only the capture lifecycle names monthBaseline: geodeMonthBaselinePrepare reads it, geodeMonthBaselineStage reads and writes it; no engine, render or top-level code does',
+    [...new Set(blRefs)].sort(), ['geodeMonthBaselinePrepare', 'geodeMonthBaselineStage']);
+  check('baseline.writes', 'One assignment, in geodeMonthBaselineStage; nothing deletes it or writes into it', [blOwnerOfWrite, blWrites], [['geodeMonthBaselineStage'], 1]);
+  const body = name => M.noComments.slice(def(name).start, def(name).end);
+  const saveCode = body('save'), persistCode = body('persistGeodeToLocalStorage'), prepCode = body('geodePrepareFinancialMutation');
+  const order = (c, list) => list.every((k, i) => c.indexOf(k) >= 0 && (i === 0 || c.indexOf(list[i - 1]) < c.indexOf(k)));
+  check('baseline.write-order', 'save and persist note whether an action was open before ending it, and stage the record immediately before their one storage write; prepare takes its record after the boundary and before the action opens',
+    [order(saveCode, ['if (!geodeFinancialWriteAllowed()) return \'refused\';', 'var actionWasOpen = !!_geodeFinancialActionOpen;', 'geodeEndFinancialAction();']),
+      /geodeMonthBaselineStage\(actionWasOpen\);\s*var result = geodeStoreFinancialState\(\);/.test(saveCode),
+      /^\s*if \(!geodeFinancialWriteAllowed\(\)\) return 'refused';\s*var actionWasOpen = !!_geodeFinancialActionOpen;\s*geodeEndFinancialAction\(\);\s*geodeMonthBaselineStage\(actionWasOpen\);\s*return geodeStoreFinancialState\(\);\s*\}\s*$/.test(persistCode.replace(/^function[^{]*\{/, '')),
+      order(prepCode, ['syncRecurringPayments(', 'geodeMonthBaselinePrepare();', 'var token = ++_geodeFinancialActionSeq;'])],
+    [true, true, true, true]);
+  const captureCalls = (M.code.match(/(?<![\w$.]|function\s)geodeMonthBaselineCapture\([^)]*\)+/g) || []);
+  check('baseline.action-rule', 'Prepare takes the record from the committed text, never from S; stage takes one from S only when no action was open (a write that ends an action never baselines its own result)',
+    [captureCalls, /var record = geodeMonthBaselineCapture\(JSON\.parse\(_geodeCommittedText\)\);/.test(def('geodeMonthBaselinePrepare').code),
+      /if \(!record && !actionWasOpen\) record = geodeMonthBaselineCapture\(S\);/.test(def('geodeMonthBaselineStage').code)],
+    [['geodeMonthBaselineCapture(JSON.parse(_geodeCommittedText))', 'geodeMonthBaselineCapture(S)'], true, true]);
+  check('baseline.callers', 'Stage is called only by save and persist; prepare only by geodePrepareFinancialMutation; the capture only by the two; no handler, string or value reference reaches any of them',
+    [callersOf('geodeMonthBaselineStage'), callersOf('geodeMonthBaselinePrepare'), callersOf('geodeMonthBaselineCapture'),
+      ['geodeMonthBaselineStage', 'geodeMonthBaselinePrepare', 'geodeMonthBaselineCapture'].flatMap(n => refs.get(n).entry)],
+    [['persistGeodeToLocalStorage', 'save'], ['geodePrepareFinancialMutation'], ['geodeMonthBaselinePrepare', 'geodeMonthBaselineStage'], []]);
+  check('baseline.pure', 'The validator, kind, status, month start and constructor read no clock, storage, DOM or page state and write nothing',
+    BL_PURE.map(n => [n, /Date\.now|new Date\(\)|localStorage|document|(?<![\w$.])S\s*[.[]|currentYM\(|(?<![\w$.])(?:save|persistGeodeToLocalStorage|geodeStoreFinancialState)\s*\(/.test(def(n).code)]),
+    BL_PURE.map(n => [n, false]));
+  const blDocs = src.slice(src.indexOf('P3-4C month baseline: S.monthBaseline'), def('geodeMonthBaselineStage').end);
+  check('baseline.wording', 'Its documentation describes plan figures only: never spent, spending, logged or transaction evidence',
+    (blDocs.match(/\bspent\b|spending|\blogged\b|transaction/gi) || []), []);
+
   section('HANDLERS AND PURE MODULES — no plan write outside the inline functions');
   const handlerWrites = [];
   const handlerRe = /\son[a-z]+\s*=\s*(\\?["'])([\s\S]*?)\1/g;
@@ -590,7 +628,18 @@ const MUTANTS = {
   'merge ignores its key': ['    if (!key || (onlyKey && key !== onlyKey)) continue;', '    if (!key) continue;'],
   'empty key merges every group': ['  if (arguments.length && !onlyKey) return false;\n', ''],
   'key merges paid rows': ["  if (!p || String(p.status || '') === 'paid' || p.debtId", '  if (!p || p.debtId'],
-  'merge in Smart Import': ['function geodeSmartImportConfirm() {', 'function geodeSmartImportConfirm() {\n  geodeMergeDuplicateLinkedContributionsSameMonth();']
+  'merge in Smart Import': ['function geodeSmartImportConfirm() {', 'function geodeSmartImportConfirm() {\n  geodeMergeDuplicateLinkedContributionsSameMonth();'],
+  'engine reads the baseline': ['  var income = toNum(state.income);\n  // Plan: scheduled + completed outflows',
+    '  var income = state.monthBaseline ? toNum(state.monthBaseline.income) : toNum(state.income);\n  // Plan: scheduled + completed outflows'],
+  'render rewrites the baseline': inRender('S.monthBaseline = null;'),
+  'render deletes the baseline': inRender('delete S.monthBaseline;'),
+  'baseline staged after the write': ['  geodeMonthBaselineStage(actionWasOpen);\n  var result = geodeStoreFinancialState();', '  var result = geodeStoreFinancialState();\n  geodeMonthBaselineStage(actionWasOpen);'],
+  'persist forgets the open action': ['  var actionWasOpen = !!_geodeFinancialActionOpen;\n  geodeEndFinancialAction();\n  geodeMonthBaselineStage(actionWasOpen);\n  return geodeStoreFinancialState();',
+    '  geodeEndFinancialAction();\n  geodeMonthBaselineStage(false);\n  return geodeStoreFinancialState();'],
+  'capture ignores the open action': ['if (!record && !actionWasOpen) record = geodeMonthBaselineCapture(S);', 'if (!record) record = geodeMonthBaselineCapture(S);'],
+  'prepare reads the live state': ['var record = geodeMonthBaselineCapture(JSON.parse(_geodeCommittedText));', 'var record = geodeMonthBaselineCapture(S);'],
+  'constructor reads the clock': ['    observedAt: observedAt,\n    income: model.plan.incomePlanned,', '    observedAt: Date.now(),\n    income: model.plan.incomePlanned,'],
+  'prepare after the action opens': ['  geodeMonthBaselinePrepare();\n  var token = ++_geodeFinancialActionSeq;', '  var token = ++_geodeFinancialActionSeq;\n  geodeMonthBaselinePrepare();']
 };
 
 function main() {

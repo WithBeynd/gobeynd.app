@@ -1643,6 +1643,12 @@ var _geodeBoundaryChangedRows = null;
 var _geodeCommittedText = null;
 /** P2-9: a KEY write failed in the current task; until the task ends no other message or completion feedback shows. */
 var _geodeWriteFailedTask = false;
+/**
+ * P3-4C: the month baseline geodePrepareFinancialMutation took from the committed text before an action's first change,
+ * with that text. Page memory only, never authority and never in S: a write stores it only while that text is still
+ * the committed one; any other committed text makes it stale.
+ */
+var _geodeMonthBaselinePending = null;
 /** geode_shell: this runtime's version once geodeShellCleanup removed every older Beynd cache in this browser. */
 var GEODE_SHELL_KEY = 'geode_shell';
 var GEODE_CACHE_PREFIX = 'beynd-cache-';
@@ -2098,6 +2104,7 @@ function load() {
 /** Returns geodeStoreFinancialState's result, or 'refused' when this page may not write. */
 function save() {
   if (!geodeFinancialWriteAllowed()) return 'refused';
+  var actionWasOpen = !!_geodeFinancialActionOpen;
   geodeEndFinancialAction();
   geodeNormalizeIncomeTypeFields();
   try {
@@ -2111,6 +2118,7 @@ function save() {
     _saveHasPendingBaseline = false;
     S.lastSnapshot = extendLastSnapshotFigures(computeSnapshotFigures());
   } catch (e) {}
+  geodeMonthBaselineStage(actionWasOpen);
   var result = geodeStoreFinancialState();
   if (typeof _geodeBootstrap !== 'undefined' && !_geodeBootstrap) {
     markActive();
@@ -2121,7 +2129,9 @@ function save() {
 /** Persist S (e.g. nudgeHistory) without snapshot / lastSnapshot side effects. Same results as save(). */
 function persistGeodeToLocalStorage() {
   if (!geodeFinancialWriteAllowed()) return 'refused';
+  var actionWasOpen = !!_geodeFinancialActionOpen;
   geodeEndFinancialAction();
+  geodeMonthBaselineStage(actionWasOpen);
   return geodeStoreFinancialState();
 }
 
@@ -6296,6 +6306,142 @@ function geodeLivingMonthExpenses(state) {
     });
   }
   return { basis: 'plan', budgetTotal: total, items: items };
+}
+
+/**
+ * P3-4C month baseline: S.monthBaseline, the one record of the plan Beynd first recorded for the current month. It is
+ * evidence for later change detection only: no financial figure reads it. Every value is the ready Living Month
+ * model's own plan figure — income (planned), allocations (counted contributions), fromEarlier (counted unpaid items
+ * due in earlier months), outgoings (the other counted payments), expensesRegular (monthly and annual expense plan) and
+ * expensesOneOff (one-off expense plan counted this month); every one is a plan figure, none receipt or bank evidence. They
+ * reconcile to monthlyLeft within £0.005. kind 'month_open': the state the capture replaced was last written before
+ * the month began, so the plan is the month's opening plan; otherwise 'first_observed'.
+ */
+
+/** P3-4C: local midnight on the 1st of a YYYY-MM month (epoch ms), or NaN. Reads no clock. */
+function geodeMonthBaselineMonthStart(ym) {
+  var m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(typeof ym === 'string' ? ym : '');
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, 1).getTime() : NaN;
+}
+
+/** P3-4C: whether a month baseline record is well formed, observed inside its month and reconciled. Never changes it. */
+function geodeMonthBaselineValid(b) {
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return false;
+  var keys = ['v', 'ym', 'kind', 'observedAt', 'income', 'outgoings', 'allocations', 'fromEarlier', 'expensesRegular', 'expensesOneOff', 'monthlyLeft'];
+  if (Object.keys(b).length !== keys.length) return false;
+  for (var i = 0; i < keys.length; i++) {
+    if (!Object.prototype.hasOwnProperty.call(b, keys[i])) return false;
+    if (i >= 3 && (typeof b[keys[i]] !== 'number' || !isFinite(b[keys[i]]))) return false;
+  }
+  if (b.v !== 1 || (b.kind !== 'month_open' && b.kind !== 'first_observed')) return false;
+  var start = geodeMonthBaselineMonthStart(b.ym);
+  if (!isFinite(start) || b.observedAt < start) return false;
+  if (b.observedAt >= new Date(Number(b.ym.slice(0, 4)), Number(b.ym.slice(5, 7)), 1).getTime()) return false;
+  return Math.abs(b.income - b.outgoings - b.allocations - b.fromEarlier - b.expensesRegular - b.expensesOneOff - b.monthlyLeft) <= 0.005;
+}
+
+/** P3-4C: 'month_open' when the replaced state's revision is valid and dated before ym's first local midnight. */
+function geodeMonthBaselineKind(replacedRev, ym) {
+  var start = geodeMonthBaselineMonthStart(ym);
+  return geodeFinancialRevValid(replacedRev) && isFinite(start) && replacedRev.at < start ? 'month_open' : 'first_observed';
+}
+
+/**
+ * P3-4C: how a stored record relates to month ym. 'current' is the month's baseline; 'absent', 'malformed' and 'older'
+ * may be replaced by the next capture; 'future' (a clock moved back) is neither used nor replaced.
+ */
+function geodeMonthBaselineStatus(b, ym) {
+  if (b === undefined || b === null) return 'absent';
+  if (!geodeMonthBaselineValid(b)) return 'malformed';
+  return b.ym === ym ? 'current' : b.ym < ym ? 'older' : 'future';
+}
+
+/** P3-4C: a fresh baseline record from a ready Living Month model, or null. Pure: kind and observedAt are given. */
+function geodeMonthBaselineFromModel(model, kind, observedAt) {
+  if (!model || !model.month || !model.plan || !model.payments || !model.expenses || model.status !== 'ready') return null;
+  var allocations = 0, fromEarlier = 0, oneOff = 0;
+  model.payments.done.concat(model.payments.ahead).forEach(function (item) {
+    if (item.state === 'outstanding_from_earlier') fromEarlier += item.amount;
+    else if (item.nature === 'allocation') allocations += item.amount;
+  });
+  model.expenses.items.forEach(function (e) {
+    if (e.recurrence === 'one_off') oneOff += e.monthAmount;
+  });
+  var b = {
+    v: 1,
+    ym: model.month.ym,
+    kind: kind,
+    observedAt: observedAt,
+    income: model.plan.incomePlanned,
+    outgoings: model.plan.paymentsCountedTotal - allocations - fromEarlier,
+    allocations: allocations,
+    fromEarlier: fromEarlier,
+    expensesRegular: model.plan.budgetTotal - oneOff,
+    expensesOneOff: oneOff,
+    monthlyLeft: model.plan.monthlyLeft
+  };
+  return geodeMonthBaselineValid(b) ? b : null;
+}
+
+/**
+ * P3-4C: the baseline this page could record now for `state`, or null unless its Living Month model is ready. The kind
+ * comes from the stored text a write would replace: this page's known revision, or none when storage holds other text.
+ */
+function geodeMonthBaselineCapture(state) {
+  var now = Date.now();
+  var model = geodeLivingMonthModel(state, now);
+  if (!model || model.status !== 'ready') return null;
+  var raw;
+  try {
+    raw = localStorage.getItem(KEY);
+  } catch (e) {
+    return null;
+  }
+  return geodeMonthBaselineFromModel(model, geodeMonthBaselineKind(raw === _geodeKnownRaw ? _geodeKnownRev : null, model.month.ym), now);
+}
+
+/**
+ * P3-4C: geodePrepareFinancialMutation, after the boundary and before the action's first change. With no valid record
+ * for this month, takes one from the committed text (never from S, which the action is about to change) for the
+ * action's own write to store with the change. Stores nothing and changes nothing in S.
+ */
+function geodeMonthBaselinePrepare() {
+  try {
+    var ym = currentYM();
+    var p = _geodeMonthBaselinePending;
+    if (p && (p.committed !== _geodeCommittedText || p.record.ym !== ym)) _geodeMonthBaselinePending = p = null;
+    var status = geodeMonthBaselineStatus(S.monthBaseline, ym);
+    if (p || status === 'current' || status === 'future' || typeof _geodeCommittedText !== 'string') return;
+    var record = geodeMonthBaselineCapture(JSON.parse(_geodeCommittedText));
+    if (record) _geodeMonthBaselinePending = { record: record, committed: _geodeCommittedText };
+  } catch (e) {
+    _geodeMonthBaselinePending = null;
+  }
+}
+
+/**
+ * P3-4C: save() and persistGeodeToLocalStorage() call this just before their one KEY write, so the record is stored in
+ * that write or not at all (a failed write puts S back to the committed text). A valid record for this month, or one
+ * dated later (a clock moved back), is never replaced. Otherwise the write stores the record prepared before an action
+ * while its committed text still stands, else — only when no action was open — the plan of S as it is written (a
+ * boundary roll, onboarding's first save, an incidental write). A write that ends an action stores no other record: its
+ * plan already holds the change. The record only joins a write that happens anyway: a save with nothing to store
+ * stays 'no_change'.
+ */
+function geodeMonthBaselineStage(actionWasOpen) {
+  try {
+    var ym = currentYM();
+    var status = geodeMonthBaselineStatus(S.monthBaseline, ym);
+    if (status === 'current' || status === 'future' || JSON.stringify(S) === _geodeKnownRaw) return false;
+    var p = _geodeMonthBaselinePending;
+    var record = p && p.committed === _geodeCommittedText && p.record.ym === ym ? p.record : null;
+    if (!record && !actionWasOpen) record = geodeMonthBaselineCapture(S);
+    if (!record) return false;
+    S.monthBaseline = JSON.parse(JSON.stringify(record));
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 /**
@@ -11010,6 +11156,7 @@ function geodePrepareFinancialMutation() {
     });
     _geodeBoundaryChangedRows = changed;
   }
+  geodeMonthBaselinePrepare();
   var token = ++_geodeFinancialActionSeq;
   _geodeFinancialActionOpen = token;
   setTimeout(function () {
