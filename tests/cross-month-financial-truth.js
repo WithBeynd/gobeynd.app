@@ -584,7 +584,11 @@ class App {
   render() { this.run('syncRecurringPayments()'); }
   /** Reload: rehydrate from the persisted store and run the boot sequence. */
   reload() { this.run('save(); __reload()'); }
-  advance(iso, mode) { this.at(iso); if (mode === 'reload') this.reload(); else this.render(); }
+  /**
+   * Later visit. Reload: the page's last write happened while it was open (load() writes nothing before recurring sync,
+   * and nothing saves on unload), so it is stored at the old clock and the new page loads at iso. Session: render at iso.
+   */
+  advance(iso, mode) { if (mode === 'reload') { this.run('save();'); this.at(iso); this.run('__reload()'); } else { this.at(iso); this.render(); } }
   state() { return JSON.parse(this.run('JSON.stringify(S)')); }
   snap(label) {
     const s = JSON.parse(this.run('__snapshot()'));
@@ -906,6 +910,17 @@ function harnessFidelity() {
   });
 }
 
+/** The contribution ledger for one row: every event as [type, occurrence month, amount], and the completions no reversal undoes. */
+function completionLedger(app, paymentId) {
+  const events = app.state().contributionEvents.filter(e => e.paymentId === paymentId);
+  const reversed = new Set(events.filter(e => e.eventType === 'reversal').map(e => e.reversesEventId));
+  return {
+    events: events.map(e => [e.eventType, e.occurrenceYm, e.eventType === 'completion' ? e.amount : null]),
+    active: events.filter(e => e.eventType === 'completion' && !reversed.has(e.id)).map(e => [e.occurrenceYm, e.amount]),
+    pairs: events.map((e, i) => e.eventType !== 'reversal' || (i > 0 && events[i - 1].id === e.reversesEventId))
+  };
+}
+
 function goalA() {
   const timelines = {};
   MODES.forEach(mode => scenario('GOAL A — three completed recurring months [' + mode + ']', () => {
@@ -925,11 +940,12 @@ function goalA() {
     app.at('2026-08-15'); app.toggle(id); s = app.snap('Aug 15 completed');
     invariant('A.aug.goal', 'August completed: Holiday (D1 closed by FA-3C-C)', s.goal.gH, 1300);
     invariant('A.aug.left', 'August Monthly Left', s.left, 2900);
+    invariant('A.ledger', 'Durable completions exist for 2026-06, 2026-07 and 2026-08 (one each, £100) in the contribution ledger (FA-3C; reclassified from SPEC in P2-6)',
+      completionLedger(app, id).active, [['2026-06', 100], ['2026-07', 100], ['2026-08', 100]]);
     timelines[mode] = app.timeline;
   }));
   scenario('GOAL A — same-session vs reload', () => {
     parity('A.parity', 'GOAL A (D6 closed for goals by FA-3C-C)', timelines);
-    spec('A.ledger', 'Durable completions exist for 2026-06, 2026-07 and 2026-08 (one each, £100)', 'no occurrence record exists');
   });
 }
 
@@ -1046,7 +1062,8 @@ function goalF() {
     app.at('2026-07-15'); app.toggle(id); s = app.snap();
     invariant('F1.jul.goal', 'July completed at £150: Holiday = base + June £100 + July £150 (D1 closed by FA-3C-C)', s.goal.gH, 1250);
     invariant('F1.jul.left.after', 'July Monthly Left after completion', s.left, 2850);
-    spec('F1.june', 'June occurrence remains £100 after the template edit', 'June is not recorded anywhere');
+    invariant('F1.june', 'June occurrence remains £100 after the template edit; July is recorded at £150 (contribution ledger, FA-3C; reclassified from SPEC in P2-6)',
+      completionLedger(app, id).active, [['2026-06', 100], ['2026-07', 150]]);
   });
   scenario('GOAL F2 — template edit in June after June is completed', () => {
     const app = new App(baseState(), '2026-06-05');
@@ -1069,7 +1086,8 @@ function goalG() {
     const s = app.snap();
     invariant('G.goal', 'Holiday keeps June after the template is deleted (D1 closed by FA-3C-C)', s.goal.gH, 1100);
     invariant('G.left', 'July Monthly Left', s.left, 3000);
-    spec('G.history', 'June completion survives template deletion', 'deleting the row removes the only record');
+    invariant('G.history', 'June completion survives template deletion: the row is gone, its June completion stays in the contribution ledger and the occurrence read model answers confirmed (reclassified from SPEC in P2-6)',
+      [s.rows.length, completionLedger(app, id).active, app.run('geodeExpectationOccurrenceStatus(S, ' + JSON.stringify(id) + ', "2026-06")')], [0, [['2026-06', 100]], 'confirmed']);
   }));
 }
 
@@ -1090,7 +1108,10 @@ function goalH() {
     invariant('H.date.final', 'Due date after the full sequence (D8 closed by FA-4B)', app.snap().rows[0].date, '2026-06-15');
     app.advance('2026-07-02', 'reload');
     invariant('H.date.july', 'July shows the July occurrence as next due (D8 closed by FA-4B)', app.snap().rows[0].date, '2026-07-15');
-    spec('H.ledger', 'At most one active completion per payment and month; four events (completion, reversal, completion, reversal)', 'no occurrence record exists');
+    const ledger = completionLedger(app, id);
+    invariant('H.ledger', 'At most one active completion per payment and month; four events (completion, reversal, completion, reversal), each reversal undoing the completion before it, none active at the end (reclassified from SPEC in P2-6)',
+      [ledger.events, ledger.pairs.every(Boolean), ledger.active],
+      [[['completion', '2026-06', 100], ['reversal', '2026-06', null], ['completion', '2026-06', 100], ['reversal', '2026-06', null]], true, []]);
   });
 }
 
@@ -7154,6 +7175,657 @@ function p2Expectations() {
   });
 }
 
+// P2-6: cross-month continuity verification. The combined P2-1..P2-5 system under adversarial June → July → August use:
+// what happened each month, what Beynd knows (confirmed), what it only expected (expected · no recorded outcome), what it
+// does not know (unknown), and the financial position, which only the settlement ledgers and valuations decide.
+function p2Continuity() {
+  const C = 'confirmed', E = 'expected_no_recorded_outcome', U = 'unknown';
+  const DOMAINS = ['goal', 'investment', 'debt', 'bill'];
+  const AMOUNT = { goal: 100, investment: 200, debt: 50, bill: 80 };
+  const NEW = { goal: 150, investment: 250, debt: 75, bill: 120 };
+  const LINK = { goal: { goalId: 'gH' }, investment: { investId: 'iA' }, debt: { debtId: 'dC', intent: 'set' }, bill: {} };
+  const CARD = () => ({ id: 'dC', name: 'Card', balance: 4000, apr: 20, minp: 50 });
+  const mutate = (app, fn, from, to) => app.run(`(function () {
+    var src = ${fn}.toString();
+    var out = src.replace(${JSON.stringify(from)}, ${JSON.stringify(to)});
+    if (out === src) throw new Error('mutation did not apply');
+    ${fn} = (0, eval)('(' + out + ')');
+  })()`);
+  const ymAdd = (ym, n) => { const t = Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1 + n; return Math.floor(t / 12) + '-' + String(t % 12 + 1).padStart(2, '0'); };
+  const addRow = (app, d, date, amount, rec) => app.contribute(Object.assign({ name: d + ' monthly', amount: amount || AMOUNT[d], date, status: 'upcoming', rec: rec || 'yes' }, LINK[d]));
+  /** A page first opened on clock (default 1 June: schema-3 floor June) with one monthly row per domain due on the 15th: Holiday £1,000, ISA £5,000, Card £4,000. */
+  const world = (clock, domains, date, extra) => {
+    const app = new App(baseState(Object.assign({ debts: [CARD()] }, extra || {})), clock || '2026-06-01');
+    const ids = {};
+    (domains || DOMAINS).forEach(d => { ids[d] = addRow(app, d, date || '2026-06-15'); });
+    return { app, ids };
+  };
+  const label = (ids, pid) => Object.keys(ids).filter(k => ids[k] === pid)[0] || pid;
+  const sorted = list => list.sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1));
+  /** Stored expectation records as [row, from, to, expected amount]. */
+  const gaps = (app, ids) => sorted((app.state().expectationGaps || []).map(g => [label(ids, g.paymentId), g.fromYm, g.toYm, g.expectedAmount]));
+  /** Active settlements in each domain's own ledger as [row, ledger, due month, amount]. */
+  const settled = (app, ids) => sorted(JSON.parse(app.run(`JSON.stringify([].concat(
+    geodeContributionActiveCompletions(S).map(function (e) { return [e.paymentId, 'contribution', geodeExpectationEventDueYm(e), e.amount]; }),
+    geodeDebtPaymentActiveCompletions(S).map(function (e) { return [e.paymentId, 'debt', geodeExpectationEventDueYm(e), e.amount]; }),
+    geodeBillPaymentLedger(S.billPaymentEvents).active.map(function (e) { return [e.paymentId, 'bill', geodeExpectationEventDueYm(e), e.amount]; })))`))
+    .map(s => [label(ids, s[0])].concat(s.slice(1))));
+  const status = (app, id, yms) => yms.map(ym => app.run('geodeExpectationOccurrenceStatus(S, ' + JSON.stringify(id) + ', ' + JSON.stringify(ym) + ')'));
+  const classify = (app, ids, yms) => Object.keys(ids).map(d => [d, status(app, ids[d], yms)]);
+  const every = (ids, list) => Object.keys(ids).map(d => [d, list]);
+  const rows = (app, ids) => sorted(app.state().payments.map(p => [label(ids, p.id), p.rec, p.status, p.date, toNumber(p.amount)]));
+  const toNumber = v => Math.round(Number(v) * 100) / 100;
+  /** [Holiday shown, ISA shown, Card balance]. */
+  const position = app => { const s = app.snap(); return [s.goal.gH, s.inv.iA, (app.state().debts[0] || {}).balance]; };
+  /** [Monthly Left, confirmed-only Monthly Left]. */
+  const left = app => { const s = app.snap(); return [s.left, s.leftConfirmed]; };
+  const confirmAll = (app, ids, iso) => { app.at(iso); Object.keys(ids).forEach(d => app.toggle(ids[d])); };
+  /** reload mode reloads after every meaningful action; session mode never reloads. */
+  const settle = (app, mode) => { if (mode === 'reload') app.reload(); };
+  const row = (d, from, to, amounts) => [d, from, to, (amounts || AMOUNT)[d]];
+  const each = (fn, domains) => sorted((domains || DOMAINS).map(fn));
+  /** Display (Monthly Left, overdue, rows, goals, investments), debt balances, releases and investment positions of the state in memory. */
+  const LOOK = `JSON.stringify([JSON.parse(__snapshot()), (S.debts || []).map(function (d) { return [d.id, d.balance]; }), S.savingsReleases || [],
+    (S.investments || []).map(function (i) { var p = geodeInvestmentPosition(S, i); return [i.id, p && p.value, p && p.estimated]; })])`;
+  const FORGED = `(S.payments || []).map(function (p) { return { id: 'gap_' + p.id + '_2026-01', paymentId: String(p.id), domain: geodeExpectationDomain(p),
+    targetId: '', recurrence: 'monthly', fromYm: '2026-01', toYm: '2027-12', expectedAmount: 999999, dueDay: 15, templateNameSnapshot: 'forged', targetNameSnapshot: '', seenYm: '2026-01',
+    capturedAt: 1, capturedBy: 'forged', source: 'month_boundary' }; })`;
+  /** The same look on a copy of the state whose records are replaced: none, or forged £999,999 over 2026–2027 for every row. */
+  const without = (app, how) => JSON.parse(app.run(`(function () {
+    var keep = S;
+    try {
+      S = JSON.parse(JSON.stringify(keep));
+      S.expectationGaps = ${how === 'forged' ? FORGED : '[]'};
+      return ${LOOK};
+    } finally { S = keep; }
+  })()`));
+  const shown = app => JSON.parse(app.run(LOOK));
+  /** Monthly Left, every position and the releases are the same with the real records, none and forged ones. */
+  const authorityFree = app => { const real = shown(app); return [same(without(app, 'none'), real), same(without(app, 'forged'), real)]; };
+
+  // ── C. THREE-MONTH TORTURE MATRIX ──
+  const CASES = [
+    ['1', 'June confirmed → July absent → August return'],
+    ['2', 'June confirmed → July confirmed → August return'],
+    ['3', 'June unconfirmed → July absent → August return'],
+    ['4', 'June confirmed → July absent → August: template amounts edited'],
+    ['5', 'June confirmed → July absent → August: templates deleted'],
+    ['6', 'June confirmed → July absent → August: current occurrence completed']
+  ];
+  const journey = (kase, mode) => {
+    const { app, ids } = world();
+    if (kase !== '3') { confirmAll(app, ids, '2026-06-15'); settle(app, mode); }
+    if (kase === '2') { app.advance('2026-07-02', mode); confirmAll(app, ids, '2026-07-15'); settle(app, mode); }
+    app.advance('2026-08-03', mode);
+    if (kase === '4') { DOMAINS.forEach(d => { app.modalEdit(ids[d], { amount: String(NEW[d]) }); settle(app, mode); }); }
+    if (kase === '5') { DOMAINS.forEach(d => { app.del(ids[d]); settle(app, mode); }); }
+    if (kase === '6') { app.at('2026-08-15'); DOMAINS.forEach(d => { app.toggle(ids[d]); settle(app, mode); }); }
+    const august = { rows: rows(app, ids), settled: settled(app, ids), gaps: gaps(app, ids), read: classify(app, ids, ['2026-06', '2026-07', '2026-08']),
+      position: position(app), left: left(app), free: authorityFree(app) };
+    app.advance('2026-09-02', mode);
+    const september = { gaps: gaps(app, ids), read: classify(app, ids, ['2026-06', '2026-07', '2026-08', '2026-09']), position: position(app) };
+    return { august, september };
+  };
+  const LEDGER = { goal: 'contribution', investment: 'contribution', debt: 'debt', bill: 'bill' };
+  const paidIn = (ym, amounts) => each(d => [d, LEDGER[d], ym, (amounts || AMOUNT)[d]]);
+  const upcoming = (date, amounts) => each(d => [d, 'yes', 'upcoming', date, (amounts || AMOUNT)[d]]);
+  const L0 = 3000 - 430;
+  /** Monthly Left subtracts every row due this month; confirmed-only Monthly Left subtracts only completed ones. */
+  const EXPECT = {
+    1: { rows: upcoming('2026-08-15'), settled: paidIn('2026-06'), gaps: each(d => row(d, '2026-07', '2026-07')), read: [C, E, U], position: [1100, 5200, 4000], left: [L0, 3000],
+      sepGaps: sorted(each(d => row(d, '2026-07', '2026-07')).concat(each(d => row(d, '2026-08', '2026-08')))), sepRead: [C, E, E, U], sepPosition: [1100, 5200, 4000] },
+    2: { rows: upcoming('2026-08-15'), settled: sorted(paidIn('2026-06').concat(paidIn('2026-07'))), gaps: [], read: [C, C, U], position: [1200, 5400, 4000], left: [L0, 3000],
+      sepGaps: each(d => row(d, '2026-08', '2026-08')), sepRead: [C, C, E, U], sepPosition: [1200, 5400, 4000] },
+    3: { rows: upcoming('2026-08-15'), settled: [], gaps: each(d => row(d, '2026-06', '2026-07')), read: [E, E, U], position: [1000, 5000, 4000], left: [L0, 3000],
+      sepGaps: sorted(each(d => row(d, '2026-06', '2026-07')).concat(each(d => row(d, '2026-08', '2026-08')))), sepRead: [E, E, E, U], sepPosition: [1000, 5000, 4000] },
+    4: { rows: upcoming('2026-08-15', NEW), settled: paidIn('2026-06'), gaps: each(d => row(d, '2026-07', '2026-07')), read: [C, E, U], position: [1100, 5200, 4000], left: [3000 - 595, 3000],
+      sepGaps: sorted(each(d => row(d, '2026-07', '2026-07')).concat(each(d => row(d, '2026-08', '2026-08', NEW)))), sepRead: [C, E, E, U], sepPosition: [1100, 5200, 4000] },
+    5: { rows: [], settled: paidIn('2026-06'), gaps: each(d => row(d, '2026-07', '2026-07')), read: [C, E, U], position: [1100, 5200, 4000], left: [3000, 3000],
+      sepGaps: each(d => row(d, '2026-07', '2026-07')), sepRead: [C, E, U, U], sepPosition: [1100, 5200, 4000] },
+    6: { rows: each(d => [d, 'yes', 'paid', '2026-09-15', AMOUNT[d]]), settled: sorted(paidIn('2026-06').concat(paidIn('2026-08'))), gaps: each(d => row(d, '2026-07', '2026-07')), read: [C, E, C],
+      position: [1200, 5400, 4000], left: [L0, L0], sepGaps: each(d => row(d, '2026-07', '2026-07')), sepRead: [C, E, C, U], sepPosition: [1200, 5400, 4000] }
+  };
+  MODES.forEach(mode => scenario('P2-6 THREE-MONTH MATRIX — goal, investment, debt and bill; ' + (mode === 'reload' ? 'reload after every meaningful action' : 'one session, no reload') + ' [' + mode + ']', () => {
+    CASES.forEach(([kase, text]) => {
+      const x = EXPECT[kase], got = journey(kase, mode);
+      invariant('P2.cm.' + kase + '.august', text + '. August, independently: live rows; active settlements in each domain\'s own ledger; expectation records; June/July/August read; Holiday/ISA/Card; Monthly Left (all, confirmed-only); identical with no or forged records',
+        [got.august.rows, got.august.settled, got.august.gaps, got.august.read, got.august.position, got.august.left, got.august.free],
+        [x.rows, x.settled, x.gaps, every({ goal: 1, investment: 1, debt: 1, bill: 1 }, x.read), x.position, x.left, [true, true]]);
+      invariant('P2.cm.' + kase + '.september', text + '. One boundary later (September): what Beynd now knows, expected and does not know; positions unchanged by the boundary',
+        [got.september.gaps, got.september.read, got.september.position], [x.sepGaps, every({ goal: 1, investment: 1, debt: 1, bill: 1 }, x.sepRead), x.sepPosition]);
+    });
+  }));
+
+  // ── D. THE FOUR THREE-MONTH EXTENSIONS PHASE 1 DEFERRED ──
+  MODES.forEach(mode => scenario('P2-6 PHASE-1 EXTENSIONS — investment template edit, debt payment, monthly bill, release; June → absent July → August [' + mode + ']', () => {
+    const inv = world('2026-06-01', ['investment']);
+    confirmAll(inv.app, inv.ids, '2026-06-15'); settle(inv.app, mode);
+    const juneInv = fa7bLook(inv.app);
+    inv.app.advance('2026-08-03', mode);
+    const back = fa7bLook(inv.app);
+    inv.app.modalEdit(inv.ids.investment, { amount: '250' }); settle(inv.app, mode);
+    const edited = [fa7bLook(inv.app), settled(inv.app, inv.ids), gaps(inv.app, inv.ids), status(inv.app, inv.ids.investment, ['2026-06', '2026-07', '2026-08'])];
+    inv.app.at('2026-08-15'); inv.app.toggle(inv.ids.investment); settle(inv.app, mode);
+    const completed = fa7bLook(inv.app);
+    inv.app.at('2026-08-20'); inv.app.saveInvestment('iA', 'ISA', 5300); settle(inv.app, mode);
+    const observed = fa7bLook(inv.app);
+    inv.app.advance('2026-09-02', mode);
+    const EST = [5200, 5200, 5200, 5000, 'legacy_transition', 200, 0, true];
+    invariant('P2.ext.investment', 'ISA (anchor £5,000). June: £200 confirmed → estimated £5,200. July: absent. August: back £5,200; template edited to £250 — June stays one £200 completion, July stays expected at £200, the position stays £5,200; August completed at £250 → £5,450 (anchor + both completions); £5,300 entered → observed £5,300; September: still £5,300, August confirmed, nothing recorded for it; one opening anchor plus the one observation',
+      [juneInv, back, edited, completed, observed, fa7bLook(inv.app), status(inv.app, inv.ids.investment, ['2026-06', '2026-07', '2026-08']), gaps(inv.app, inv.ids), fa7bVals(inv.app).map(v => v[2])],
+      [EST, EST, [EST, [['investment', 'contribution', '2026-06', 200]], [['investment', '2026-07', '2026-07', 200]], [C, E, U]],
+        [5450, 5450, 5450, 5000, 'legacy_transition', 450, 0, true], [5300, 5300, 5300, 5300, 'manual', 0, 0, false], [5300, 5300, 5300, 5300, 'manual', 0, 0, false],
+        [C, E, C], [['investment', '2026-07', '2026-07', 200]], ['legacy_transition', 'manual']]);
+
+    const debt = world('2026-06-01', ['debt']);
+    const card = () => debt.app.state().debts[0].balance;
+    const ident = () => debt.app.state().payments.map(p => [p.id === debt.ids.debt, p.rec, p.debtId]);
+    confirmAll(debt.app, debt.ids, '2026-06-15'); settle(debt.app, mode);
+    const juneDebt = [card(), ident()];
+    debt.app.advance('2026-08-03', mode);
+    const augDebt = [card(), ident(), status(debt.app, debt.ids.debt, ['2026-06', '2026-07', '2026-08']), gaps(debt.app, debt.ids)];
+    debt.app.at('2026-08-15'); debt.app.toggle(debt.ids.debt); settle(debt.app, mode);
+    invariant('P2.ext.debt', 'Card £4,000 (user-entered) with a £50 monthly payment. June confirmed: Card £4,000, one row with the same id. August back: Card £4,000, still that one monthly row (identity survives the boundary); June confirmed from debt events, July expected · no recorded outcome (never "missed"), August unknown. August completed: two debt completions (June, August), Card still £4,000 — payment history never moves the balance',
+      [juneDebt, augDebt, [card(), ident(), settled(debt.app, debt.ids), status(debt.app, debt.ids.debt, ['2026-06', '2026-07', '2026-08'])]],
+      [[4000, [[true, 'yes', 'dC']]], [4000, [[true, 'yes', 'dC']], [C, E, U], [['debt', '2026-07', '2026-07', 50]]],
+        [4000, [[true, 'yes', 'dC']], [['debt', 'debt', '2026-06', 50], ['debt', 'debt', '2026-08', 50]], [C, E, C]]]);
+
+    const bill = world('2026-06-01', ['bill']);
+    confirmAll(bill.app, bill.ids, '2026-06-15'); settle(bill.app, mode);
+    const evidence = JSON.stringify(bill.app.state().billPaymentEvents);
+    bill.app.advance('2026-08-03', mode);
+    const historyFree = JSON.parse(bill.app.run(`(function () { var keep = S; try { S = JSON.parse(JSON.stringify(keep)); S.expectationGaps = []; S.billPaymentEvents = [];
+      return JSON.stringify([calcMonthlyLeftover(S), calcMonthlyLeftoverConfirmedOnly(S)]); } finally { S = keep; } })()`));
+    invariant('P2.ext.bill', 'Rent £80 monthly. June confirmed. August back: the June settlement is byte-identical; July is an expectation record, not a settlement (the bill ledger holds only June; the record holds only July); Monthly Left £2,920 (August\'s £80 only) and the same with the July record and the whole bill ledger removed — it reads only August\'s live row',
+      [JSON.stringify(bill.app.state().billPaymentEvents) === evidence, settled(bill.app, bill.ids), gaps(bill.app, bill.ids), status(bill.app, bill.ids.bill, ['2026-06', '2026-07', '2026-08']), left(bill.app), historyFree],
+      [true, [['bill', 'bill', '2026-06', 80]], [['bill', '2026-07', '2026-07', 80]], [C, E, U], [2920, 3000], [2920, 3000]]);
+
+    const rel = world('2026-06-01', ['goal']);
+    const control = world('2026-06-01', ['goal']);
+    [rel, control].forEach(w => { confirmAll(w.app, w.ids, '2026-06-15'); settle(w.app, mode); });
+    rel.app.at('2026-06-20'); const juneRelease = rel.app.release('gH', 200); settle(rel.app, mode);
+    [rel, control].forEach(w => w.app.advance('2026-08-03', mode));
+    const augRel = [rel.app.snap().goal.gH, rel.app.state().savingsReleases.map(r => [r.amount, r.ym, r.balanceMutationMode]), left(rel.app), left(control.app)];
+    rel.app.at('2026-08-10'); rel.app.release('gH', 100); settle(rel.app, mode);
+    rel.app.advance('2026-09-02', mode);
+    invariant('P2.ext.release', 'Holiday £1,000 with £100 monthly. June: £100 confirmed (£1,100), £200 released on 20 June (event-derived) → £900. July: absent. August: Holiday £900, the one June release unchanged; Monthly Left £2,900 / £3,000 — exactly the page with no release (an old release is never a current outflow); £100 released in August → £800. September: £800, two releases, expectation records for July and August only; identical with no or forged records',
+      [juneRelease.ok, augRel, [rel.app.snap().goal.gH, rel.app.state().savingsReleases.map(r => [r.amount, r.ym]), gaps(rel.app, rel.ids), authorityFree(rel.app)]],
+      [true, [900, [[200, '2026-06', 'event_derived']], [2900, 3000], [2900, 3000]],
+        [800, [[200, '2026-06'], [100, '2026-08']], [['goal', '2026-07', '2026-07', 100], ['goal', '2026-08', '2026-08', 100]], [true, true]]]);
+  }));
+
+  scenario('P2-6 HARNESS FIDELITY — a later visit loads what the page stored while it was open', () => {
+    const w = world('2026-06-01', ['goal']);
+    confirmAll(w.app, w.ids, '2026-06-15');
+    w.app.at('2026-06-20'); w.app.release('gH', 200); w.app.reload();
+    const dirty = w.app.run('JSON.stringify(S) !== __store');
+    w.app.advance('2026-08-03', 'reload');
+    const src = PROGRAM.src, load = extractFunction(src, 'load').text;
+    const beforeSync = load.slice(0, load.indexOf('\n  syncRecurringPayments();'));
+    invariant('P2.fidelity.advance', 'After a release and a reload the page\'s memory differs from storage (the boot recompute is not stored until a later write). The next visit stores it at the old clock and loads at the new one, as production does: load() makes no financial write before its first recurring sync (only the guarded transition commits) and nothing saves on unload — so the August load sees the June write and records July',
+      [dirty, gaps(w.app, w.ids), (beforeSync.match(/\bsave\(\)|persistGeodeToLocalStorage\(\)/g) || []).length, /beforeunload|pagehide|['"]unload['"]/.test(src), new Date(w.app.state().expectationGaps[0] ? JSON.parse(rawStore(w.app))._rev.at : 0).getMonth() + 1],
+      [true, [['goal', '2026-07', '2026-07', 100]], 0, false, 8]);
+  });
+
+  // ── G. INVESTMENT AUTHORITY TORTURE ──
+  MODES.forEach(mode => scenario('P2-6 INVESTMENT AUTHORITY — valuations, contributions, releases, an absence, an edit, £0 and a year away [' + mode + ']', () => {
+    const { app, ids } = world('2026-06-01', ['investment']);
+    const seq = [], free = [];
+    const look = name => { const l = fa7bLook(app); seq.push([name, l[0], l[7]]); free.push(authorityFree(app).every(Boolean)); settle(app, mode); };
+    app.at('2026-06-05'); app.saveInvestment('iA', 'ISA', 5100); look('valued £5,100 before any contribution');
+    app.at('2026-06-15'); app.toggle(ids.investment); look('£200 monthly confirmed after it');
+    app.at('2026-06-20'); app.contribute({ name: 'ISA top-up', amount: 100, date: '2026-06-20', status: 'paid', rec: 'no', investId: 'iA' }); look('£100 one-off paid');
+    app.at('2026-06-25'); app.saveInvestment('iA', 'ISA', 5450); look('valued £5,450 after both');
+    app.advance('2026-08-03', mode); look('August return after an absent July');
+    app.at('2026-08-05'); fa7bRelease(app, 300); look('£300 released before a valuation');
+    app.at('2026-08-10'); app.saveInvestment('iA', 'ISA', 4900); look('valued £4,900');
+    app.at('2026-08-12'); fa7bRelease(app, 100); look('£100 released after it');
+    app.at('2026-08-14'); app.modalEdit(ids.investment, { amount: '250' }); look('template edited £200 → £250');
+    app.at('2026-08-15'); app.toggle(ids.investment); look('August £250 confirmed');
+    app.at('2026-08-20'); app.saveInvestment('iA', 'ISA', 0); look('valid £0 valuation');
+    app.advance('2027-08-03', mode); look('back a year later');
+    app.at('2027-08-04'); app.saveInvestment('iA', 'ISA', 3000); look('valued £3,000 after the long absence');
+    invariant('P2.inv.torture', 'ISA [step, shown, estimated]: £5,100 observed → +£200 estimated £5,300 → +£100 £5,400 → £5,450 observed → absent July: £5,450 (the July expectation adds nothing) → −£300 £5,150 → £4,900 observed → −£100 £4,800 → edit: £4,800 → +£250 £5,050 → £0 observed (valid) → a year away: £0 (eleven expected months add nothing) → £3,000 observed. At every step the position, Monthly Left and releases are the same with no or forged records; the records are July (£200) and September 2026–July 2027 (£250); the valuations are the opening anchor and the five observations',
+      [seq, free.every(Boolean), gaps(app, ids), fa7bVals(app).map(v => [v[0], v[2]])],
+      [[['valued £5,100 before any contribution', 5100, false], ['£200 monthly confirmed after it', 5300, true], ['£100 one-off paid', 5400, true], ['valued £5,450 after both', 5450, false],
+        ['August return after an absent July', 5450, false], ['£300 released before a valuation', 5150, true], ['valued £4,900', 4900, false], ['£100 released after it', 4800, true],
+        ['template edited £200 → £250', 4800, true], ['August £250 confirmed', 5050, true], ['valid £0 valuation', 0, false], ['back a year later', 0, false], ['valued £3,000 after the long absence', 3000, false]],
+        true, [['investment', '2026-07', '2026-07', 200], ['investment', '2026-09', '2027-07', 250]],
+        [[5000, 'legacy_transition'], [5100, 'manual'], [5450, 'manual'], [4900, 'manual'], [0, 'manual'], [3000, 'manual']]]);
+  }));
+
+  // ── H. GOAL / LINKED INVESTMENT TORTURE (FA-7D) ──
+  MODES.forEach(mode => scenario('P2-6 LINKED GOAL — own history, link, contribution through the goal, absence, valuation, unlink, relink [' + mode + ']', () => {
+    const app = fa7dApp();
+    const seq = [];
+    const look = name => { seq.push([name].concat(fa7dLook(app))); settle(app, mode); };
+    const own = app.contribute({ name: 'Holiday monthly', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes', goalId: 'gH' });
+    app.at('2026-06-15'); app.toggle(own); look('June: own £100 confirmed');
+    app.at('2026-06-16'); fa7dLink(app, 'gH'); look('linked to the ISA');
+    const form = app.modalForm(null, { name: 'Contribute to Holiday', date: '2026-06-20', status: 'upcoming', rec: true, goalId: 'gH', _geodePayIntent: 'new' });
+    const via = app.contribute({ name: form.name, amount: 200, date: '2026-06-20', status: 'upcoming', rec: 'yes', goalId: form.goalId, investId: form.investId });
+    app.at('2026-06-20'); app.toggle(via); look('£200 monthly through the goal, confirmed');
+    app.advance('2026-08-03', mode); look('August return after an absent July');
+    const ids = { own, via };
+    const august = [gaps(app, ids), classify(app, ids, ['2026-06', '2026-07'])];
+    app.at('2026-08-05'); app.saveInvestment('iA', 'ISA', 5600); look('ISA valued £5,600');
+    app.at('2026-08-06'); fa7dLink(app, ''); look('unlinked');
+    app.at('2026-08-07'); fa7dLink(app, 'gH'); look('relinked');
+    app.advance('2026-09-02', mode); look('September');
+    invariant('P2.linked.torture', '[step, Holiday shown, own cache, baseSaved, contribution events, releases, valuations, ISA shown]. The goal form routes the linked contribution to the ISA ([goal, investment] = ["", iA]); June: own £100 → Holiday £1,100; linked → shows the ISA £5,000 (own £1,100 kept); £200 through the goal is one ISA completion → £5,200; August: £5,200 — the July expectations of both rows (goal £100, ISA £200) become nobody\'s Saved; £5,600 observed → £5,600; unlinked → its own £1,100; relinked → £5,600; September the same. Two completions in total (goal £100, ISA £200): no dual write',
+      [[form.goalId, form.investId], seq, august, app.activeEvents().map(e => [e.entityType + ':' + e.entityId, e.amount]).sort()],
+      [['', 'iA'], [['June: own £100 confirmed', 1100, 1100, 1000, 1, 0, 1, 5000], ['linked to the ISA', 5000, 1100, 1000, 1, 0, 1, 5000], ['£200 monthly through the goal, confirmed', 5200, 1100, 1000, 2, 0, 1, 5200],
+        ['August return after an absent July', 5200, 1100, 1000, 2, 0, 1, 5200], ['ISA valued £5,600', 5600, 1100, 1000, 2, 0, 2, 5600], ['unlinked', 1100, 1100, 1000, 2, 0, 2, 5600],
+        ['relinked', 5600, 1100, 1000, 2, 0, 2, 5600], ['September', 5600, 1100, 1000, 2, 0, 2, 5600]],
+        [[['own', '2026-07', '2026-07', 100], ['via', '2026-07', '2026-07', 200]], [['own', [C, E]], ['via', [C, E]]]], [['goal:gH', 100], ['investment:iA', 200]]]);
+  }));
+
+  // ── I. DEBT TORTURE ──
+  MODES.forEach(mode => scenario('P2-6 DEBT — £50 monthly, £100 one-off and £75 monthly on one card through completion, undo, absence, edit, import and delete [' + mode + ']', () => {
+    const app = new App(baseState({ debts: [CARD()] }), '2026-06-01');
+    const pay = (amount, rec, date) => app.contribute({ intent: 'set', name: 'Card ' + amount, amount, date, status: 'upcoming', rec, debtId: 'dC' });
+    const m50 = pay(50, 'yes', '2026-06-15'), o100 = pay(100, 'no', '2026-06-20'), m75 = pay(75, 'yes', '2026-06-15');
+    const ids = { m50, o100, m75 };
+    const view = () => { app.merge(); return rows(app, ids).filter(r => r[0] !== 'import'); };
+    const events = () => app.state().debtPaymentEvents.map(e => [e.eventType, label(ids, e.paymentId), e.occurrenceYm]);
+    const card = () => app.state().debts[0].balance;
+    app.at('2026-06-15'); app.toggle(m50); settle(app, mode);
+    app.at('2026-06-20'); app.toggle(o100); app.toggle(m50); app.toggle(m50); settle(app, mode);
+    const june = [view(), events(), card()];
+    app.advance('2026-08-03', mode);
+    const august = [view(), gaps(app, ids), classify(app, ids, ['2026-06', '2026-07']), card()];
+    app.at('2026-08-04'); app.modalEdit(m75, { amount: '80' }); settle(app, mode);
+    const imported = app.smartImport([{ name: 'Card extra', amount: 60, date: '2026-08-04', link: 'debt:dC' }]);
+    const importId = app.state().payments.filter(p => [m50, o100, m75].indexOf(p.id) < 0)[0].id;
+    ids.import = importId;
+    settle(app, mode);
+    app.del(m50); settle(app, mode);
+    app.advance('2026-09-02', mode);
+    invariant('P2.debt.torture', 'June: £50 completed, £100 one-off completed, £50 undone and completed again, £75 left open: three rows, debt events completion/completion/reversal/completion, Card £4,000. August (July absent): the monthlies upcoming on 15 August, the one-off still a completed one-off; records £50 July and £75 June–July, never the one-off; Card £4,000. August: £75 edited to £80, a £60 Smart Import debt payment stays its own (upcoming) one-off row, the £50 deleted. September: one new record, £80 for August; the one-off and the import are never recorded or promoted; Card £4,000 throughout — payment history never moves the balance',
+      [june, august, [rows(app, ids), gaps(app, ids), card(), imported.added]],
+      [[[['m50', 'yes', 'paid', '2026-07-15', 50], ['m75', 'yes', 'upcoming', '2026-06-15', 75], ['o100', 'no', 'paid', '2026-06-20', 100]],
+        [['completion', 'm50', '2026-06'], ['completion', 'o100', '2026-06'], ['reversal', 'm50', '2026-06'], ['completion', 'm50', '2026-06']], 4000],
+        [[['m50', 'yes', 'upcoming', '2026-08-15', 50], ['m75', 'yes', 'upcoming', '2026-08-15', 75], ['o100', 'no', 'paid', '2026-06-20', 100]],
+          [['m50', '2026-07', '2026-07', 50], ['m75', '2026-06', '2026-07', 75]], [['m50', [C, E]], ['o100', [C, U]], ['m75', [E, E]]], 4000],
+        [[['import', 'no', 'upcoming', '2026-08-04', 60], ['m75', 'yes', 'upcoming', '2026-09-15', 80], ['o100', 'no', 'paid', '2026-06-20', 100]],
+          [['m50', '2026-07', '2026-07', 50], ['m75', '2026-06', '2026-07', 75], ['m75', '2026-08', '2026-08', 80]], 4000, 1]]);
+  }));
+
+  // ── J. BILL TORTURE ──
+  MODES.forEach(mode => scenario('P2-6 BILLS — monthly, annual and one-off: only the monthly is ever an expectation; every completion is settlement evidence [' + mode + ']', () => {
+    const make = () => {
+      const app = new App(baseState(), '2026-06-01');
+      const ids = { rent: app.contribute({ name: 'Rent', amount: 80, date: '2026-06-15', status: 'upcoming', rec: 'yes' }),
+        insurance: app.contribute({ name: 'Insurance', amount: 300, date: '2026-06-20', status: 'upcoming', rec: 'annual' }),
+        repair: app.contribute({ name: 'Repair', amount: 120, date: '2026-06-25', status: 'upcoming', rec: 'no' }) };
+      return { app, ids };
+    };
+    const bev = (app, ids) => app.state().billPaymentEvents.map(e => [e.eventType, label(ids, e.paymentId), e.occurrenceYm, e.recurrenceSnapshot]);
+    const open = make();
+    open.app.advance('2026-08-03', mode);
+    const openAug = [gaps(open.app, open.ids), classify(open.app, open.ids, ['2026-06', '2026-07']), authorityFree(open.app)];
+    open.app.at('2026-08-10'); open.app.toggle(open.ids.insurance); open.app.toggle(open.ids.repair); settle(open.app, mode);
+    open.app.advance('2026-09-02', mode);
+    const done = make();
+    done.app.at('2026-06-25'); Object.keys(done.ids).forEach(k => done.app.toggle(done.ids[k])); settle(done.app, mode);
+    done.app.advance('2026-08-03', mode);
+    const doneAug = [gaps(done.app, done.ids), authorityFree(done.app)];
+    const evidence = JSON.stringify(done.app.state().billPaymentEvents);
+    Object.keys(done.ids).forEach(k => { done.app.del(done.ids[k]); settle(done.app, mode); });
+    done.app.advance('2026-09-02', mode);
+    invariant('P2.bill.torture', 'Nothing completed in June: August records Rent June–July only (the overdue annual Insurance and one-off Repair are never captured), Monthly Left and positions identical with no or forged records; Insurance and Repair completed late in August → bill evidence for their June due dates; September adds Rent August only. All three completed in June: three bill completions (monthly, annual, one-off); August records Rent July only; deleting all three keeps the evidence byte-identical and September records nothing more',
+      [openAug, [gaps(open.app, open.ids), bev(open.app, open.ids)], doneAug, [bev(done.app, done.ids), JSON.stringify(done.app.state().billPaymentEvents) === evidence, gaps(done.app, done.ids), done.app.state().payments.length]],
+      [[[['rent', '2026-06', '2026-07', 80]], [['rent', [E, E]], ['insurance', [U, U]], ['repair', [U, U]]], [true, true]],
+        [[['rent', '2026-06', '2026-07', 80], ['rent', '2026-08', '2026-08', 80]], [['completion', 'insurance', '2026-06', 'annual'], ['completion', 'repair', '2026-06', 'one_off']]],
+        [[['rent', '2026-07', '2026-07', 80]], [true, true]],
+        [[['completion', 'rent', '2026-06', 'monthly'], ['completion', 'insurance', '2026-06', 'annual'], ['completion', 'repair', '2026-06', 'one_off']], true, [['rent', '2026-07', '2026-07', 80]], 0]]);
+  }));
+
+  // ── K. RELEASE TORTURE ──
+  MODES.forEach(mode => scenario('P2-6 RELEASES — the same three months with and without expectation capture: identical releases, refusals, positions and Monthly Left [' + mode + ']', () => {
+    const real = world(), blind = world();
+    mutate(blind.app, 'geodeCaptureExpectationGaps', 'if (fromYm > endYm) return;', 'return;');
+    const both = fn => [real, blind].map(w => fn(w));
+    const results = [];
+    both(w => { confirmAll(w.app, w.ids, '2026-06-15'); settle(w.app, mode); });
+    results.push(both(w => { w.app.at('2026-06-20'); const r = w.app.release('gH', 200); settle(w.app, mode); return r.ok; }));
+    both(w => w.app.advance('2026-08-03', mode));
+    results.push(both(w => { w.app.at('2026-08-05'); const r = w.app.release('gH', 100); settle(w.app, mode); return r.ok; }));
+    results.push(both(w => { w.app.at('2026-08-06'); const r = w.app.release('gH', 5000); return [r.ok, r.reason || '']; }));
+    both(w => w.app.advance('2026-09-02', mode));
+    const looks = both(w => shown(w.app));
+    invariant('P2.release.torture', 'Two identical pages, one recording expectations and one not: June £200 release, absent July, August £100 release, then a £5,000 request capped the same way to the £800 left; September: identical Monthly Left, overdue items, rows, Holiday/ISA/Card positions and releases (Holiday £0) — only the evidence differs (8 records against none)',
+      [results.map(r => same(r[0], r[1])), same(looks[0], looks[1]), looks[0][0].goal.gH, looks[0][2].map(r => [r.amount, r.ym]), [real.app.state().expectationGaps.length, blind.app.state().expectationGaps.length]],
+      [[true, true, true], true, 0, [[200, '2026-06'], [100, '2026-08'], [800, '2026-08']], [8, 0]]);
+  }));
+
+  // ── L. MONTHLY LEFT TORTURE ──
+  scenario('P2-6 MONTHLY LEFT — real, none, forged and overlaid evidence over identical live rows; no catch-up charge', () => {
+    const states = [];
+    const add = (name, build) => { const w = world(); build(w); states.push([name, w]); };
+    add('June + July confirmed, August', w => { confirmAll(w.app, w.ids, '2026-06-15'); w.app.advance('2026-07-02', 'reload'); confirmAll(w.app, w.ids, '2026-07-15'); w.app.advance('2026-08-03', 'reload'); });
+    add('June confirmed, July absent, August', w => { confirmAll(w.app, w.ids, '2026-06-15'); w.app.advance('2026-08-03', 'reload'); });
+    add('nothing confirmed, August', w => { w.app.advance('2026-08-03', 'reload'); });
+    add('June confirmed, back after 12 months', w => { confirmAll(w.app, w.ids, '2026-06-15'); w.app.advance('2027-07-03', 'reload'); });
+    const overlay = app => JSON.parse(app.run(`(function () {
+      var keep = S;
+      try {
+        S = JSON.parse(JSON.stringify(keep));
+        (S.payments || []).forEach(function (p, i) {
+          var dom = geodeExpectationDomain(p), base = { id: 'ov_' + i, paymentId: p.id, eventType: 'completion', amount: toNum(p.amount), occurrenceYm: '2026-07', dueDateSnapshot: '2026-07-15', recordedAt: 1, source: 'mark_completed' };
+          if (dom === 'bill') S.billPaymentEvents.push(Object.assign({ recurrenceSnapshot: 'monthly', paymentNameSnapshot: p.name }, base));
+          if (dom === 'debt') S.debtPaymentEvents.push(Object.assign({ debtId: p.debtId }, base));
+        });
+        var snap = JSON.parse(__snapshot());
+        return JSON.stringify([snap.left, snap.leftConfirmed, snap.homeOverduePayments, (S.debts || []).map(function (d) { return d.balance; }),
+          (S.payments || []).filter(function (p) { var d = geodeExpectationDomain(p); return d === 'bill' || d === 'debt'; }).map(function (p) { return geodeExpectationOccurrenceStatus(S, p.id, '2026-07'); })]);
+      } finally { S = keep; }
+    })()`));
+    const table = states.map(([name, w]) => {
+      const s = w.app.snap();
+      return [name, s.left, s.leftConfirmed, s.homeOverduePayments, authorityFree(w.app), overlay(w.app)];
+    });
+    invariant('P2.left.torture', '[state, Monthly Left, confirmed-only, Home overdue payments, same with no/forged records, with bill and debt July settlements overlaid → (Monthly Left, confirmed-only, overdue, Card, July read)]. Every state has the same four rows due on the 15th, so Monthly Left is £2,570 in each: two unresolved months, or twelve, never become a catch-up charge; overlaying settlements changes only the read (July confirmed), never Monthly Left or the Card balance',
+      table, states.map(([name], i) => [name, L0, 3000, 0, [true, true], [L0, 3000, 0, [4000], i === 0 ? [C, C] : [C, C]]]));
+  });
+
+  // ── M. CALENDAR ──
+  scenario('P2-6 CALENDAR — 31st-of-month, leap and non-leap February, December → January, annual rows beside monthly', () => {
+    const bill = (born, due, rec) => { const app = new App(baseState(), born); const id = app.contribute({ name: 'Rent', amount: 80, date: due, status: 'upcoming', rec: rec || 'yes' }); return { app, id }; };
+    const look = (w, yms) => [gaps(w.app, { rent: w.id }), status(w.app, w.id, yms), w.app.state().payments[0].date];
+    const jan = bill('2027-01-05', '2027-01-31');
+    jan.app.at('2027-01-31'); jan.app.toggle(jan.id);
+    jan.app.advance('2027-03-03', 'reload');
+    const janConfirmed = look(jan, ['2027-01', '2027-02', '2027-03']);
+    jan.app.advance('2027-04-02', 'reload');
+    const janNext = [gaps(jan.app, { rent: jan.id }), jan.app.state().expectationGaps.map(g => g.dueDay), jan.app.state().payments[0].date];
+    const open = bill('2027-01-05', '2027-01-31');
+    open.app.advance('2027-02-02', 'session'); const febRow = open.app.state().payments[0].date;
+    open.app.advance('2027-03-03', 'session');
+    const jump = bill('2027-01-05', '2027-01-31');
+    jump.app.advance('2027-03-03', 'reload');
+    const leap = bill('2028-01-05', '2028-01-31');
+    leap.app.at('2028-01-31'); leap.app.toggle(leap.id);
+    const leapPaidTo = leap.app.state().payments[0].date;
+    leap.app.advance('2028-03-03', 'reload');
+    const dec = bill('2026-12-01', '2026-12-15');
+    dec.app.at('2026-12-15'); dec.app.toggle(dec.id);
+    dec.app.advance('2027-02-02', 'reload');
+    const decOpen = bill('2026-12-01', '2026-12-15');
+    decOpen.app.advance('2027-02-02', 'reload');
+    const mixed = bill('2026-11-01', '2026-11-15');
+    const annual = mixed.app.contribute({ name: 'Insurance', amount: 300, date: '2026-12-20', status: 'upcoming', rec: 'annual' });
+    mixed.app.advance('2027-02-02', 'reload');
+    invariant('P2.calendar', 'Occurrence month identity survives every calendar edge; only the due-day presentation drifts. Due 31 Jan 2027, confirmed: the row moves to 28 Feb; back in March → February recorded (Jan confirmed, Mar unknown), row 28 Mar; April records March with due day 28 (drift, not a wrong month). Never confirmed, rendered in February and March → January and February recorded as separate months, the row 28 Feb then 28 Mar; jumped straight to March → one January–February record, row 31 Mar. Leap 2028: 31 Jan paid → 29 Feb; back in March → February 2028 recorded. December confirmed, back in February → January 2027 alone; never confirmed → one December 2026–January 2027 record. An annual row beside a monthly one is never recorded and keeps its date',
+      [janConfirmed, janNext, [febRow, look(open, ['2027-01', '2027-02', '2027-03'])], look(jump, ['2027-01', '2027-02', '2027-03']), [leapPaidTo, look(leap, ['2028-01', '2028-02', '2028-03'])],
+        look(dec, ['2026-12', '2027-01', '2027-02']), look(decOpen, ['2026-12', '2027-01', '2027-02']),
+        [gaps(mixed.app, { rent: mixed.id, annual }), mixed.app.state().payments.filter(p => p.id === annual).map(p => [p.status, p.date])]],
+      [[[['rent', '2027-02', '2027-02', 80]], [C, E, U], '2027-03-28'], [[['rent', '2027-02', '2027-02', 80], ['rent', '2027-03', '2027-03', 80]], [28, 28], '2027-04-28'],
+        ['2027-02-28', [[['rent', '2027-01', '2027-01', 80], ['rent', '2027-02', '2027-02', 80]], [E, E, U], '2027-03-28']],
+        [[['rent', '2027-01', '2027-02', 80]], [E, E, U], '2027-03-31'], ['2028-02-29', [[['rent', '2028-02', '2028-02', 80]], [C, E, U], '2028-03-29']],
+        [[['rent', '2027-01', '2027-01', 80]], [C, E, U], '2027-02-15'], [[['rent', '2026-12', '2027-01', 80]], [E, E, U], '2027-02-15'],
+        [[['rent', '2026-11', '2027-01', 80]], [['upcoming', '2026-12-20']]]]);
+  });
+
+  // ── N. SCHEMA-TRANSITION TORTURE ──
+  scenario('P2-6 SCHEMA TRANSITIONS — 1 → 2 → 3, a crash between them, pending months, a manual valuation while pending, a stale tab during the move', () => {
+    const legacy = legacyData(baseState({ incomeExplicitlySet: true, investments: [Object.assign(ISA(), { balance: 5200 })],
+      payments: [legacyInvPay('i1', { rec: 'yes', date: '2026-07-10', lastPaidYM: '2026-06', lastPaidDueDate: '2026-06-10' })] }));
+    const one = new App(legacy, '2026-08-03', undefined, { boot: false });
+    watchWrites(one);
+    one.run('__reload()');
+    const oneWrites = writes(one);
+    one.reload(); one.reload();
+    invariant('P2.schema.1-2-3', 'Schema-1 data last used in June, first opened by this runtime in August: two transition commits (1 → 2, 2 → 3), floor August, the ISA anchored once at its legacy £5,200; the paid June row rolls, July stays unknown (it elapsed before the transition — nothing invented); two reloads write nothing more',
+      [oneWrites, stored(one)._schemaVersion, stored(one).expectationFloorYm, stored(one).expectationGaps, status(one, 'i1', ['2026-06', '2026-07']), one.snap().inv.iA, fa7bVals(one).map(v => [v[0], v[2]]), writes(one)],
+      [2, 3, '2026-08', [], [C, U], 5200, [[5200, 'legacy_transition']], 0]);
+
+    const crash = new App(legacy, '2026-08-03', undefined, { boot: false });
+    mutate(crash, 'geodeSchema3Transition', 'S.expectationGaps = [];', 'throw new Error("crash between commits");');
+    crash.run('__reload()');
+    const between = [stored(crash)._schemaVersion, crash.state().payments[0].status, crash.run('geodeBoundaryTransitionOutstanding()'), crash.warnings.splice(0)];
+    const after = new App(JSON.parse(rawStore(crash)), '2026-09-02', undefined, { boot: false });
+    after.run('__store = ' + JSON.stringify(rawStore(crash)) + '; __reload();');
+    invariant('P2.schema.crash-between', 'The 2 → 3 commit crashing after 1 → 2 committed: storage stays schema 2 and the boundary is held (the June row stays paid); the next load, in September, commits schema 3 with floor September — July and August stay unknown, the ISA still £5,200 with one anchor',
+      [between, [stored(after)._schemaVersion, stored(after).expectationFloorYm, stored(after).expectationGaps, status(after, 'i1', ['2026-07', '2026-08']), after.snap().inv.iA, fa7bVals(after).length]],
+      [[2, 'paid', true, ['[geode] schema 3 transition not completed, staying on schema 2: crash between commits']], [3, '2026-09', [], [U, U], 5200, 1]]);
+
+    const f = p1rFixture('P2');
+    const pending = p1rPage(f.state, '2026-09-02', P1R_PREVIOUS);
+    const month = () => [pending.run('currentYM()'), stored(pending)._schemaVersion, pending.state().payments.map(p => p.status), (pending.state().expectationGaps || []).length, pending.snap().inv.iA];
+    const held = [month()];
+    pending.advance('2026-10-02', 'reload'); held.push(month());
+    pending.saveInvestment('iA', 'ISA', 5900); const valued = [pending.snap().inv.iA, p1rVals(stored(pending).investments)];
+    pending.advance('2026-11-02', 'reload'); held.push(month());
+    p1rReady(pending); pending.reload();
+    const ready = [stored(pending)._schemaVersion, stored(pending).expectationFloorYm, pending.state().payments.map(p => p.status), gaps(pending, {}), pending.snap().inv.iA, p1rVals(stored(pending).investments)];
+    pending.reload(); pending.reload();
+    invariant('P2.schema.pending', 'Schema-2 data (ISA £5,200 with an August paid row) pending through September, October and November: every boundary held — row paid, no records, storage schema 2, ISA £5,200; a manual £5,900 valuation entered while pending is stored as an observation; the first ready load moves to schema 3 with floor November, keeps that one valuation (no legacy anchor beside it), rolls the row and records nothing for the held months; two more reloads change nothing',
+      [held, valued, ready, [stored(pending)._schemaVersion, stored(pending).expectationFloorYm, p1rVals(stored(pending).investments)]],
+      [[['2026-09', 2, ['paid'], 0, 5200], ['2026-10', 2, ['paid'], 0, 5200], ['2026-11', 2, ['paid'], 0, 5900]], [5900, [['iA', [[5900, 'manual']]]]],
+        [3, '2026-11', ['upcoming'], [], 5900, [['iA', [[5900, 'manual']]]]], [3, '2026-11', [['iA', [[5900, 'manual']]]]]]);
+
+    const raw2 = rawStore(p1rPage(f.state, f.clock, P1R_PREVIOUS));
+    const pageOn = clock => { const app = new App(JSON.parse(raw2), clock, undefined, { boot: false }); app.run('var caches = {};'); app.run('__otherStorage.setItem(GEODE_SHELL_KEY, ' + JSON.stringify(P1R_PREVIOUS) + '); __store = ' + JSON.stringify(raw2) + '; __reload();'); return app; };
+    const tabA = pageOn(f.clock), tabB = pageOn(f.clock);
+    p1rReady(tabA); tabA.reload();
+    const moved = rawStore(tabA);
+    foreignStore(tabB, moved);
+    tabB.run('S.income = 4100; persistGeodeToLocalStorage(); save();');
+    tabB.advance('2026-09-02', 'session');
+    const refusedB = [rawStore(tabB) === moved, staleState(tabB), relWarnings(tabB)];
+    tabB.run('__otherStorage.setItem(GEODE_SHELL_KEY, BEYND_RUNTIME_VERSION); __reload();');
+    invariant('P2.schema.stale-tab', 'Two pending tabs on the same schema-2 data; tab A becomes ready and moves storage to schema 3. Tab B (schema 2 in memory) then persists, saves and renders across September: all refused as "changed", A\'s schema-3 text untouched; B\'s reload adopts schema 3 (its refused income change is gone — no merge)',
+      [JSON.parse(moved)._schemaVersion, refusedB, [tabB.state()._schemaVersion, tabB.state().income === JSON.parse(moved).income, staleState(tabB)]],
+      [3, [true, ['changed', 'changed'], ['stale:changed']], [3, true, ['', '']]]);
+  });
+
+  // ── P. SAME-RUNTIME MULTI-TAB TORTURE ──
+  scenario('P2-6 MULTI-TAB — two schema-3 tabs; the stale one never overwrites, reloads to adopt, never merges', () => {
+    const origin = world();
+    confirmAll(origin.app, origin.ids, '2026-06-15');
+    origin.app.advance('2026-07-02', 'reload');
+    const parent = rawStore(origin.app);
+    const pageOn = (raw, clock) => { const app = new App(JSON.parse(raw), clock, undefined, { boot: false }); app.run('__store = ' + JSON.stringify(raw) + '; __reload();'); return app; };
+    const ids = origin.ids;
+    const pair = () => [pageOn(parent, '2026-07-05'), pageOn(parent, '2026-07-05')];
+    const outcome = (a, b, attempt) => {
+      const theirs = rawStore(a);
+      foreignStore(b, theirs);
+      attempt(b);
+      const refused = [rawStore(b) === theirs, staleState(b)[0], relWarnings(b).length > 0];
+      b.run('__reload();');
+      const adopted = rawStore(b) === theirs;
+      b.contribute({ name: 'After reload', amount: 5, date: b.run('geodeTodayLocalISO()'), status: 'paid', goalId: 'gH' });
+      return [refused, adopted, JSON.parse(rawStore(b))._rev.seq === JSON.parse(theirs)._rev.seq + 1];
+    };
+    const results = [];
+    let [a, b] = pair();
+    a.toggle(ids.goal);
+    results.push(['A completes; B renders Home (render + incidental persist) and completes', outcome(a, b, x => { x.render(); x.run('persistGeodeToLocalStorage();'); x.toggle(ids.bill); })]);
+    [a, b] = pair();
+    a.modalEdit(ids.debt, { amount: '65' });
+    results.push(['A edits a template; B completes it', outcome(a, b, x => x.toggle(ids.debt))]);
+    [a, b] = pair();
+    a.advance('2026-08-03', 'session');
+    const captured = a.state().expectationGaps.length;
+    results.push(['A crosses into August and records July; B persists incidentally and renders', outcome(a, b, x => { x.at('2026-08-03'); x.run('persistGeodeToLocalStorage();'); x.render(); })]);
+    [a, b] = pair();
+    a.saveInvestment('iA', 'ISA', 6100);
+    results.push(['A records a valuation; B saves', outcome(a, b, x => x.run('S.income = 9; save();'))]);
+    invariant('P2.tabs.torture', 'For each pair loaded from the same schema-3 text: B\'s attempt is refused as foreign with A\'s text byte-identical; B\'s reload adopts A\'s text exactly (nothing of B\'s refused change merged) and B\'s next write is the next revision. A\'s boundary recorded July for all four rows',
+      [results, captured], [results.map(r => [r[0], [[true, 'foreign', true], true, true]]), 4]);
+  });
+
+  // ── Q. LONG-LIVED TAB ──
+  scenario('P2-6 LONG-LIVED TAB — open from June across month end; render, checkAlerts, calcLeftover and Home render reach the fresh-load result once', () => {
+    const src = PROGRAM.src;
+    const inject = (app, names) => names.forEach(n => app.run(extractFunction(src, n).text.replace(/^function (\w+)/, n + ' = function')));
+    const triggers = {
+      render: app => app.render(),
+      checkAlerts: app => { inject(app, ['checkAlerts', 'geodeHasPositiveIncome']); app.run('geodeShouldSuppressPostSaveAlerts = function () { return false; }; checkAlerts();'); },
+      calcLeftover: app => { inject(app, ['calcLeftover']); app.run('calcLeftover();'); },
+      homeRender: app => { app.render(); app.run('persistGeodeToLocalStorage();'); }
+    };
+    const strip = s => { const o = JSON.parse(JSON.stringify(s)); delete o._rev; (o.expectationGaps || []).forEach(g => { delete g.capturedAt; }); return o; };
+    const table = Object.keys(triggers).map(name => {
+      const { app, ids } = world();
+      confirmAll(app, ids, '2026-06-15');
+      app.at('2026-06-20'); app.saveInvestment('iA', 'ISA', 5300);
+      const stored0 = rawStore(app);
+      app.at('2026-08-03');
+      triggers[name](app);
+      const once = strip(app.state());
+      app.render(); triggers[name](app); app.render();
+      const fresh = new App(JSON.parse(stored0), '2026-06-20', undefined, { boot: false });
+      fresh.run('__store = ' + JSON.stringify(stored0) + ';');
+      fresh.at('2026-08-03'); fresh.run('__reload()');
+      return [name, same(once, strip(fresh.state())), same(strip(app.state()), once), app.state().expectationGaps.length, fa7bVals(app).map(v => v[2])];
+    });
+    const renderFirst = extractFunction(src, 'render').text.split('\n')[1].trim();
+    invariant('P2.longlived', 'A page opened in June (all four rows confirmed, ISA valued £5,300) left open until 3 August: each entry point — render, checkAlerts, calcLeftover, Home render (render runs recurring sync first, then rHome persists) — leaves exactly the state a fresh August load of the June text reaches (records, rows, positions, valuations); repeating them adds nothing; four July records; the valuation is kept',
+      [renderFirst, table], ['syncRecurringPayments();', Object.keys(triggers).map(n => [n, true, true, 4, ['legacy_transition', 'manual']])]);
+  });
+
+  // ── R. BACKUP / NORMALISATION ──
+  scenario('P2-6 BACKUP AND NORMALISATION — every kind of evidence exported; malformed records dropped; schema 2 adds no history; newer refused; restore stays unwired', () => {
+    const { app, ids } = world();
+    confirmAll(app, ids, '2026-06-15');
+    app.at('2026-06-20'); app.release('gH', 100); app.saveInvestment('iA', 'ISA', 5400);
+    app.advance('2026-08-03', 'reload');
+    const env = app.backup();
+    const s = app.state();
+    const KEYS = ['expectationGaps', 'expectationFloorYm', 'billPaymentEvents', 'contributionEvents', 'debtPaymentEvents', 'savingsReleases'];
+    const exported = KEYS.map(k => [k, same(env.data[k], s[k]), Array.isArray(s[k]) ? s[k].length : s[k]]);
+    const valid = s.expectationGaps[0];
+    const bad = [null, [], 'gap', Object.assign({}, valid, { id: 'gap_x' }), Object.assign({}, valid, { fromYm: '2026-09' }), Object.assign({}, valid, { domain: 'expense' }),
+      Object.assign({}, valid, { recurrence: 'annual' }), Object.assign({}, valid, { expectedAmount: -1 }), Object.assign({}, valid, { expectedAmount: 'NaN' }), Object.assign({}, valid, { capturedAt: null }),
+      Object.assign({}, valid, { paymentId: '' }), Object.assign({}, valid, { toYm: '2026-13' }), Object.assign({}, valid, { expectedAmount: 1 })];
+    app.ctx.__norm = JSON.stringify({ _schemaVersion: 3, expectationFloorYm: 'June', expectationGaps: [valid].concat(bad) });
+    const norm = JSON.parse(app.run('(function () { var d = JSON.parse(__norm); geodeNormalizeExpectationGaps(d); var once = JSON.stringify(d); geodeNormalizeExpectationGaps(d); return JSON.stringify([d.expectationGaps.length, d.expectationGaps[0].expectedAmount, d.expectationFloorYm, once === JSON.stringify(d)]); })()'));
+    const s2 = JSON.parse(JSON.stringify(env.data));
+    s2._schemaVersion = 2; delete s2.expectationGaps; delete s2.expectationFloorYm;
+    const restored = new App(s2, '2026-10-02', undefined, { boot: false });
+    restored.run('__reload()');
+    const validate = sv => app.run('validateBeyndBackupEnvelope(JSON.parse(' + JSON.stringify(JSON.stringify(Object.assign({}, env, { schemaVersion: sv }))) + ')).ok');
+    const callers = (PROGRAM.src.match(/extractRestorableData\(/g) || []).length;
+    invariant('P2.backup', 'The schema-3 backup carries expectation records and floor, bill, contribution and debt evidence and releases exactly as stored. Normalising a list of one valid record and thirteen malformed ones (not objects, wrong id, reversed range, unknown domain, annual, negative or non-numeric amount, no capture time, no payment, invalid month, a duplicate id) keeps only the valid one; an invalid floor becomes this month; a second pass changes nothing. Schema-2 data (that backup minus the evidence) loaded in October moves to schema 3 with floor October and no record: nothing invented; positions as in the backup. A schema-4 backup is refused, schema 3 accepted. extractRestorableData still has no caller',
+      [exported, norm, [stored(restored)._schemaVersion, stored(restored).expectationFloorYm, stored(restored).expectationGaps, restored.snap().goal.gH, restored.snap().inv.iA], [validate(4), validate(3)], callers],
+      [[['expectationGaps', true, 4], ['expectationFloorYm', true, '2026-06'], ['billPaymentEvents', true, 1], ['contributionEvents', true, 2], ['debtPaymentEvents', true, 1], ['savingsReleases', true, 1]],
+        [1, valid.expectedAmount, '2026-08', true], [3, '2026-10', [], app.snap().goal.gH, app.snap().inv.iA], [false, true], 1]);
+  });
+
+  // ── T. KNOWN LIMITATIONS, RE-TESTED ──
+  scenario('P2-6 KNOWN LIMITATIONS — each re-observed; UNKNOWN, never fabricated', () => {
+    const lw = world();
+    confirmAll(lw.app, lw.ids, '2026-06-15');
+    lw.app.at('2026-08-03');
+    lw.app.release('gH', 50);
+    lw.app.render();
+    current('P2.limit.first-write', 'A page left open from June whose first act after the month turns is a write (here a £50 release) before any render: that write moves the seen month to August, so the boundary that follows records nothing for July — July reads unknown (never fabricated, never "missed"). A render, checkAlerts or calcLeftover first records July (P2.longlived); so does any fresh load',
+      [gaps(lw.app, lw.ids), classify(lw.app, lw.ids, ['2026-07'])], [[], every(lw.ids, [U])]);
+
+    const paidRow = lastPaidYM => {
+      const app = new App(baseState({ investments: [], _schemaVersion: 3, expectationGaps: [], expectationFloorYm: '2026-06', contributionEvents: [], contributionCarry: [], billPaymentEvents: [],
+        payments: [{ id: 'b1', name: 'Rent', amount: 80, date: '2026-07-15', status: 'paid', rec: 'yes', lastPaidYM, goalId: '', investId: '', debtId: '', payKind: 'bill', createdAt: 1 }] }), '2026-06-10', undefined, { boot: false });
+      app.at('2026-08-03'); app.run('__reload()');
+      return [app.state().payments[0].status, gaps(app, { b1: 'b1' }), status(app, 'b1', ['2026-06', '2026-07'])];
+    };
+    invariant('P2.limit.paid-unknown', 'A paid monthly bill with a malformed completion month and no due date: the boundary resets it but cannot tell which occurrence it settled, so it records nothing — June and July stay unknown rather than guessed. With no completion month at all the row is not reset (Phase-1 rule, unchanged) and nothing is recorded either',
+      [paidRow('2026-6'), paidRow('')], [['upcoming', [], [U, U]], ['paid', [], [U, U]]]);
+
+    const dl = world('2026-06-01', ['bill']);
+    confirmAll(dl.app, dl.ids, '2026-06-15');
+    dl.app.advance('2026-07-10', 'reload');
+    dl.app.del(dl.ids.bill);
+    dl.app.advance('2026-08-03', 'reload');
+    invariant('P2.limit.delete-open', 'A template deleted in July, before July\'s boundary: nothing records its July — June confirmed, July unknown (no tombstone)',
+      [gaps(dl.app, dl.ids), status(dl.app, dl.ids.bill, ['2026-06', '2026-07'])], [[], [C, U]]);
+  });
+
+  // ── E. LONG ABSENCE ──
+  /** Structural soundness of the records: unique ids, no month recorded twice for a payment, none current or future, none before the floor, none settled. */
+  const sound = app => JSON.parse(app.run(`(function () {
+    var g = S.expectationGaps || [], ym = currentYM(), seen = {}, ids = {}, overlap = false, settledHit = false, idx = geodeExpectationSettlementIndex(S);
+    g.forEach(function (x) {
+      ids[x.id] = true;
+      for (var m = x.fromYm; m <= x.toYm; m = geodeContributionYmAdd(m, 1)) {
+        if (seen[x.paymentId + '|' + m]) overlap = true;
+        seen[x.paymentId + '|' + m] = true;
+        if (geodeExpectationSettled(idx, x.domain, x.paymentId, m)) settledHit = true;
+      }
+    });
+    return JSON.stringify([Object.keys(ids).length === g.length, !overlap, g.every(function (x) { return x.toYm < ym; }), g.every(function (x) { return x.fromYm >= S.expectationFloorYm; }), !settledHit]);
+  })()`));
+  const SOUND = [true, true, true, true, true];
+  const ledgerText = app => { const s = app.state(); return JSON.stringify([s.contributionEvents, s.debtPaymentEvents, s.billPaymentEvents, s.savingsReleases]); };
+  const VARIANTS = [
+    ['unchanged', 'June confirmed, template unchanged'],
+    ['history', 'June and July confirmed, then away'],
+    ['none', 'nothing ever confirmed'],
+    ['valued-before', 'ISA valued £5,500 on 10 June, then June confirmed'],
+    ['valued-after', 'June confirmed, then ISA valued £5,600 on 20 June'],
+    ['delete', 'June confirmed; every template deleted after the return'],
+    ['edit', 'June confirmed; every template edited after the return']
+  ];
+  [1, 2, 6, 12, 18].forEach(n => scenario('P2-6 LONG ABSENCE — ' + n + ' month(s) away, all four domains, seven variants', () => {
+    VARIANTS.forEach(([v, text]) => {
+      const { app, ids } = world();
+      if (v === 'valued-before') { app.at('2026-06-10'); app.saveInvestment('iA', 'ISA', 5500); }
+      if (v !== 'none') confirmAll(app, ids, '2026-06-15');
+      if (v === 'valued-after') { app.at('2026-06-20'); app.saveInvestment('iA', 'ISA', 5600); }
+      if (v === 'history') { app.advance('2026-07-02', 'reload'); confirmAll(app, ids, '2026-07-15'); }
+      const leftAt = v === 'history' ? '2026-07' : '2026-06';
+      const before = [position(app), ledgerText(app)];
+      const back = ymAdd(leftAt, n + 1), last = ymAdd(back, -1);
+      app.advance(back + '-03', 'reload');
+      const first = v === 'none' ? '2026-06' : ymAdd(leftAt, 1);
+      const expectGaps = each(d => row(d, first, last));
+      const got = [gaps(app, ids), sound(app), [position(app), ledgerText(app)], classify(app, ids, [last, back])];
+      const want = [expectGaps, SOUND, before, every(ids, [E, U])];
+      if (v === 'delete' || v === 'edit') {
+        DOMAINS.forEach(d => (v === 'delete' ? app.del(ids[d]) : app.modalEdit(ids[d], { amount: String(NEW[d]) })));
+        app.advance(ymAdd(back, 1) + '-03', 'reload');
+        got.push(gaps(app, ids), sound(app), position(app));
+        want.push(v === 'delete' ? expectGaps : sorted(expectGaps.concat(each(d => row(d, back, back, NEW)))), SOUND, before[0]);
+      }
+      invariant('P2.long.' + n + '.' + v, text + '; back in ' + back + ': one record per row from ' + first + ' through ' + last + ' — no duplicate or overlapping range, nothing current or future, nothing before the June floor, no settled month recorded; settlements, releases and positions exactly as before the absence; the last elapsed month expected, the current month unknown' +
+        (v === 'delete' ? '; after deleting every template the next boundary records nothing more' : v === 'edit' ? '; after editing every template the next boundary records that month at the new amounts and never rewrites the range' : ''),
+        got, want);
+    });
+  }));
+
+  // ── F. EXPECTATION-RANGE TORTURE ──
+  MODES.forEach(mode => scenario('P2-6 RANGE TORTURE — one July–September record under settlement, reversal, re-completion, deletion, reload and backup [' + mode + ']', () => {
+    const { app, ids } = world('2026-06-01', ['bill']);
+    confirmAll(app, ids, '2026-06-15'); settle(app, mode);
+    app.advance('2026-10-02', mode);
+    const record = JSON.stringify(app.state().expectationGaps);
+    const read = () => status(app, ids.bill, ['2026-07', '2026-08', '2026-09', '2026-10']);
+    const steps = [['recorded', read()]];
+    app.modalEdit(ids.bill, { date: '2026-08-15' }); app.toggle(ids.bill); settle(app, mode);
+    steps.push(['August settled', read()]);
+    app.toggle(ids.bill); settle(app, mode);
+    steps.push(['August reversed', read()]);
+    app.modalEdit(ids.bill, { date: '2026-08-15' }); app.toggle(ids.bill); settle(app, mode);
+    steps.push(['August re-completed', read()]);
+    app.del(ids.bill); settle(app, mode);
+    steps.push(['template deleted in October', read()]);
+    app.reload();
+    steps.push(['reload', read()]);
+    const envelope = app.backup();
+    app.ctx.__backupJson = JSON.stringify(envelope.data);
+    const fromBackup = JSON.parse(app.run(`(function () { var d = JSON.parse(__backupJson); geodeNormalizeExpectationGaps(d); var once = JSON.stringify(d.expectationGaps); geodeNormalizeExpectationGaps(d);
+      return JSON.stringify([once === JSON.stringify(d.expectationGaps), ['2026-07', '2026-08', '2026-09', '2026-10'].map(function (m) { return geodeExpectationOccurrenceStatus(d, ${JSON.stringify(ids.bill)}, m); })]); })()`));
+    app.advance('2026-11-03', mode);
+    invariant('P2.range.torture', 'Rent: June confirmed, away until October → one July–September record. The settlement overlay alone decides each month: August settled (late, through the existing edit and complete path) → [expected, confirmed, expected]; reversed → all expected; completed again → confirmed again; template deleted in October → August stays confirmed (its evidence survives), October unknown; reload and the backup data (normalised twice, idempotent) read the same; the record is byte-identical throughout and never split; November records nothing for a deleted template',
+      [steps, JSON.stringify(app.state().expectationGaps) === record, JSON.stringify(envelope.data.expectationGaps) === record, fromBackup, gaps(app, ids), app.state().billPaymentEvents.map(e => [e.eventType, e.occurrenceYm])],
+      [[['recorded', [E, E, E, U]], ['August settled', [E, C, E, U]], ['August reversed', [E, E, E, U]], ['August re-completed', [E, C, E, U]], ['template deleted in October', [E, C, E, U]], ['reload', [E, C, E, U]]],
+        true, true, [true, [E, C, E, U]], [['bill', '2026-07', '2026-09', 80]],
+        [['completion', '2026-06'], ['completion', '2026-08'], ['reversal', '2026-08'], ['completion', '2026-08']]]);
+  }));
+}
+
 let PROGRAM;
 function main() {
   try {
@@ -7177,6 +7849,7 @@ function main() {
   p1Close();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
   p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2DebtIdentity(); p2BillSettlement(); p2RevisionFence(); p1RelOldWriter(); p2Expectations();
+  p2Continuity();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');

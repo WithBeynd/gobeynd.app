@@ -617,7 +617,7 @@ async function schema3Gate() {
  * The deployed runtime's own guard code, read from its release tag: boot note, write admission, the persist and
  * transition writers, the storage listener and backup validation, with their constants as shipped.
  */
-function loadOldRuntime(storage) {
+function loadOldRuntime(storage, extra) {
   const old = require('child_process').execFileSync('git', ['show', PREVIOUS_TAG + ':index.html'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).replace(/\r\n/g, '\n');
   const fn = name => { const a = old.indexOf('\nfunction ' + name + '('); if (a < 0) throw new Error(PREVIOUS_TAG + ' has no ' + name); return old.slice(a + 1, old.indexOf('\n}\n', a) + 2); };
   const constant = name => { const m = old.match(new RegExp('\\nvar ' + name + ' = [^\\n]*;\\n')); if (!m) throw new Error(PREVIOUS_TAG + ' has no var ' + name); return m[0].trim(); };
@@ -627,7 +627,8 @@ function loadOldRuntime(storage) {
   const code = ['KEY', 'GEODE_SCHEMA_VERSION', 'BEYND_RUNTIME_VERSION', '_geodeRuntimeStale', '_geodeFinancialKeySeen'].map(constant).join('\n') + '\nvar S = null;\n' +
     'function geodeShowStaleRuntimeGate(r) { __gates.push(r); }\nfunction toast() {}\n' +
     ['geodePersistedSchemaVersion', 'geodeStoredSchemaVersion', 'geodeNoteFinancialBoot', 'geodeMarkRuntimeStale', 'geodeFinancialWriteAllowed', 'persistGeodeToLocalStorage',
-      'geodeSchema2CommitTransition', 'geodeOnForeignFinancialWrite', 'geodeInstallFinancialStorageListener', 'isPlainObject', 'validateBeyndBackupEnvelope'].map(fn).join('\n');
+      'geodeSchema2CommitTransition', 'geodeOnForeignFinancialWrite', 'geodeInstallFinancialStorageListener', 'isPlainObject', 'validateBeyndBackupEnvelope'].map(fn).join('\n') +
+    (extra ? '\n' + extra.stubs + '\n' + extra.names.map(fn).join('\n') : '');
   new vm.Script(code, { filename: PREVIOUS_TAG + '.js' }).runInContext(ctx);
   return { old, fn, gates, listeners, run: src => vm.runInContext(src, ctx) };
 }
@@ -683,6 +684,33 @@ async function oldRuntime() {
   const backup = sv => probe.run('validateBeyndBackupEnvelope(JSON.parse(' + JSON.stringify(JSON.stringify({ app: 'Beynd', exportType: 'state_backup_redacted_v1', exportFormatVersion: 1, redacted: true,
     data: { income: 1 }, schemaVersion: sv })) + ')).ok');
   check('old.backup', 'Its backup validator refuses a schema-3 backup and accepts a schema-2 one', [backup(3), backup(2)], [false, true]);
+
+  const owner = at => { const j = probe.old.lastIndexOf('\nfunction ', at); return probe.old.slice(j + 10, probe.old.indexOf('(', j)); };
+  const sites = re => { const out = []; let m; while ((m = re.exec(probe.old))) out.push(owner(m.index)); return out; };
+  const writers = sites(/localStorage\.setItem\(\s*KEY/g);
+  const guarded = writers.map(n => { const body = probe.fn(n); const g = body.indexOf('if (!geodeFinancialWriteAllowed('); return g >= 0 && g < body.indexOf('localStorage.setItem(KEY'); });
+  check('old.writers', 'Every place ' + PREVIOUS + ' writes the financial key: save(), the incidental render persist and the schema-2 commit, each behind the write guard; the only removal is the explicit "delete all data" wipe',
+    [writers, guarded, sites(/localStorage\.removeItem\(\s*KEY/g), sites(/localStorage\.clear\(/g)],
+    [['save', 'persistGeodeToLocalStorage', 'geodeSchema2CommitTransition'], [true, true, true], ['wipeLocalAppStateAndReload'], []]);
+
+  const SAVE = { names: ['save'], stubs: 'var _saveHasPendingBaseline = false, _pendingCompareBaseline = null, _geodeBootstrap = false;\n' +
+    'function geodeNormalizeIncomeTypeFields() {}\nfunction geodeArchiveExpiredOneOffExpenses() {}\nfunction captureMonthlySnapshot() {}\n' +
+    'function computeSnapshotFigures() { return {}; }\nfunction extendLastSnapshotFigures(f) { return f; }\nfunction markActive() {}' };
+  const oldSave = moved => {
+    log.length = 0;
+    const store = fakeStorage({ geode_v6: SCHEMA2 });
+    const page = loadOldRuntime(store, SAVE);
+    page.run('geodeNoteFinancialBoot(localStorage.getItem(KEY)); S = JSON.parse(localStorage.getItem(KEY));');
+    if (moved) store.m.geode_v6 = SCHEMA3;
+    page.run('S.income = 3100; S.payments = [{ id: "p1", status: "upcoming" }]; save();');
+    return [page.run('_geodeRuntimeStale'), writes(store), store.m.geode_v6 === (moved ? SCHEMA3 : SCHEMA2)];
+  };
+  check('old.save', 'The tagged save() itself (a financial save, e.g. ticking a payment) in an open ' + PREVIOUS + ' page after storage moved to schema 3: refused as newer, nothing written, text byte-identical. Control: the same save on schema-2 storage writes',
+    [oldSave(true), oldSave(false)], [['newer', 0, true], ['', 1, false]]);
+
+  const sync = probe.fn('syncRecurringPayments');
+  check('old.recurrence', 'The tagged recurrence processing (syncRecurringPayments) never touches storage itself: its only write path is save(), so a month boundary seen by an old page is refused like any other save',
+    [count(sync, 'localStorage'), count(sync, 'save()') > 0, count(sync, 'persistGeodeToLocalStorage')], [0, true, 0]);
 }
 
 async function mixedVersions() {
