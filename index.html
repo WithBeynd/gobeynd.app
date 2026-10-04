@@ -12669,7 +12669,10 @@ function closeModal() {
     m.classList.add('mo-bg--closing');
     m.classList.remove('on');
   } catch (e) {}
-  setTimeout(removeModalDom, 165);
+  // Remove only this modal: one opened during the fade is a different #modal and must stay.
+  setTimeout(function () {
+    try { m.remove(); } catch (e2) {}
+  }, 165);
 }
 function mh(title) { return '<div class="mo-hdr"><span class="mo-title">'+title+'</span><button type="button" class="mo-close" onclick="closeModal()" title="Close" aria-label="Close"><span class="mo-close-x ic mo-close-ic">' + geodeSvg('x') + '</span><span class="mo-close-lb">Close</span></button></div>'; }
 
@@ -26836,18 +26839,12 @@ function geodePlanStepActionState(state, step, opts) {
   var remaining = toNum(prog.remaining);
   var coverageGap = Math.max(0, suggested - applied - scheduled);
   var isCompleted = prog.phase === 'done';
-  var stepLabel = String(step && step.label || '');
-  var isDebtStep = stepLabel.indexOf('Reduce high') === 0 || stepLabel.indexOf('Pay down ') === 0;
-  // Non-debt steps: paid + scheduled together cover the step; the action amount is only the uncovered gap.
-  var isScheduledOnly = !isCompleted && (applied <= 0 || !isDebtStep) && scheduled > 0 && coverageGap < 1;
+  // Every step, debt included: paid + scheduled together cover the step; the action amount is only the uncovered gap.
+  var isScheduledOnly = !isCompleted && scheduled > 0 && coverageGap < 1;
   var isInProgress = !isCompleted && applied > 0 && remaining >= 1;
   var isNotStarted = prog.phase === 'none';
-  var isActionable = !isCompleted && ((isDebtStep && applied > 0 && remaining >= 1) || coverageGap >= 1);
-  var actionAmount = 0;
-  if (!isCompleted) {
-    if (isDebtStep && applied > 0 && remaining >= 1) actionAmount = remaining;
-    else if (coverageGap >= 1) actionAmount = coverageGap;
-  }
+  var isActionable = !isCompleted && coverageGap >= 1;
+  var actionAmount = isActionable ? coverageGap : 0;
   return {
     progress: prog,
     suggested: suggested,

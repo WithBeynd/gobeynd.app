@@ -1895,7 +1895,7 @@ function identityMatrix() {
 /**
  * Plan contribution action semantics: a gap action adds only the uncovered gap (topping up the Plan row, never a row
  * the user added), Adjust edits the one row that provides the coverage (several rows → Payments), and paid +
- * scheduled together cover a goal/investment/buffer step. Debt keeps its existing behaviour.
+ * scheduled together cover a goal/investment/buffer step — and, since P2-7, a debt step.
  */
 function planActions() {
   const GOAL_STEP = { label: 'Catch up on Holiday', amount: 120 };
@@ -2155,12 +2155,53 @@ function planActions() {
     const covered = planApp([pay('d0', 50, 'no', { debtId: 'dC', payKind: 'debt' }, Object.assign({ name: 'Extra debt payment: Card' }, PAID)),
       pay('d1', 70, 'yes', { debtId: 'dC', payKind: 'debt' }, { name: 'Extra debt payment: Card', createdAt: 2 })], debts);
     covered.setPlan([DEBT_STEP]);
-    current('PA.DEBT.covered', 'Debt paid £50 + scheduled £70 keeps the debt action state (remaining £70 offered; debt is outside FA-1C)',
+    invariant('PA.DEBT.covered', 'Debt paid £50 + scheduled £70 covers the £120 step: Plan offers to adjust the £70 already scheduled, not to schedule it again, and Home points to the plan (P2-7: debt joins the paid + scheduled coverage rule; was CURRENT)',
       [pick(covered.planView(DEBT_STEP), 'label', 'amount', 'actionable', 'scheduledOnly', 'actionAmount'), covered.homeView(DEBT_STEP)],
-      [{ label: 'Schedule remaining amount', amount: 70, actionable: true, scheduledOnly: false, actionAmount: 70 }, { cta: 'Schedule extra payment', amount: 70 }]);
-    current('PA.DEBT.covered.tap', 'Its "Schedule remaining amount" tap now saves the £70 it offers as its own row next to d1 (P2-3: a debt save without a row id never overwrites another row); the offer itself is PA.DEBT.covered',
-      [tapped(covered.planTap(DEBT_STEP)), unpaid(covered)],
-      [['payments', null, 'set'], [['d1', 'yes', 70, false], ['id1', 'yes', 70, false]]]);
+      [{ label: 'Adjust scheduled amount', amount: 70, actionable: false, scheduledOnly: true, actionAmount: 0 }, { cta: 'View plan', amount: null }]);
+    invariant('PA.DEBT.covered.tap', 'Its tap edits the one scheduled row d1 by id and re-saving keeps that one row — no second £70 (P2-7; was CURRENT, when the tap saved a duplicate £70 beside d1)',
+      [tapped(covered.planTap(DEBT_STEP)), unpaid(covered), covered.state().debts[0].balance],
+      [['payments', 'd1', 'replace'], [['d1', 'yes', 70, false]], 1000]);
+  });
+
+  scenario('P2-7 DEBT PLAN COVERAGE — current-month scheduled debt intent counts toward the step, through the existing scheduled-row rules', () => {
+    const debts = { debts: [CARD()] };
+    const DEBT = { debtId: 'dC', payKind: 'debt' };
+    const extra = (id, amount, rec, more) => pay(id, amount, rec, DEBT, Object.assign({ name: 'Extra debt payment: Card' }, more || {}));
+    const paid50 = () => extra('d0', 50, 'no', PAID);
+    const state = app => pick(app.planView(DEBT_STEP), 'label', 'amount', 'applied', 'scheduled', 'actionAmount');
+
+    const partial = planApp([paid50(), extra('d1', 20, 'yes', { createdAt: 2 })], debts);
+    partial.setPlan([DEBT_STEP]);
+    const partialBefore = state(partial);
+    const partialTap = tapped(partial.planTap(DEBT_STEP));
+    invariant('P2.debtplan.partial', 'B. Paid £50 + scheduled £20 of £120: Plan offers only the uncovered £50; accepting saves it as its own row beside d1 (P2-3), after which the step is covered and Plan offers Adjust',
+      [partialBefore, partialTap, unpaid(partial), pick(partial.planView(DEBT_STEP), 'label', 'scheduled', 'actionAmount')],
+      [{ label: 'Schedule remaining amount', amount: 50, applied: 50, scheduled: 20, actionAmount: 50 }, ['payments', null, 'set'],
+        [['d1', 'yes', 20, false], ['id1', 'yes', 50, false]], { label: 'Adjust scheduled amount', scheduled: 70, actionAmount: 0 }]);
+
+    const two = planApp([paid50(), extra('d1', 30, 'yes', { createdAt: 2 }), extra('d2', 40, 'no', { createdAt: 3, date: '2026-06-20' })], debts);
+    two.setPlan([DEBT_STEP]);
+    invariant('P2.debtplan.two-rows', 'C/D. Two separate scheduled intents (a £30 monthly and a £40 one-off this month) both count: £50 + £70 covers the step; with two rows Adjust opens Payments rather than picking one, and neither row is merged or changed',
+      [state(two), tapped(two.planTap(DEBT_STEP)), unpaid(two)],
+      [{ label: 'Adjust scheduled amount', amount: 70, applied: 50, scheduled: 70, actionAmount: 0 }, ['payments', null, null], [['d1', 'yes', 30, false], ['d2', 'no', 40, false]]]);
+
+    const minimum = planApp([paid50(), pay('m1', 50, 'yes', DEBT, { name: 'Card minimum', createdAt: 2 })], { debts: [Object.assign(CARD(), { minp: 50 })] });
+    minimum.setPlan([DEBT_STEP]);
+    invariant('P2.debtplan.minimum', 'D. The existing scheduled-row rule still applies (card with a £50 minimum, minp): a scheduled row that only meets the minimum is not extra and covers nothing, so the £70 stays uncovered',
+      state(minimum), { label: 'Schedule remaining amount', amount: 70, applied: 50, scheduled: 0, actionAmount: 70 });
+
+    const done = planApp([paid50(), extra('d1', 70, 'yes', { status: 'paid', date: '2026-07-15', lastPaidYM: '2026-06', lastPaidDueDate: '2026-06-15', createdAt: 2 })], debts);
+    done.setPlan([DEBT_STEP]);
+    invariant('P2.debtplan.completed', 'E. Completed rows are counted once, as paid: £50 + £70 paid completes the step, nothing is scheduled and nothing is offered',
+      [state(done), done.planView(DEBT_STEP).actionable], [{ label: '', amount: null, applied: 120, scheduled: 0, actionAmount: 0 }, false]);
+
+    const later = planApp([paid50(), extra('d1', 70, 'no', { date: '2026-07-15', createdAt: 2 })], debts);
+    later.setPlan([DEBT_STEP]);
+    invariant('P2.debtplan.next-month', 'F. A £70 one-off dated next month does not cover this month: the £70 is still offered',
+      state(later), { label: 'Schedule remaining amount', amount: 70, applied: 50, scheduled: 0, actionAmount: 70 });
+
+    invariant('P2.debtplan.balance', 'G. No Plan view or tap moves the debt balance: Card stays £1,000 throughout',
+      [partial, two, minimum, done, later].map(a => a.state().debts[0].balance), [1000, 1000, 1000, 1000, 1000]);
   });
 }
 
@@ -7556,15 +7597,18 @@ function p2Continuity() {
     const mixed = bill('2026-11-01', '2026-11-15');
     const annual = mixed.app.contribute({ name: 'Insurance', amount: 300, date: '2026-12-20', status: 'upcoming', rec: 'annual' });
     mixed.app.advance('2027-02-02', 'reload');
-    invariant('P2.calendar', 'Occurrence month identity survives every calendar edge; only the due-day presentation drifts. Due 31 Jan 2027, confirmed: the row moves to 28 Feb; back in March → February recorded (Jan confirmed, Mar unknown), row 28 Mar; April records March with due day 28 (drift, not a wrong month). Never confirmed, rendered in February and March → January and February recorded as separate months, the row 28 Feb then 28 Mar; jumped straight to March → one January–February record, row 31 Mar. Leap 2028: 31 Jan paid → 29 Feb; back in March → February 2028 recorded. December confirmed, back in February → January 2027 alone; never confirmed → one December 2026–January 2027 record. An annual row beside a monthly one is never recorded and keeps its date',
-      [janConfirmed, janNext, [febRow, look(open, ['2027-01', '2027-02', '2027-03'])], look(jump, ['2027-01', '2027-02', '2027-03']), [leapPaidTo, look(leap, ['2028-01', '2028-02', '2028-03'])],
-        look(dec, ['2026-12', '2027-01', '2027-02']), look(decOpen, ['2026-12', '2027-01', '2027-02']),
+    const JAN = ['2027-01', '2027-02', '2027-03'], LEAP = ['2028-01', '2028-02', '2028-03'], DEC = ['2026-12', '2027-01', '2027-02'];
+    const months = (w, yms) => look(w, yms).slice(0, 2), day = w => w.app.state().payments[0].date;
+    invariant('P2.calendar', 'Occurrence month identity survives every calendar edge (the displayed day is P2.calendar.day-drift). Due 31 Jan 2027, confirmed: back in March → February recorded (Jan confirmed, Mar unknown); April records March. Never confirmed, rendered in February and March → January and February recorded as separate months; jumped straight to March → one January–February record. Leap 2028: 31 Jan paid, back in March → February 2028 recorded. December confirmed, back in February → January 2027 alone; never confirmed → one December 2026–January 2027 record. An annual row beside a monthly one is never recorded and keeps its date',
+      [janConfirmed.slice(0, 2), janNext[0], months(open, JAN), months(jump, JAN), months(leap, LEAP), months(dec, DEC), months(decOpen, DEC),
         [gaps(mixed.app, { rent: mixed.id, annual }), mixed.app.state().payments.filter(p => p.id === annual).map(p => [p.status, p.date])]],
-      [[[['rent', '2027-02', '2027-02', 80]], [C, E, U], '2027-03-28'], [[['rent', '2027-02', '2027-02', 80], ['rent', '2027-03', '2027-03', 80]], [28, 28], '2027-04-28'],
-        ['2027-02-28', [[['rent', '2027-01', '2027-01', 80], ['rent', '2027-02', '2027-02', 80]], [E, E, U], '2027-03-28']],
-        [[['rent', '2027-01', '2027-02', 80]], [E, E, U], '2027-03-31'], ['2028-02-29', [[['rent', '2028-02', '2028-02', 80]], [C, E, U], '2028-03-29']],
-        [[['rent', '2027-01', '2027-01', 80]], [C, E, U], '2027-02-15'], [[['rent', '2026-12', '2027-01', 80]], [E, E, U], '2027-02-15'],
+      [[[['rent', '2027-02', '2027-02', 80]], [C, E, U]], [['rent', '2027-02', '2027-02', 80], ['rent', '2027-03', '2027-03', 80]],
+        [[['rent', '2027-01', '2027-01', 80], ['rent', '2027-02', '2027-02', 80]], [E, E, U]], [[['rent', '2027-01', '2027-02', 80]], [E, E, U]],
+        [[['rent', '2028-02', '2028-02', 80]], [C, E, U]], [[['rent', '2027-01', '2027-01', 80]], [C, E, U]], [[['rent', '2026-12', '2027-01', 80]], [E, E, U]],
         [[['rent', '2026-11', '2027-01', 80]], [['upcoming', '2026-12-20']]]]);
+    current('P2.calendar.day-drift', 'The displayed due day drifts because no intended day is stored (P2-7 audit: LATER — a fix needs a new persisted field). Due 31 Jan 2027, confirmed: 28 Feb → 28 Mar → 28 Apr, and the March record keeps due day 28 (Feb 28, Mar 28). Never confirmed, seen in February: 28 Feb → 28 Mar. Jumped straight from January to March: 31 Mar. Leap 2028: 29 Feb → 29 Mar. A 15th-of-month row never drifts. The occurrence month is always right (P2.calendar)',
+      [[janConfirmed[2], janNext[1], janNext[2]], [febRow, day(open)], day(jump), [leapPaidTo, day(leap)], [day(dec), day(decOpen)]],
+      [['2027-03-28', [28, 28], '2027-04-28'], ['2027-02-28', '2027-03-28'], '2027-03-31', ['2028-02-29', '2028-03-29'], ['2027-02-15', '2027-02-15']]);
   });
 
   // ── N. SCHEMA-TRANSITION TORTURE ──
@@ -7826,6 +7870,65 @@ function p2Continuity() {
   }));
 }
 
+/**
+ * P2-7: closeModal's delayed removal removes only the modal it closed. A modal opened during the 165ms fade is a
+ * different #modal and stays, with its commit guard and the stale-write gate exactly as before.
+ */
+function p2ModalClose() {
+  const page = () => { const app = new App(baseState(), '2026-06-10', PROGRAM.commit); app.run('var __open = function (name) { openModal("<p>" + name + "</p>"); __modal.__name = name; };'); return app; };
+  const look = app => JSON.parse(app.run('JSON.stringify(__modal ? { name: __modal.__name, closing: __modal.classList.contains("mo-bg--closing"), commit: __modal.getAttribute("data-geode-commit") } : null)'));
+  const pending = app => Number(app.run('__timers.length'));
+  /** A closes, B opens before A's timer, then A's timer fires. */
+  const race = app => { app.run('__open("A"); __runTimers(); closeModal();'); const a = look(app); app.run('__open("B");'); const b = look(app); app.run('__runTimers();'); return [a, b, look(app)]; };
+  const OPEN = name => ({ name, closing: false, commit: null });
+
+  scenario('P2-7 MODAL CLOSE — the delayed removal removes only the modal it closed', () => {
+    const plain = page();
+    plain.run('__open("A"); __runTimers(); closeModal();');
+    const closing = look(plain);
+    plain.run('__runTimers();');
+    invariant('P2.modal.close', 'Ordinary close: the modal fades (mo-bg--closing, still in the page) and its timer then removes it',
+      [closing, pending(plain), look(plain)], [{ name: 'A', closing: true, commit: null }, 0, null]);
+
+    invariant('P2.modal.race', 'A closes; B opens before A\'s 165ms timer (openModal removes A at once); A\'s timer fires and B stays, open and clear',
+      race(page()), [{ name: 'A', closing: true, commit: null }, OPEN('B'), OPEN('B')]);
+
+    const twice = page();
+    twice.run('__open("A"); __runTimers(); closeModal(); closeModal();');
+    const queued = pending(twice);
+    twice.run('__runTimers(); closeModal();');
+    invariant('P2.modal.repeat', 'Repeated close is harmless: a second close while fading schedules nothing; after removal, closing with no modal open does nothing',
+      [queued, pending(twice), look(twice)], [1, 0, null]);
+
+    const guard = page();
+    guard.run('__open("A"); __runTimers(); closeModal(); __open("B");');
+    const commits = [guard.run('geodeModalCommitBegin()'), guard.run('geodeModalCommitBegin()')];
+    guard.run('__runTimers();');
+    invariant('P2.modal.commit', 'Double-submit guard unchanged: B (opened during A\'s fade) takes its one commit, a second press is refused, and A\'s timer leaves B and its commit flag in place',
+      [commits, look(guard)], [[true, false], { name: 'B', closing: false, commit: '1' }]);
+
+    const stale = page();
+    const fenced = JSON.parse(rawStore(stale));
+    fenced._rev = { seq: (fenced._rev ? fenced._rev.seq : 0) + 1, id: 'rev_modal_other', by: 'v1.0.77', at: 3 };
+    fenced.income = 4600;
+    stale.run('__open("A"); __runTimers(); closeModal(); __open("B");');
+    foreignStore(stale, JSON.stringify(fenced));
+    const began = stale.run('geodeModalCommitBegin()');
+    stale.run('__runTimers();');
+    invariant('P2.modal.stale-gate', 'Stale-write gate unchanged: B opened during A\'s fade, after another tab wrote, refuses its commit; A\'s timer leaves B; the other tab\'s text stays',
+      [began, look(stale), rawStore(stale) === JSON.stringify(fenced), staleState(stale), relWarnings(stale)],
+      [false, OPEN('B'), true, ['foreign', 'foreign'], ['stale:foreign']]);
+
+    const mutated = page();
+    mutated.run('closeModal = function () { var m = document.getElementById("modal"); if (!m || m.classList.contains("mo-bg--closing")) return; m.classList.add("mo-bg--closing"); m.classList.remove("on"); setTimeout(removeModalDom, 165); };');
+    invariant('P2.modal.mut', 'Mutation: with the old delayed removeModalDom (whatever #modal exists when the timer fires), A\'s timer removes B — the captured node is what keeps B',
+      race(mutated)[2], null);
+    invariant('P2.modal.source', 'closeModal removes the node it captured, never a fresh #modal lookup, and keeps the 165ms fade and the closing class',
+      [/setTimeout\(function \(\) \{\s*try \{ m\.remove\(\); \} catch \(e2\) \{\}\s*\}, 165\);/.test(PROGRAM.src), PROGRAM.src.indexOf('setTimeout(removeModalDom') < 0,
+        extractFunction(PROGRAM.src, 'closeModal').text.indexOf("m.classList.add('mo-bg--closing');") >= 0], [true, true, true]);
+  });
+}
+
 let PROGRAM;
 function main() {
   try {
@@ -7850,6 +7953,7 @@ function main() {
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
   p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2DebtIdentity(); p2BillSettlement(); p2RevisionFence(); p1RelOldWriter(); p2Expectations();
   p2Continuity();
+  p2ModalClose();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');
