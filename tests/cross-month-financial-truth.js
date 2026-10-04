@@ -6699,12 +6699,14 @@ function p2BillSettlement() {
       bodies.push([m[1], src.slice(start, end)]);
     }
     const users = needle => [...new Set(bodies.filter(b => b[1].indexOf(needle) >= 0).map(b => b[0]))].sort();
-    invariant('P2.bill.readers', 'Functions that mention the bill ledger: only the ledger family, the backup whitelist and the P2-5 expectation settlement index (read-only correlation for evidence); functions that call into it: the family, load (normalise + seed), togglePay, the payment form, Smart Import and that index — no Monthly Left, recompute, goal, investment or debt function',
+    invariant('P2.bill.readers', 'Functions that mention the bill ledger: only the ledger family, the backup whitelist, the P2-5 expectation settlement index (read-only correlation for evidence) and the P3-1 Living Month read model (read-only evidence, inert: tests/living-month-read-model.js); functions that call into it: the family, load (normalise + seed), togglePay, the payment form, Smart Import, that index and the read model\'s evidence index — no Monthly Left, recompute, goal, investment or debt function',
       [users('billPaymentEvents'), users('BillPayment')],
-      [['geodeAppendBillCompletion', 'geodeBeyndBackupRestorableKeyWhitelist', 'geodeBillPaymentActiveCompletion', 'geodeBillPaymentEventId', 'geodeExpectationSettlementIndex', 'geodeNormalizeBillPaymentEvents',
+      [['geodeAppendBillCompletion', 'geodeBeyndBackupRestorableKeyWhitelist', 'geodeBillPaymentActiveCompletion', 'geodeBillPaymentEventId', 'geodeExpectationSettlementIndex',
+        'geodeLivingMonthEvidenceIndex', 'geodeLivingMonthHappened', 'geodeLivingMonthPaymentEvidence', 'geodeNormalizeBillPaymentEvents',
         'geodeRecordBillPaymentTransition', 'geodeSeedBillPaymentEvents'],
       ['geodeAppendBillCompletion', 'geodeBillPaymentActiveCompletion', 'geodeBillPaymentEventId', 'geodeBillPaymentEventSnapshot', 'geodeBillPaymentEventValid', 'geodeBillPaymentLedger',
-        'geodeExpectationSettlementIndex', 'geodeNormalizeBillPaymentEvents', 'geodeRecordBillPaymentTransition', 'geodeSavePayApply', 'geodeSeedBillPaymentEvents', 'geodeSmartImportConfirm', 'load', 'togglePay']]);
+        'geodeExpectationSettlementIndex', 'geodeLivingMonthEvidenceIndex', 'geodeNormalizeBillPaymentEvents', 'geodeRecordBillPaymentTransition', 'geodeSavePayApply', 'geodeSeedBillPaymentEvents',
+        'geodeSmartImportConfirm', 'load', 'togglePay']]);
     invariant('P2.bill.schema', 'The list stayed additive at schema 2; schema is 3 since P2-5; the backup whitelist carries it', [app.state()._schemaVersion, app.run('geodeBeyndBackupRestorableKeyWhitelist().indexOf("billPaymentEvents") >= 0')], [3, true]);
   });
 
@@ -7445,10 +7447,10 @@ function p2Expectations() {
       bodies.push([m[1], src.slice(start, end)]);
     }
     const users = needle => [...new Set(bodies.filter(b => b[1].indexOf(needle) >= 0).map(b => b[0]))].sort();
-    invariant('P2.exp.readers', 'Functions that mention the records: the evidence family, the schema-3 transition, recurring sync (capture) and the backup whitelist; outside the family only load (normalise) and recurring sync (capture) call into it — no Monthly Left, recompute, Plan, goal, investment or debt calculator',
+    invariant('P2.exp.readers', 'Functions that mention the records: the evidence family, the schema-3 transition, recurring sync (capture), the backup whitelist and the P3-1 Living Month earlier-gap summary (evidence only, inert: tests/living-month-read-model.js); outside the family only load (normalise), recurring sync (capture) and that summary call into it — no Monthly Left, recompute, Plan, goal, investment or debt calculator',
       [users('expectationGaps'), users('Expectation').filter(n => n.indexOf('Expectation') < 0)],
       [['geodeBeyndBackupRestorableKeyWhitelist', 'geodeCaptureExpectationGaps', 'geodeExpectationCaptureContext', 'geodeExpectationOccurrenceStatus', 'geodeExpectationOccurrences',
-        'geodeNormalizeExpectationGaps', 'geodeSchema3Transition', 'syncRecurringPayments'], ['load', 'syncRecurringPayments']]);
+        'geodeLivingMonthEarlierGaps', 'geodeNormalizeExpectationGaps', 'geodeSchema3Transition', 'syncRecurringPayments'], ['geodeLivingMonthEarlierGaps', 'load', 'syncRecurringPayments']]);
   });
 
   MODES.forEach(mode => scenario('P2-5 RANGES AND CORRELATION — settlement overlays a recorded range at read time; a settled month is never recorded [' + mode + ']', () => {

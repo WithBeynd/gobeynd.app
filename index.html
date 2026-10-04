@@ -6046,6 +6046,289 @@ function calcMonthlyLeftoverConfirmedOnly(state) {
 }
 
 /**
+ * P3-1 Living Month: the current month described from existing truth. Pure, derived and non-authoritative — it reads
+ * only the supplied state and clock, writes nothing, persists nothing, never runs recurrence and owns no figure.
+ * Plan figures are the production functions' own; those read the runtime clock, so `now` must fall in the runtime's
+ * month or the model refuses (clock_month_mismatch). Unknown is null with a reason, never 0.
+ *
+ * Any status other than 'ready' returns the minimal safe model: calendar fields (when the clock is valid), the
+ * structural unknowns (income received/outstanding, received coverage, change) and null for every financial section,
+ * because figures read from a state whose boundary is unprocessed, or under another schema, would describe a month
+ * that is not this one.
+ */
+function geodeLivingMonthModel(state, now) {
+  var cal = geodeLivingMonthCalendar(now);
+  var model = {
+    kind: 'living_month',
+    authoritative: false,
+    status: 'ready',
+    reason: '',
+    month: cal
+      ? { ym: cal.ym, today: cal.today, day: cal.day, daysInMonth: cal.daysInMonth, daysRemaining: cal.daysRemaining, boundaryPending: null }
+      : null,
+    plan: null,
+    income: { state: 'not_tracked', planned: null, explicitlySet: null, type: null, certainty: null, received: null, outstanding: null, reason: 'no_income_evidence' },
+    available: { planRemainder: null, receivedCoverage: null, reason: 'no_income_evidence' },
+    payments: null,
+    expenses: null,
+    happened: null,
+    earlier: null,
+    changes: { available: false, reason: 'no_month_baseline' }
+  };
+  function refuse(status) {
+    model.status = status;
+    model.reason = status;
+    model.available.reason = status;
+    return model;
+  }
+  if (!cal) return refuse('invalid_clock');
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return refuse('invalid_state');
+  if (geodePersistedSchemaVersion(state._schemaVersion) !== GEODE_SCHEMA_VERSION) return refuse('schema_not_current');
+  if (cal.ym !== currentYM()) return refuse('clock_month_mismatch');
+  model.month.boundaryPending = geodeRecurrenceWouldMutateBoundary(state);
+  if (model.month.boundaryPending) return refuse('boundary_pending');
+
+  var incomePlanned = toNum(state.income);
+  var paymentsCountedTotal = sumPaymentsMonthlyOutflow(state.payments || []);
+  var budgetTotal = sumExpensesMonthly(state.expenses || []);
+  var monthlyLeft = calcMonthlyLeftover(state);
+  model.income = geodeLivingMonthIncome(state);
+  model.plan = {
+    basis: 'plan',
+    incomePlanned: incomePlanned,
+    incomeType: model.income.type,
+    paymentsCountedTotal: paymentsCountedTotal,
+    budgetTotal: budgetTotal,
+    monthlyLeft: monthlyLeft
+  };
+  model.available = { planRemainder: monthlyLeft, receivedCoverage: null, reason: 'no_income_evidence' };
+
+  var index = geodeLivingMonthEvidenceIndex(state);
+  var list = state.payments || [];
+  var done = [], ahead = [], doneTotal = 0, aheadTotal = 0;
+  for (var i = 0; i < list.length; i++) {
+    if (!paymentCountsForMonthlyOutflow(list[i])) continue;
+    var item = geodeLivingMonthPaymentItem(list[i], cal, index);
+    if (item.done) {
+      done.push(item);
+      doneTotal += item.amount;
+    } else {
+      ahead.push(item);
+      aheadTotal += item.amount;
+    }
+    delete item.done;
+  }
+  model.payments = { countedTotal: paymentsCountedTotal, doneTotal: doneTotal, aheadTotal: aheadTotal, done: done, ahead: ahead };
+  model.expenses = geodeLivingMonthExpenses(state);
+  model.happened = geodeLivingMonthHappened(state, cal, index);
+  model.earlier = geodeLivingMonthEarlierGaps(state, cal.ym);
+  return model;
+}
+
+/** P3-1: local calendar facts of the supplied clock (a Date or epoch ms), or null when it is not a valid time. */
+function geodeLivingMonthCalendar(now) {
+  var iso = geodeDateToLocalISO(typeof now === 'number' ? new Date(now) : now);
+  if (!iso) return null;
+  var day = Number(iso.slice(8, 10));
+  var daysInMonth = new Date(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)), 0).getDate();
+  return { ym: iso.slice(0, 7), today: iso, day: day, daysInMonth: daysInMonth, daysRemaining: daysInMonth - day };
+}
+
+/**
+ * P3-1: the income plan only. Beynd records no receipts, so reality is not_tracked: received and outstanding stay
+ * null (0 would claim evidence). type mirrors geodeGetIncomeContext without its in-place normalisation of S.
+ */
+function geodeLivingMonthIncome(state) {
+  var planned = toNum(state.income);
+  var type = !state.incomeExplicitlySet || planned <= 0 ? 'none' : state.incomeType === 'irregular' ? 'irregular' : 'stable';
+  return {
+    state: 'not_tracked',
+    planned: planned,
+    explicitlySet: !!state.incomeExplicitlySet,
+    type: type,
+    certainty: type === 'none' ? 'no_income_plan' : type + '_plan',
+    received: null,
+    outstanding: null,
+    reason: 'no_income_evidence'
+  };
+}
+
+/** P3-1: the active completions of the three settlement ledgers, by paymentId|occurrenceYm. Read-only. */
+function geodeLivingMonthEvidenceIndex(state) {
+  function byKey(list) {
+    var map = Object.create(null);
+    list.forEach(function (e) { map[e.paymentId + '|' + e.occurrenceYm] = e; });
+    return map;
+  }
+  var bill = geodeBillPaymentLedger(state.billPaymentEvents).active;
+  var debt = geodeDebtPaymentActiveCompletions(state);
+  var contribution = geodeContributionActiveCompletions(state);
+  return { bill: bill, debt: debt, contribution: contribution, billBy: byKey(bill), debtBy: byKey(debt), contributionBy: byKey(contribution) };
+}
+
+/**
+ * P3-1: one payment Monthly Left counts, at the amount it counts it for. A paid row is done; its evidence is a ledger
+ * completion for the occurrence the ledgers key it by, else status_only. An unpaid row is ahead: scheduled,
+ * due_no_outcome_recorded (due earlier this month, nothing recorded — not "missed"), undated, or
+ * outstanding_from_earlier. Contributions are allocations the user scheduled, not obligations.
+ */
+function geodeLivingMonthPaymentItem(p, cal, index) {
+  var kind = p.debtId ? 'debt' : p.goalId ? 'goal_contribution' : p.investId ? 'investment_contribution' : 'bill';
+  var rowDate = String(p.date || '').slice(0, 10);
+  var item = {
+    id: String(p.id || ''),
+    name: String(p.name || ''),
+    kind: kind,
+    nature: kind === 'goal_contribution' || kind === 'investment_contribution' ? 'allocation' : 'scheduled_outgoing',
+    recurrence: geodeContributionRecurrence(p),
+    amount: geodePaymentMonthAmount(p),
+    templateAmount: toNum(p.amount),
+    dueDate: geodeInvestmentIsoDateValid(rowDate) ? rowDate : null,
+    dueYm: null,
+    state: '',
+    evidence: null,
+    evidenceRef: null,
+    done: p.status === 'paid'
+  };
+  if (item.done) {
+    var paidThisMonth = geodePaymentPaidOccurrenceInMonth(p, cal.ym);
+    var occDue = String(p.lastPaidDueDate || '').slice(0, 10);
+    // A completed recurring row's date already names its next occurrence.
+    item.dueDate = geodeInvestmentIsoDateValid(occDue) ? occDue : paidThisMonth ? null : item.dueDate;
+    item.dueYm = item.dueDate ? item.dueDate.slice(0, 7) : null;
+    item.state = paidThisMonth || item.dueYm === cal.ym ? 'completed_this_month' : 'completed_month_unknown';
+    item.evidenceRef = geodeLivingMonthPaymentEvidence(p, index);
+    item.evidence = item.evidenceRef ? 'ledger' : 'status_only';
+    return item;
+  }
+  item.dueYm = item.dueDate ? item.dueDate.slice(0, 7) : null;
+  if (!item.dueDate) item.state = 'undated';
+  else if (item.dueYm < cal.ym) item.state = 'outstanding_from_earlier';
+  else if (item.dueYm === cal.ym && item.dueDate < cal.today) item.state = 'due_no_outcome_recorded';
+  else item.state = 'scheduled';
+  return item;
+}
+
+/** P3-1: the ledger completion that records a paid row's occurrence, keyed as each ledger keys it, or null. Never created here. */
+function geodeLivingMonthPaymentEvidence(p, index) {
+  var id = String(p.id || '');
+  var checks = [];
+  if (p.debtId) checks.push(['debtPaymentEvents', index.debtBy, geodeDebtPaymentOccurrenceYm(p)]);
+  if (p.goalId || p.investId) checks.push(['contributionEvents', index.contributionBy, geodeContributionOccurrenceYm(p)]);
+  if (geodePaymentIsBill(p)) checks.push(['billPaymentEvents', index.billBy, geodeBillPaidOccurrenceYm(p)]);
+  for (var i = 0; i < checks.length; i++) {
+    var ev = checks[i][2] ? checks[i][1][id + '|' + checks[i][2]] : null;
+    if (ev) return { source: checks[i][0], eventId: ev.id, occurrenceYm: ev.occurrenceYm, recordedAt: ev.recordedAt };
+  }
+  return null;
+}
+
+/** P3-1: the expense lines this month's budget counts, each at the value sumExpensesMonthly gives it. Plan data only. */
+function geodeLivingMonthExpenses(state) {
+  var list = state.expenses || [];
+  var items = [];
+  var total = 0;
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    if (!e) continue;
+    var value = sumExpensesMonthly([e]);
+    if (value === 0) continue;
+    total += value;
+    items.push({
+      id: String(e.id || ''),
+      name: String(e.name || ''),
+      cat: String(e.cat || ''),
+      recurrence: geodeExpenseIsOneOff(e) ? 'one_off' : e.rec === 'annual' ? 'annual' : 'monthly',
+      templateAmount: toNum(e.amount),
+      monthAmount: value,
+      basis: 'plan'
+    });
+  }
+  return { basis: 'plan', budgetTotal: total, items: items };
+}
+
+/**
+ * P3-1: this month's recorded events — settlements and contributions for this month's occurrences (plus any a user
+ * recorded this month for another month), releases dated this month, and valuations dated this month. recordedAt is
+ * when Beynd recorded the event (a tap, a form, an import or a migration), never a payment or bank date; eventDate is
+ * set only where the record carries a date of its own (a release's date, a valuation's as-of date).
+ */
+function geodeLivingMonthHappened(state, cal, index) {
+  var userSources = { mark_completed: true, payment_form: true, smart_import: true };
+  var systemSources = { migration: true, rollover_safety_net: true };
+  var out = [];
+  function settlements(list, ledger, domainOf, entityOf, type) {
+    list.forEach(function (e) {
+      var by = userSources[e.source] ? 'user' : systemSources[e.source] ? 'system' : 'unknown';
+      var inMonth = e.occurrenceYm === cal.ym;
+      if (!inMonth && !(by === 'user' && geodeDateToLocalISO(new Date(e.recordedAt)).slice(0, 7) === cal.ym)) return;
+      out.push({
+        id: e.id, type: type, domain: domainOf(e), amount: e.amount, value: null, paymentId: e.paymentId, entityId: entityOf(e),
+        occurrenceYm: e.occurrenceYm, occurrenceInMonth: inMonth, eventDate: null, recordedAt: e.recordedAt,
+        timeBasis: 'recorded_at', recordedBy: by, evidenceSource: ledger, origin: String(e.source || '')
+      });
+    });
+  }
+  settlements(index.bill, 'billPaymentEvents', function () { return 'bill'; }, function () { return null; }, 'settlement_recorded');
+  settlements(index.debt, 'debtPaymentEvents', function () { return 'debt'; }, function (e) { return e.debtId; }, 'settlement_recorded');
+  settlements(index.contribution, 'contributionEvents', function (e) { return e.entityType; }, function (e) { return e.entityId; }, 'contribution_recorded');
+
+  (Array.isArray(state.savingsReleases) ? state.savingsReleases : []).forEach(function (r) {
+    if (!r || typeof r !== 'object' || r.confirmedByUser === false || !(toNum(r.amount) > 0)) return;
+    var date = String(r.date || '').slice(0, 10);
+    date = geodeInvestmentIsoDateValid(date) ? date : null;
+    if ((date ? date.slice(0, 7) : String(r.ym || '')) !== cal.ym) return;
+    var st = String(r.sourceType || '');
+    out.push({
+      id: String(r.id || ''), type: 'release', domain: st === 'investment' || st === 'linked_investment' ? 'investment' : 'goal',
+      amount: toNum(r.amount), value: null, paymentId: null, entityId: String(r.sourceId || ''), occurrenceYm: null,
+      occurrenceInMonth: true, eventDate: date, recordedAt: typeof r.createdAt === 'number' ? r.createdAt : null,
+      timeBasis: date ? 'release_date' : 'release_month', recordedBy: 'user', evidenceSource: 'savingsReleases', origin: String(r.reason || '')
+    });
+  });
+
+  // A legacy_transition valuation is the schema-2 anchor Beynd wrote, not a valuation the user made.
+  (Array.isArray(state.investments) ? state.investments : []).forEach(function (inv) {
+    if (!inv || inv.id == null) return;
+    geodeInvestmentValuations(inv).forEach(function (v) {
+      if (v.source === 'legacy_transition' || v.date.slice(0, 7) !== cal.ym) return;
+      out.push({
+        id: v.id, type: 'valuation', domain: 'investment', amount: null, value: v.value, paymentId: null, entityId: String(inv.id),
+        occurrenceYm: null, occurrenceInMonth: true, eventDate: v.date, recordedAt: v.recordedAt,
+        timeBasis: 'valuation_date', recordedBy: 'user', evidenceSource: 'valuations', origin: v.source
+      });
+    });
+  });
+
+  return out.sort(function (a, b) {
+    var ta = typeof a.recordedAt === 'number' ? a.recordedAt : 0;
+    var tb = typeof b.recordedAt === 'number' ? b.recordedAt : 0;
+    if (ta !== tb) return ta - tb;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}
+
+/**
+ * P3-1: earlier months' occurrences that still read expected_no_recorded_outcome. Evidence only: nothing here is a
+ * figure, and nothing here enters Monthly Left, done, ahead, the budget or coverage.
+ */
+function geodeLivingMonthEarlierGaps(state, ym) {
+  var months = Object.create(null);
+  var seen = Object.create(null);
+  var count = 0;
+  geodeExpectationGapLedger(state.expectationGaps).forEach(function (g) {
+    for (var m = g.fromYm; m <= g.toYm && m < ym; m = geodeContributionYmAdd(m, 1)) {
+      var key = g.paymentId + '|' + m;
+      if (seen[key] || geodeExpectationOccurrenceStatus(state, g.paymentId, m) !== 'expected_no_recorded_outcome') continue;
+      seen[key] = true;
+      months[m] = true;
+      count++;
+    }
+  });
+  return { basis: 'evidence_only', gapCount: count, gapMonths: Object.keys(months).sort() };
+}
+
+/**
  * Stage 62A: read-only affordability cap for plan suggestions (does not change planRoom accounting).
  * suggestableRoom caps getMonthPlan step budget only — no UI surface.
  */
@@ -10525,24 +10808,25 @@ function geodeInvestmentTransitionOutstanding() {
 
 /**
  * P2-2: true when syncRecurringPayments would move a recurring row, expense or one-off across the month boundary.
- * Used only to decide the hold. It does not mutate.
+ * Used to decide the hold, and by the Living Month read model (given its own state). It does not mutate.
  */
-function geodeRecurrenceWouldMutateBoundary() {
+function geodeRecurrenceWouldMutateBoundary(state) {
+  state = state || S;
   var ym = currentYM();
-  var schema2 = geodeSchema2Active(S);
+  var schema2 = geodeSchema2Active(state);
   var carried = null;
   if (schema2) {
     carried = Object.create(null);
-    geodeContributionCarryActive(S).forEach(function (c) { if (c && c.paymentId) carried[c.paymentId] = true; });
+    geodeContributionCarryActive(state).forEach(function (c) { if (c && c.paymentId) carried[c.paymentId] = true; });
   }
-  var payments = S.payments || [];
+  var payments = state.payments || [];
   var i;
   for (i = 0; i < payments.length; i++) {
     var p = payments[i];
     if (!p) continue;
-    if (p.status === 'paid' && (p.rec === 'yes' || geodeAnnualPaymentNextOccurrenceDue(p, ym, S))) {
-      if (schema2 ? geodeSchema2RecurringResetDue(S, p, ym, carried) : p.lastPaidYM && p.lastPaidYM !== ym &&
-          (geodeContributionYmTrusted(p.lastPaidYM) || !geodePaymentBalanceEffect(S, p))) return true;
+    if (p.status === 'paid' && (p.rec === 'yes' || geodeAnnualPaymentNextOccurrenceDue(p, ym, state))) {
+      if (schema2 ? geodeSchema2RecurringResetDue(state, p, ym, carried) : p.lastPaidYM && p.lastPaidYM !== ym &&
+          (geodeContributionYmTrusted(p.lastPaidYM) || !geodePaymentBalanceEffect(state, p))) return true;
     }
     if (p.rec === 'yes' && p.status !== 'paid' && p.date) {
       try {
@@ -10550,7 +10834,7 @@ function geodeRecurrenceWouldMutateBoundary() {
       } catch (ePay) {}
     }
   }
-  var expenses = S.expenses || [];
+  var expenses = state.expenses || [];
   for (i = 0; i < expenses.length; i++) {
     var e = expenses[i];
     if (!e || !e.date) continue;
