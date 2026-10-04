@@ -258,6 +258,7 @@ function runBoot(caches, storage, schema, stale) {
     'function geodeSchema3TransitionDue(s) { return s._schemaVersion === 2; }\n' +
     'function geodeSchema3Transition() { __calls.push("schema3"); S._schemaVersion = 3; }\n' +
     'function geodeInvestmentAuthorityTransition(s, opening) { __calls.push("investment " + JSON.stringify(opening)); return true; }\n' +
+    'function geodeNoteCommittedState() {}\n' +
     'function syncRecurringPayments() { __calls.push("sync"); }\n' +
     '(function () {\n' + bootBlock(LOAD) + '\n})();';
   new vm.Script(code, { filename: 'index-boot-block.js' }).runInContext(ctx);
@@ -579,8 +580,8 @@ async function investmentGate() {
     const sync = text.indexOf('syncRecurringPayments();', end);
     return [open >= 0 && rel > open, at > rel, text.slice(open, at).indexOf('}') < 0, sync > end && text.slice(end, sync).replace(/[\s}]/g, ''), count(text.slice(0, at), 'syncRecurringPayments();')];
   };
-  const PLACED = [true, true, true, '', 0];
-  check('inv.gate.order', 'In load(): inside if (!_geodeRuntimeStale) { … }, after the schema transition\'s gate, and followed only by that block\'s end and then syncRecurringPayments(); no recurring sync runs before it',
+  const PLACED = [true, true, true, 'geodeNoteCommittedState();', 0];
+  check('inv.gate.order', 'In load(): inside if (!_geodeRuntimeStale) { … }, after the schema transition\'s gate, and followed only by that block\'s end, the P2-9 committed-state note (memory only) and then syncRecurringPayments(); no recurring sync runs before it',
     placed(load), PLACED);
   check('inv.gate.shim', 'The harness __reload shim places the same statement the same way, has the same block from the legacy read to recurring sync as load() (whitespace aside), and calls the transition once',
     [placed(shim), bootBlock(shim) === bootBlock(load), calls(RELOAD_SHIM)], [PLACED, true, 1]);

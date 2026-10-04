@@ -111,6 +111,8 @@ const PRODUCTION_FUNCTIONS = [
   // release safety: stale-runtime write guard, cross-window detection, shell readiness for the transition
   'geodeStoredSchemaVersion', 'geodeMarkRuntimeStale', 'geodeFinancialRevValid', 'geodeFinancialRevFromRaw',
   'geodeClassifyFinancialRevision', 'geodeFinancialRevId', 'geodeStampFinancialRev', 'geodeFinancialJsonToStore', 'geodeAcceptFinancialWrite',
+  // failed-persistence guard (P2-9): the one KEY write of save and persist; a failed write puts S back to the committed text
+  'geodeStoreFinancialState', 'geodeNoteCommittedState', 'geodeRestoreCommittedState',
   'geodeNoteFinancialBoot', 'geodeFinancialWriteAllowed',
   'geodeOnForeignFinancialWrite', 'geodeShellReadiness', 'geodeRuntimeVersionParts', 'geodeBeyndCacheOrder', 'persistGeodeToLocalStorage',
   'geodeBoundaryHoldMessage', 'geodeInvestmentTransitionOutstanding', 'geodeRecurrenceWouldMutateBoundary',
@@ -135,7 +137,7 @@ const PRODUCTION_FUNCTIONS = [
 const BASE_CONSTANTS = ['GEODE_SCHEMA_VERSION', 'BEYND_RUNTIME_VERSION', '_geodeRuntimeStale', '_geodeFinancialKeySeen',
   '_geodeKnownRaw', '_geodeKnownRev', '_geodeRevN', '_geodeBoundaryHoldAttempts', '_geodeBoundaryHoldNotice',
   '_geodeBoundaryHoldReady', '_geodeFinancialActionOpen', '_geodeFinancialActionSeq', '_geodeBoundaryChangedRows',
-  'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
+  '_geodeCommittedText', '_geodeWriteFailedTask', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
 
 /**
  * Read-only structural checks: the reload and render shims below must mirror these production bodies, and the
@@ -175,17 +177,18 @@ Date = __SimDate;
 
 var KEY = 'geode_v6';
 var __store = null;
-/** Production save() minus its snapshot/archive side effects: the same release guard, then the whole state to the store. */
+/**
+ * Production save() minus its snapshot/archive side effects: the same release guard, then production's own KEY write
+ * (geodeStoreFinancialState) through the localStorage below, so __storageFault fails it exactly as production fails (P2-9).
+ */
 function save() {
-  if (!geodeFinancialWriteAllowed()) return;
+  if (!geodeFinancialWriteAllowed()) return 'refused';
   geodeEndFinancialAction();
-  var __prepared = geodeFinancialJsonToStore();
-  if (!__prepared) return;
-  var __json = __prepared.json;
-  __store = __json;
-  if (__store !== __json) { S._rev = __prepared.prev; return; }
-  geodeAcceptFinancialWrite(__json);
+  __saving = true;
+  try { return geodeStoreFinancialState(); } finally { __saving = false; }
 }
+/** True while save() writes: write counters (watchWrites, __commits) count only the transition commits and persists. */
+var __saving = false;
 /** Stale-runtime reload gate (UI): records which gate production would show. */
 var __staleGate = '';
 function geodeShowStaleRuntimeGate(reason) { __staleGate = reason; }
@@ -244,9 +247,16 @@ function rc() { return '#9b7fe8'; }
 function fm(v) { return '£' + Math.round(Number(v) || 0); }
 
 function render() {} function rGoals() {} function checkAlerts() {} function syncPills() {} function goTab() {}
-var __toasts = [];
-function toast(m) { __toasts.push(String(m)); } function geodeSuccessToast() {} function geodeStageLToastAfterSave(m) { return m; }
-function geodeEmitPaymentCompletionFeedback() {} function geodeMarkRecentUserSave() {} function geodeSubOnSave() {}
+/**
+ * Messages. Each shim starts with the guard its production function starts with (P2-9: nothing after a failed write in
+ * that task). Success lines and completion feedback go to __acks, apart from __toasts.
+ */
+var __toasts = [], __acks = [];
+function toast(m) { if (_geodeWriteFailedTask) return; __toasts.push(String(m)); }
+function geodeSuccessToast(m) { if (_geodeWriteFailedTask) return; __acks.push(String(m)); } function geodeStageLToastAfterSave(m) { return m; }
+function geodeEmitPaymentCompletionFeedback(p) { if (_geodeWriteFailedTask) return; if (p && String(p.status || '') === 'paid') __acks.push('completed ' + p.id); }
+function geodeMarkRecentUserSave() {}
+function geodeSubOnSave(name) { if (_geodeWriteFailedTask) return; __acks.push('subscription ' + name); }
 function setLastSnapshotBeforeChange() {} function geodeInvalidateDecisionCaches() {}
 function evaluatePaymentFollowthrough() {} function geodeRememberLastPaymentDraft() {}
 /**
@@ -271,7 +281,7 @@ function geodePlanReadinessState() { return 'active'; }
 function __reload() {
   _geodeRuntimeStale = ''; _geodeFinancialKeySeen = false; __staleGate = ''; // a reload is a new page
   _geodeBoundaryHoldAttempts = 0; _geodeBoundaryHoldNotice = false; _geodeBoundaryHoldReady = false;
-  _geodeFinancialActionOpen = 0; _geodeBoundaryChangedRows = null;
+  _geodeFinancialActionOpen = 0; _geodeBoundaryChangedRows = null; _geodeWriteFailedTask = false;
   geodeNoteFinancialBoot(__store);
   S = JSON.parse(__store);
   S._schemaVersion = geodePersistedSchemaVersion(S._schemaVersion);
@@ -290,9 +300,11 @@ function __reload() {
     if (geodeSchema3TransitionDue(S) && geodeShellReadiness() !== 'pending') geodeSchema3Transition();
     if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') geodeInvestmentAuthorityTransition(S, _geodeInvOpening);
   }
+  geodeNoteCommittedState();
   syncRecurringPayments();
   geodeNormalizeDebtPaymentEvents(S);
   geodeRecomputeBalancesFromPayments();
+  geodeNoteCommittedState(); // load() ends here
   syncRecurringPayments(); // first render() after boot
 }
 
@@ -4558,8 +4570,8 @@ const SAVE_FAILED = 'Could not save data (storage may be full).';
 const transitionFailures = app => app.warnings.splice(0).map(w => (w.indexOf(FA3CC_FAILED) === 0 ? w.slice(FA3CC_FAILED.length) : '? ' + w));
 const toasts = app => JSON.parse(app.run('JSON.stringify(__toasts)'));
 const stored = app => JSON.parse(app.run('__store'));
-/** Counts store writes through localStorage — the transition's commit (the harness save() writes the store directly). */
-const watchWrites = app => app.run('var __writes = 0, __setItem = localStorage.setItem; localStorage.setItem = function (k, v) { if (k === KEY) __writes++; return __setItem.call(localStorage, k, v); };');
+/** Counts store writes other than save()'s (__saving) — the transition's commit and persists. */
+const watchWrites = app => app.run('var __writes = 0, __setItem = localStorage.setItem; localStorage.setItem = function (k, v) { if (k === KEY && !__saving) __writes++; return __setItem.call(localStorage, k, v); };');
 const writes = app => { const n = app.run('__writes'); app.run('__writes = 0;'); return n; };
 /** Local time h:m on an ISO date. */
 const clockAt = (app, iso, h, m) => { const [y, mo, d] = iso.split('-').map(Number); app.run('__nowMs = new __RealDate(' + y + ',' + (mo - 1) + ',' + d + ',' + h + ',' + m + ').getTime();'); };
@@ -5052,18 +5064,22 @@ function releaseSafetyFidelity() {
       [gateOrder(load), gateOrder(reloadShim), reloadShim.indexOf('geodeNoteFinancialBoot(__store);') >= 0, load.indexOf('geodeNoteFinancialBoot(d);') >= 0,
         transitionCalls(load), transitionCalls(reloadShim), transitionCalls(src) - transitionCalls(extractFunction(src, 'geodeInvestmentAuthorityTransition').text)],
       [true, true, true, true, 1, 1, 1]);
-    const guarded = (name, guard) => {
-      const t = extractFunction(src, name).text, g = t.indexOf(guard), w = t.indexOf('localStorage.setItem(KEY'), seen = t.indexOf('geodeAcceptFinancialWrite(');
-      return g >= 0 && w >= 0 && seen > w && g < w && t.slice(t.indexOf('{') + 1, g).replace(/try\s*\{/, '').trim() === '' &&
-        t.indexOf('localStorage.getItem(KEY) !== json') > w;
+    const first = (t, guard) => { const g = t.indexOf(guard); return g >= 0 && t.slice(t.indexOf('{') + 1, g).replace(/try\s*\{/, '').trim() === ''; };
+    const writes = (t, readBack) => {
+      const w = t.indexOf('localStorage.setItem(KEY'), seen = t.indexOf('geodeAcceptFinancialWrite(');
+      return t.indexOf('geodeFinancialJsonToStore()') >= 0 && w >= 0 && seen > w && t.indexOf(readBack) > w;
     };
+    const viaStore = name => { const t = extractFunction(src, name).text; return first(t, "if (!geodeFinancialWriteAllowed()) return 'refused';") &&
+      t.indexOf('geodeStoreFinancialState()') > t.indexOf("return 'refused';") && t.indexOf('localStorage.setItem') < 0; };
+    const commit = extractFunction(src, 'geodeSchema2CommitTransition').text;
     const wipe = extractFunction(src, 'wipeLocalAppStateAndReload').text;
-    invariant('REL.fidelity.writers', 'Each of the three KEY writers asks geodeFinancialWriteAllowed first (the transition commit as the schema it replaces: 1, or 2 for the P2-5 schema-3 transition), stamps _rev, read-backs the one setItem and only then accepts that text; production has no other KEY setItem; wipe asks the same guard before removeItem; the save shim stamps and accepts',
-      [guarded('save', 'if (!geodeFinancialWriteAllowed()) return;'), guarded('persistGeodeToLocalStorage', 'if (!geodeFinancialWriteAllowed()) return;'),
-        guarded('geodeSchema2CommitTransition', 'if (!geodeFinancialWriteAllowed(from === undefined ? 1 : from)) return false;'), src.split('localStorage.setItem(KEY').length - 1,
-        src.indexOf("setItem('geode_v6'") < 0, TEST_SHIMS.indexOf('geodeFinancialJsonToStore()') >= 0 && TEST_SHIMS.indexOf('geodeAcceptFinancialWrite(__json)') >= 0,
+    invariant('REL.fidelity.writers', 'save() and persistGeodeToLocalStorage() ask geodeFinancialWriteAllowed first, then make their one write through geodeStoreFinancialState (P2-9), which stamps _rev, read-backs its one setItem and only then accepts that text; the transition commit asks the same guard first (as the schema it replaces: 1, or 2 for the P2-5 schema-3 transition) and does the same; production has no other KEY setItem; wipe asks the same guard before removeItem; the save shim asks the guard and writes through the same geodeStoreFinancialState',
+      [viaStore('save'), viaStore('persistGeodeToLocalStorage'), writes(extractFunction(src, 'geodeStoreFinancialState').text, 'localStorage.getItem(KEY) === prepared.json'),
+        first(commit, 'if (!geodeFinancialWriteAllowed(from === undefined ? 1 : from)) return false;') && writes(commit, 'localStorage.getItem(KEY) !== json'),
+        src.split('localStorage.setItem(KEY').length - 1, src.indexOf("setItem('geode_v6'") < 0,
+        TEST_SHIMS.indexOf("if (!geodeFinancialWriteAllowed()) return 'refused';") >= 0 && TEST_SHIMS.indexOf('return geodeStoreFinancialState();') >= 0,
         wipe.indexOf('if (!geodeFinancialWriteAllowed()) return;') >= 0 && wipe.indexOf('if (!geodeFinancialWriteAllowed()) return;') < wipe.indexOf('localStorage.removeItem(KEY)')],
-      [true, true, true, 3, true, true, true]);
+      [true, true, true, true, 2, true, true, true]);
     invariant('REL.fidelity.boot', 'Boot loads, then listens for other windows\' changes, then cleans older app caches',
       src.indexOf('\nload();\ngeodeInstallFinancialStorageListener();\ngeodeShellCleanup();\n') >= 0, true);
   });
@@ -5397,7 +5413,7 @@ function fa7bSafety() {
 
     const d1 = FA7B_TRANSITION.filter(f => f[0] === 'I1-prior')[0][2];
     const opened = new App(d1, '2026-07-02', undefined, { boot: false });
-    opened.run('var __commits = [], __setItemRaw = localStorage.setItem; localStorage.setItem = function (k, v) { if (k === KEY) __commits.push(String(v)); return __setItemRaw.call(localStorage, k, v); };');
+    opened.run('var __commits = [], __setItemRaw = localStorage.setItem; localStorage.setItem = function (k, v) { if (k === KEY && !__saving) __commits.push(String(v)); return __setItemRaw.call(localStorage, k, v); };');
     opened.run('__reload()');
     const commits = JSON.parse(opened.run('JSON.stringify(__commits)')).map(c => JSON.parse(c));
     const commit = [commits.length, commits[0]._schemaVersion, commits[0].investments[0].valuations === undefined, commits[0].payments[0].status,
@@ -6840,7 +6856,7 @@ function p2RevisionFence() {
     const beforeRev = quota.run('JSON.stringify(S._rev)');
     quota.run('S.lastSeenAt = 9; __storageFault = "throw"; persistGeodeToLocalStorage();');
     const thrown = [rawStore(quota) === parent, quota.run('JSON.stringify(S._rev)') === beforeRev, quota.run('_geodeKnownRaw === __store'), JSON.parse(quota.run('JSON.stringify(__toasts)'))];
-    quota.run('__storageFault = "lose"; __toasts = []; persistGeodeToLocalStorage();');
+    quota.run('__runTimers(); S.lastSeenAt = 10; __storageFault = "lose"; __toasts = []; persistGeodeToLocalStorage();');
     const lost = [rawStore(quota) === parent, quota.run('JSON.stringify(S._rev)') === beforeRev, quota.run('_geodeKnownRaw === __store'), JSON.parse(quota.run('JSON.stringify(__toasts)'))];
     invariant('P2.quota', 'A throwing setItem and a write that does not read back leave the stored text, in-memory revision and knownRaw where they were',
       [thrown, lost], [[true, true, true, ['Could not save data (storage may be full).']], [true, true, true, ['Could not save data (storage may be full).']]]);
@@ -7925,7 +7941,7 @@ function p2Continuity() {
     return w;
   };
   /** Every text save() stores from now on. */
-  const watchSaves = app => app.run('var __saves = []; save = (function (inner) { return function () { var b = __store; inner(); if (__store !== b) __saves.push(__store); }; })(save);');
+  const watchSaves = app => app.run('var __saves = []; save = (function (inner) { return function () { var b = __store, r = inner(); if (__store !== b) __saves.push(__store); return r; }; })(save);');
   const takeSaves = app => JSON.parse(app.run('JSON.stringify(__saves.splice(0))'));
   /** In a stored text, the row's completion and its own settlement ledger agree for the occurrence the row holds. */
   const coherent = (app, text, id) => app.run(`(function (d) {
@@ -8176,6 +8192,249 @@ function p2Continuity() {
     });
     invariant('P2.fidelity.entries', 'Every live financial entry point (payment, expense, goal, investment, debt and income forms, duplicate prompts, release, Smart Import, toggle, deletes, deposit, quick add, subscriptions, Quick Setup, import as income, suggestion apply and undo) admits — geodePrepareFinancialMutation or the commit — before its first change (the legacy same-month merge included); and each calls render, rGoals, checkAlerts, rHome or completion feedback only after its save, which is why the harness may stub those as no-ops',
       order, ENTRIES.map(n => [n, true, true]));
+  });
+
+  // ── V. P2-9 FAILED PERSISTENCE ──
+  // A KEY write that throws or does not read back puts S back to the committed text: what never reached storage can
+  // neither become month-boundary evidence nor ride along with a later write, and nothing after the failure says "saved".
+  const fail = (app, fault) => app.run('__storageFault = ' + JSON.stringify(fault) + '; __toasts = []; __acks = [];');
+  /** Storage works again; the failed task has ended. */
+  const heal = app => app.run('__storageFault = ""; __runTimers();');
+  const acks = app => JSON.parse(app.run('JSON.stringify(__acks)'));
+  const actionWindow = app => JSON.parse(app.run('JSON.stringify([_geodeFinancialActionOpen, _geodeBoundaryChangedRows])'));
+  /** An unrelated later write that succeeds (a preference persisted from this page). */
+  const unrelated = app => app.run('S.lastSeenAt = Date.now() + 1; persistGeodeToLocalStorage()');
+  /** KEY writes from now: the first `ok` succeed, the next `bad` fail as `fault`, then storage works again. */
+  const failAfter = (app, ok, bad, fault) => app.run('var __wplan = { ok: ' + ok + ', bad: ' + bad + ' }, __wplanSet = localStorage.setItem; localStorage.setItem = function (k, v) {' +
+    ' if (k === KEY) { if (__wplan.ok > 0) __wplan.ok--; else if (__wplan.bad > 0) { __wplan.bad--; if (' + JSON.stringify(fault) + ' === "throw") throw new Error("QuotaExceededError"); return; } }' +
+    ' return __wplanSet.call(localStorage, k, v); }; __toasts = []; __acks = [];');
+  const storedRow = (app, id) => { const p = stored(app).payments.filter(x => x.id === id)[0]; return p ? [p.name, toNumber(p.amount), p.date, p.status] : null; };
+  /** world() last written on 1 June 2026, its rows due on `due`; the clock moves to iso with no render (a long-lived page). */
+  const openPage = (iso, domains, due) => { const w = world('2026-06-01', domains, due, undefined, PROGRAM.commit); w.app.at(iso); return w; };
+  const FAULTS = ['throw', 'lose', 'control'];
+
+  scenario('P2-9 RESULT CONTRACT — save and persist say saved, no_change, refused or failed; a failed write leaves memory as committed', () => {
+    const { app } = world('2026-06-01', ['bill']);
+    const run = code => app.run(code);
+    const look = () => [run('S.income'), run('JSON.stringify(S._rev)') === run('JSON.stringify(JSON.parse(__store)._rev)'), JSON.parse(run('__store')).income, run('_geodeKnownRaw === __store')];
+    const results = [run('S.income = 3100; save()'), run('save()'), run('S.income = 3200; persistGeodeToLocalStorage()'), run('persistGeodeToLocalStorage()')];
+    fail(app, 'throw');
+    const thrown = [run('S.income = 3300; save()'), look(), p1Toasts(app)];
+    heal(app); fail(app, 'lose');
+    const lost = [run('S.income = 3400; persistGeodeToLocalStorage()'), look(), p1Toasts(app), actionWindow(app)];
+    heal(app);
+    const fenced = JSON.parse(rawStore(app));
+    fenced._rev = { seq: fenced._rev.seq + 1, id: 'rev_other_window', by: 'v1.0.78', at: 3 };
+    foreignStore(app, JSON.stringify(fenced));
+    const refused = [run('S.income = 3500; save()'), rawStore(app) === JSON.stringify(fenced), relWarnings(app)];
+    invariant('P2.fail.contract', 'save() and persistGeodeToLocalStorage() return saved, then no_change for the same state; a throwing setItem (save) and a write that does not read back (persist) return failed: memory income, revision and knownRaw are the stored ones again and the one save-failed message shows; after another window wrote a newer revision: refused, its text kept',
+      [results, thrown, lost, refused],
+      [['saved', 'no_change', 'saved', 'no_change'], ['failed', [3200, true, 3200, true], [SAVE_FAILED]], ['failed', [3200, true, 3200, true], [SAVE_FAILED], [0, null]],
+        ['refused', true, ['stale:foreign']]]);
+  });
+
+  scenario('P2-9 EDIT FIRST, STORAGE FAILING — the R2 reproduction after 2, 12 and 18 months: no failed template becomes history', () => {
+    [['2026-08-03', 2], ['2027-06-03', 12], ['2027-12-03', 18]].forEach(([iso, n]) => {
+      const now = iso.slice(0, 7), last = ymAdd(now, -1);
+      FAULTS.forEach(fault => {
+        const { app, ids } = openPage(iso, ['bill'], '2028-12-15');
+        const before = rawStore(app);
+        fail(app, fault === 'control' ? '' : fault);
+        const toasts = formSave(app, ids.bill, { name: 'Rent NEW', amount: '500', date: last + '-15' });
+        const at = [toasts, acks(app), rowOf(app, ids.bill), rawStore(app) === before, actionWindow(app)];
+        heal(app); app.render(); unrelated(app);
+        const look = [at, gaps(app, ids), stored(app).expectationGaps.length, storedRow(app, ids.bill), status(app, ids.bill, [last])];
+        if (fault === 'control') {
+          invariant('P2.fail.edit.' + n + '.control', 'Control: storage working, the same first act after ' + n + ' months (Rent → Rent NEW £500 due ' + last + '-15) is saved and acknowledged ("£500 scheduled ✓", and the harness\'s subscription note); the next render moves it to ' + now + ' and records nothing — ' + last + ' stays unknown',
+            look, [[[], ['subscription Rent NEW', '£500 scheduled ✓'], ['Rent NEW', 500, last + '-15', 'upcoming'], false, [0, null]], [], 0, ['Rent NEW', 500, now + '-15', 'upcoming'], [U]]);
+        } else {
+          invariant('P2.fail.edit.' + n + '.' + fault, 'Rent £80 due 15 Dec 2028, last written 1 June 2026; ' + n + ' months later its first act edits it to Rent NEW £500 due ' + last + '-15 and the write ' + (fault === 'throw' ? 'throws' : 'does not read back') + ': only the save-failed message, no acknowledgement, Rent back to £80 in memory, storage untouched, the action window closed. Storage then works, the page renders and an unrelated write succeeds: no record, Rent £80 stored, ' + last + ' unknown',
+            look, [[[SAVE_FAILED], [], ['bill monthly', 80, '2028-12-15', 'upcoming'], true, [0, null]], [], 0, ['bill monthly', 80, '2028-12-15', 'upcoming'], [U]]);
+        }
+      });
+    });
+
+    const mut = openPage('2026-08-03', ['bill'], '2028-12-15');
+    mut.app.run('geodeRestoreCommittedState = function () {};');
+    fail(mut.app, 'throw');
+    formSave(mut.app, mut.ids.bill, { name: 'Rent NEW', amount: '500', date: '2026-07-15' });
+    heal(mut.app); mut.app.render(); unrelated(mut.app);
+    invariant('P2.fail.edit.mut', 'Mutation: without putting S back after the failed write (only the revision restored, as before P2-9), the same case stores July 2026 as Rent NEW £500 after recovery — the R2 reproduction. The restore is what prevents it',
+      [gaps(mut.app, mut.ids), intents(mut.app), stored(mut.app).expectationGaps.map(g => [g.fromYm, g.expectedAmount, g.templateNameSnapshot])],
+      [[['bill', '2026-07', '2026-07', 500]], [['Rent NEW', 500]], [['2026-07', 500, 'Rent NEW']]]);
+  });
+
+  scenario('P2-9 TWO WRITES — the boundary write failing stops the action; the boundary stored and the action failing keeps the boundary only', () => {
+    FAULTS.slice(0, 2).forEach(fault => {
+      const { app, ids } = away('2026-08-03', ['bill']);
+      const before = rawStore(app), row = rowOf(app, ids.bill);
+      fail(app, fault);
+      const toasts = formSave(app, ids.bill, { name: 'Rent NEW', amount: '500' });
+      const at = [toasts, acks(app), gaps(app, ids), rowOf(app, ids.bill), rawStore(app) === before, actionWindow(app), app.run('!!__modal && __modal.getAttribute("data-geode-commit")')];
+      heal(app); app.render();
+      const recorded = gaps(app, ids);
+      const retry = [formSave(app, ids.bill, { name: 'Rent NEW', amount: '500' }), formSave(app, ids.bill, { name: 'Rent NEW', amount: '500' })];
+      invariant('P2.fail.boundary.' + fault, 'A: June confirmed, 3 August, the boundary pending; the first act\'s boundary write ' + (fault === 'throw' ? 'throws' : 'does not read back') + ': the boundary is undone in memory, the edit never runs (form left open, no commit taken), only the save-failed message, storage untouched. Storage works: the next render records July at £80; the form opened again on the processed row saves (twice, no warning) — July keeps £80, no £500 history',
+        [at, recorded, retry, gaps(app, ids), intents(app), rowOf(app, ids.bill)[0]],
+        [[[SAVE_FAILED], [], [], row, true, [0, null], null], [['bill', '2026-07', '2026-07', 80]], [[], []], [['bill', '2026-07', '2026-07', 80]], [['bill monthly', 80]], 'Rent NEW']);
+    });
+    const proceeds = away('2026-08-03', ['bill']);
+    const prepared = extractFunction(PROGRAM.src, 'geodePrepareFinancialMutation').text.replace("syncRecurringPayments() === 'failed' || ", '(syncRecurringPayments(), false) || ');
+    proceeds.app.run(prepared);
+    failAfter(proceeds.app, 0, 1, 'throw');
+    formSave(proceeds.app, proceeds.ids.bill, { name: 'Rent NEW', amount: '500' });
+    invariant('P2.fail.boundary.mut', 'Mutation: when the preparation ignores its failed boundary write, the edit runs on the un-processed month and its own write succeeds — the stale June form is stored (Rent NEW completed) and July is never recorded. Refusing after a failed boundary write is what prevents it',
+      [storedRow(proceeds.app, proceeds.ids.bill), stored(proceeds.app).expectationGaps], [['Rent NEW', 500, '2026-07-15', 'paid'], []]);
+
+    FAULTS.slice(0, 2).forEach(fault => {
+      const { app, ids } = away('2026-08-03', ['bill'], false);
+      failAfter(app, 1, 1, fault);
+      const toasts = formSave(app, ids.bill, { name: 'Rent NEW', amount: '500' });
+      const at = [toasts, acks(app), gaps(app, ids), stored(app).expectationGaps.map(g => [g.fromYm, g.toYm, g.expectedAmount]), rowOf(app, ids.bill), storedRow(app, ids.bill), app.run('__store.indexOf("Rent NEW") < 0'), actionWindow(app)];
+      app.run('__runTimers();'); unrelated(app);
+      app.at('2026-09-03'); app.render();
+      invariant('P2.fail.action.' + fault, 'B: Rent open since June, 3 August: the boundary write succeeds (June–July at £80, Rent moved to 15 August), then the edit\'s write ' + (fault === 'throw' ? 'throws' : 'does not read back') + ': storage holds the boundary and not the edit, memory is that boundary state, only the save-failed message. After an unrelated write and the September boundary, August is recorded at the old £80 — the failed edit never becomes history',
+        [at, gaps(app, ids), intents(app), app.run('__store.indexOf("Rent NEW") < 0')],
+        [[[SAVE_FAILED], [], [['bill', '2026-06', '2026-07', 80]], [['2026-06', '2026-07', 80]], ['bill monthly', 80, '2026-08-15', 'upcoming'], ['bill monthly', 80, '2026-08-15', 'upcoming'], true, [0, null]],
+          [['bill', '2026-06', '2026-07', 80], ['bill', '2026-08', '2026-08', 80]], [['bill monthly', 80], ['bill monthly', 80]], true]);
+    });
+  });
+
+  scenario('P2-9 FOUR DOMAINS — failed past-dated edits of bill, goal, investment and debt rows never become history or move a position', () => {
+    DOMAINS.forEach(d => {
+      FAULTS.forEach(fault => {
+        const { app, ids } = openPage('2026-08-03', [d], '2026-09-15');
+        const pos = position(app), vals = JSON.stringify(fa7bVals(app));
+        fail(app, fault === 'control' ? '' : fault);
+        const toasts = formSave(app, ids[d], { amount: String(NEW8[d] * 3), date: '2026-07-15' });
+        heal(app); app.render(); unrelated(app);
+        app.at('2026-10-03'); app.render();
+        const look = [toasts, gaps(app, ids), position(app), JSON.stringify(fa7bVals(app)) === vals];
+        if (fault === 'control') {
+          invariant('P2.fail.domain.' + d + '.control', 'Control: the ' + d + ' row (£' + AMOUNT[d] + ', due 15 September) edited on 3 August to £' + (NEW8[d] * 3) + ' due 15 July is saved; it moves to August and August–September are recorded at the new amount (the edit came before them); no position moves',
+            look, [[], [[d, '2026-08', '2026-09', NEW8[d] * 3]], pos, true]);
+        } else {
+          invariant('P2.fail.domain.' + d + '.' + fault, 'The ' + d + ' row (£' + AMOUNT[d] + ', due 15 September, last written in June) edited on 3 August to £' + (NEW8[d] * 3) + ' due 15 July; the write ' + (fault === 'throw' ? 'throws' : 'does not read back') + '. Storage recovers, an unrelated write succeeds, then October: only September is recorded, at the old £' + AMOUNT[d] + '; Holiday, ISA (and its valuations) and Card unchanged',
+            look, [[SAVE_FAILED], [[d, '2026-09', '2026-09', AMOUNT[d]]], pos, true]);
+        }
+      });
+    });
+  });
+
+  scenario('P2-9 FAILED TOGGLE, RELEASE, VALUATION, DELETE AND CREATE — a later successful write never carries a failed action', () => {
+    const { app, ids } = openPage('2026-08-03', DOMAINS, '2026-08-15');
+    app.render();
+    const pos = position(app);
+    fail(app, 'throw');
+    DOMAINS.forEach(d => app.toggle(ids[d]));
+    const at = [p1Toasts(app), acks(app), rows(app, ids).map(r => r[2]), settled(app, ids), position(app)];
+    heal(app); unrelated(app);
+    const kept = [stored(app).payments.map(p => p.status), evidence(stored(app)) === evidence(app.state()), DOMAINS.map(d => coherent(app, rawStore(app), ids[d])), DOMAINS.map(d => status(app, ids[d], ['2026-08'])[0])];
+    DOMAINS.forEach(d => app.toggle(ids[d]));
+    invariant('P2.fail.toggle', 'Bill, goal, investment and debt rows (due 15 August) tapped complete on 3 August while every write throws: one save-failed message, no completion feedback, every row still open with no settlement, positions unchanged. After recovery an unrelated write stores no paid row and no settlement (each row agrees with its ledger); August reads unknown until the taps are retried and saved',
+      [at, kept, settled(app, ids).map(s => s.slice(0, 3))],
+      [[[SAVE_FAILED], [], ['upcoming', 'upcoming', 'upcoming', 'upcoming'], [], pos], [['upcoming', 'upcoming', 'upcoming', 'upcoming'], true, [true, true, true, true], [U, U, U, U]],
+        [['bill', 'bill', '2026-08'], ['debt', 'debt', '2026-08'], ['goal', 'contribution', '2026-08'], ['investment', 'contribution', '2026-08']]]);
+
+    const rel = world('2026-06-01', ['bill'], undefined, undefined, PROGRAM.commit).app;
+    const held = position(rel);
+    fail(rel, 'throw');
+    const refusedRelease = rel.release('gH', 100);
+    const releaseAt = [refusedRelease, p1Toasts(rel), rel.state().savingsReleases.length, position(rel), rel.run('__modal ? __modal.getAttribute("data-geode-commit") : null')];
+    fail(rel, 'lose');
+    rel.run('__runTimers();');
+    const valToasts = rel.saveInvestment('iA', 'ISA', 6400);
+    const valAt = [valToasts, fa7bVals(rel).map(v => v[0]), position(rel)];
+    heal(rel); unrelated(rel);
+    const relKept = [stored(rel).savingsReleases.length, (stored(rel).investments[0].valuations || []).map(v => v.value), position(rel)];
+    const retried = [rel.release('gH', 100).ok, rel.saveInvestment('iA', 'ISA', 6400)];
+    invariant('P2.fail.release-valuation', 'A £100 Holiday release whose write throws reports not saved (the release modal keeps no commit, no success line) and leaves no release; an ISA value of £6,400 whose write does not read back leaves the valuations as they were (only the save-failed message). After recovery an unrelated write stores neither; retried, both save',
+      [releaseAt, valAt, relKept, retried, rel.state().savingsReleases.length, fa7bVals(rel).map(v => v[0])],
+      [[{ ok: false, reason: 'not_saved' }, [SAVE_FAILED], 0, held, null], [[SAVE_FAILED], [5000], held], [0, [5000], held], [true, []], 1, [5000, 6400]]);
+
+    const del = away('2026-08-03', ['bill']);
+    del.app.render();
+    const record = JSON.stringify(del.app.state().expectationGaps);
+    fail(del.app, 'throw');
+    del.app.del(del.ids.bill);
+    const delAt = [p1Toasts(del.app), !!rowOf(del.app, del.ids.bill)];
+    heal(del.app); unrelated(del.app);
+    const created = del.app.contribute({ name: 'Gym', amount: 40, date: '2026-08-20', status: 'upcoming', rec: 'yes' });
+    del.app.run('__runTimers();');
+    fail(del.app, 'lose');
+    const gym = del.app.contribute({ name: 'Gym', amount: 40, date: '2026-08-20', status: 'upcoming', rec: 'yes' });
+    const gymAt = [p1Toasts(del.app), del.app.state().payments.filter(p => p.name === 'Gym').length];
+    heal(del.app); unrelated(del.app);
+    del.app.at('2026-10-03'); del.app.render();
+    invariant('P2.fail.delete-create', 'Deleting Rent while the write throws leaves Rent (only the save-failed message); after recovery an unrelated write still stores Rent and its July record byte-identical. A new recurring Gym created while the write does not read back leaves no Gym; an unrelated write stores only the Gym created earlier with storage working (control), and October records August–September for that one Gym alone.',
+      [delAt, storedRow(del.app, del.ids.bill) !== null, JSON.stringify(stored(del.app).expectationGaps.filter(g => g.fromYm === '2026-07')) === record, created !== null, gymAt,
+        stored(del.app).payments.filter(p => p.name === 'Gym').length, stored(del.app).expectationGaps.map(g => [g.templateNameSnapshot, g.fromYm])],
+      [[[SAVE_FAILED], true], true, true, true, [[SAVE_FAILED], 1], 1, [['bill monthly', '2026-07'], ['bill monthly', '2026-08'], ['Gym', '2026-08']]]);
+  });
+
+  scenario('P2-9 STALE TAB AND SCHEMA TRANSITION — failure never weakens P2-1 or the transition', () => {
+    const { app, ids } = openPage('2026-08-03', ['bill'], '2028-12-15');
+    fail(app, 'throw');
+    formSave(app, ids.bill, { name: 'Rent NEW', amount: '500', date: '2026-07-15' });
+    heal(app);
+    const fenced = JSON.parse(rawStore(app));
+    fenced._rev = { seq: fenced._rev.seq + 1, id: 'rev_other_window', by: 'v1.0.78', at: 3 };
+    fenced.income = 4600;
+    foreignStore(app, JSON.stringify(fenced));
+    const retry = formSave(app, ids.bill, { name: 'Rent NEW', amount: '500', date: '2026-07-15' });
+    app.render(); unrelated(app);
+    invariant('P2.fail.stale', 'A failed edit, then another window stores a newer revision, then this page retries: refused at admission (stale gate), the other window\'s text stays byte-identical and this page records nothing',
+      [retry, rawStore(app) === JSON.stringify(fenced), staleState(app), relWarnings(app), gaps(app, ids)], [[], true, ['foreign', 'foreign'], ['stale:foreign'], []]);
+
+    const src3 = world('2026-06-01', ['bill']);
+    const s2 = JSON.parse(rawStore(src3.app));
+    s2._schemaVersion = 2; delete s2.expectationGaps; delete s2.expectationFloorYm;
+    const page = new App(s2, '2026-08-05', undefined, { boot: false });
+    fail(page, 'throw');
+    page.run('__reload()');
+    const failed = [page.warnings.splice(0), p1Toasts(page), page.state()._schemaVersion, 'expectationFloorYm' in page.state()];
+    heal(page);
+    page.run('S.income = 3300; save();');
+    const continued = [stored(page)._schemaVersion, 'expectationFloorYm' in stored(page), stored(page).income];
+    page.reload();
+    invariant('P2.fail.schema', 'Schema-2 data opened on 5 August with every write throwing: the 2 → 3 commit fails (memory stays schema 2, no floor). Storage recovers and the same page saves: schema 2 is stored, never an uncommitted schema 3. The next load commits schema 3 with floor August',
+      [failed, continued, stored(page)._schemaVersion, stored(page).expectationFloorYm],
+      [[['[geode] schema 3 transition not completed, staying on schema 2: storage'], [SAVE_FAILED], 2, false], [2, false, 3300], 3, '2026-08']);
+  });
+
+  scenario('P2-9 MESSAGES AND HARNESS FIDELITY — success only after a stored write; the harness write fails as production does', () => {
+    const ok = openPage('2026-08-03', ['bill'], '2028-12-15');
+    ok.app.run('__acks = [];');
+    const saved = [formSave(ok.app, ok.ids.bill, { amount: '90' }), acks(ok.app)];
+    const failed = openPage('2026-08-03', ['bill'], '2028-12-15');
+    fail(failed.app, 'throw');
+    const failedLook = [formSave(failed.app, failed.ids.bill, { amount: '90' }), acks(failed.app)];
+    failed.app.run('__runTimers();');
+    const later = [failed.app.run('__toasts = []; toast("later"); JSON.stringify(__toasts)')];
+    const moved = away('2026-08-03', ['bill']);
+    moved.app.run('__acks = [];');
+    const movedLook = [formSave(moved.app, moved.ids.bill, { name: 'Rent NEW', amount: '500' }), acks(moved.app)];
+    invariant('P2.fail.messages', 'A saved edit is acknowledged ("£90 scheduled ✓") and shows no warning; a failed one shows only the save-failed message and no acknowledgement; the next task shows messages again; a refused one (the boundary changed the row) shows only its refusal',
+      [saved, failedLook, later, movedLook], [[[], ['subscription bill monthly', '£90 scheduled ✓']], [[SAVE_FAILED], []], ['["later"]'], [[MOVED], []]]);
+
+    const mut = openPage('2026-08-03', ['bill'], '2028-12-15');
+    mut.app.run(extractFunction(PROGRAM.src, 'geodeStoreFinancialState').text.replace('_geodeWriteFailedTask = true;', ''));
+    fail(mut.app, 'throw');
+    invariant('P2.fail.messages.mut', 'Mutation: when a failed write does not end the task\'s messages, the failed edit is still acknowledged after the save-failed message — the false "Saved to your plan." of R2. Ending them is what prevents it',
+      [formSave(mut.app, mut.ids.bill, { amount: '90' }), acks(mut.app)], [[SAVE_FAILED], ['subscription bill monthly', '£90 scheduled ✓']]);
+
+    const src = PROGRAM.src, text = n => extractFunction(src, n).text, line = (n, i) => text(n).split('\n')[i || 1].trim();
+    const load = PROGRAM.structural.load, reloadShim = TEST_SHIMS.slice(TEST_SHIMS.indexOf('function __reload()'), TEST_SHIMS.indexOf('\n}\n', TEST_SHIMS.indexOf('function __reload()')));
+    const probe = new App(baseState(), '2026-06-10');
+    probe.run('S.income = 3900; __storageFault = "throw";');
+    const shimFails = [probe.run('save()'), JSON.parse(probe.run('__store')).income, probe.run('S.income')];
+    invariant('P2.fail.fidelity', 'toast, completion feedback and the subscription note start with the failed-task guard and the success toast goes through toast; the harness shims start with the same guard. load() marks its state committed just before its recurring sync and as its last statement, and so does the reload shim. Recurring sync returns its save result and the preparation refuses on failed. The harness save() fails under __storageFault as production does: failed, store and memory as committed',
+      [line('toast'), line('geodeEmitPaymentCompletionFeedback'), line('geodeSubOnSave'), line('geodeSuccessToast'),
+        ['function toast(m) { if (_geodeWriteFailedTask) return;', 'function geodeSuccessToast(m) { if (_geodeWriteFailedTask) return;', 'function geodeEmitPaymentCompletionFeedback(p) { if (_geodeWriteFailedTask) return;', 'function geodeSubOnSave(name) { if (_geodeWriteFailedTask) return;'].map(s => TEST_SHIMS.indexOf(s) >= 0),
+        [load, reloadShim].map(t => t.indexOf('geodeNoteCommittedState();\n  syncRecurringPayments();') >= 0), load.trim().split('\n').slice(-2)[0].trim(), reloadShim.indexOf('geodeNoteCommittedState(); // load() ends here') >= 0,
+        text('syncRecurringPayments').indexOf('if (changed) return save();') >= 0, text('geodePrepareFinancialMutation').indexOf("if (syncRecurringPayments() === 'failed' || _geodeRuntimeStale) return false;") >= 0, shimFails],
+      ['if (_geodeWriteFailedTask) return;', 'if (_geodeWriteFailedTask) return;', 'if (_geodeWriteFailedTask || !geodeIsSubscription(name, rec)) return;', "toast(msg, 'ok', 2600);",
+        [true, true, true, true], [true, true], 'geodeNoteCommittedState();', true, true, true, ['failed', 3000, 3000]]);
   });
 }
 

@@ -1632,6 +1632,13 @@ var _geodeBoundaryHoldReady = false;
 var _geodeFinancialActionOpen = 0;
 var _geodeFinancialActionSeq = 0;
 var _geodeBoundaryChangedRows = null;
+/**
+ * P2-9: the JSON of S this page may treat as committed: the text it last stored and read back, or what load() made of
+ * the stored text. A failed write puts S back to it. Page memory only; never stored, never evidence.
+ */
+var _geodeCommittedText = null;
+/** P2-9: a KEY write failed in the current task; until the task ends no other message or completion feedback shows. */
+var _geodeWriteFailedTask = false;
 /** geode_shell: this runtime's version once geodeShellCleanup removed every older Beynd cache in this browser. */
 var GEODE_SHELL_KEY = 'geode_shell';
 var GEODE_CACHE_PREFIX = 'beynd-cache-';
@@ -1731,6 +1738,22 @@ function geodeAcceptFinancialWrite(json) {
   _geodeKnownRaw = json;
   _geodeFinancialKeySeen = true;
   _geodeKnownRev = geodeFinancialRevFromRaw(json);
+  _geodeCommittedText = json;
+}
+
+/** P2-9: S as it stands is committed — load() calls this before its first write and once its derivations are done. */
+function geodeNoteCommittedState() {
+  _geodeCommittedText = JSON.stringify(S);
+}
+
+/** P2-9: puts S back, in place, to the committed text after a failed write. */
+function geodeRestoreCommittedState() {
+  if (typeof _geodeCommittedText !== 'string') return;
+  var d = JSON.parse(_geodeCommittedText);
+  Object.keys(S).forEach(function (k) {
+    delete S[k];
+  });
+  for (var k in d) S[k] = d[k];
 }
 
 /** Boot check on the KEY string load() read: data newer than this runtime understands is never written by it. */
@@ -2008,6 +2031,7 @@ function load() {
     if (geodeSchema3TransitionDue(S) && geodeShellReadiness() !== 'pending') geodeSchema3Transition();
     if (geodeSchema2Active(S) && geodeShellReadiness() !== 'pending') geodeInvestmentAuthorityTransition(S, _geodeInvOpening);
   }
+  geodeNoteCommittedState();
   syncRecurringPayments();
   geodeNormalizeDebtHealthFields(S);
   geodeNormalizeDebtPaymentEvents(S);
@@ -2053,9 +2077,11 @@ function load() {
   S.theme = S.appearance === 'offwhite' ? 'light' : 'dark';
   applyAppearance(S.appearance);
   if (__beyndAppearancePreview === 'offwhite') applyAppearance('offwhite');
+  geodeNoteCommittedState();
 }
+/** Returns geodeStoreFinancialState's result, or 'refused' when this page may not write. */
 function save() {
-  if (!geodeFinancialWriteAllowed()) return;
+  if (!geodeFinancialWriteAllowed()) return 'refused';
   geodeEndFinancialAction();
   geodeNormalizeIncomeTypeFields();
   try {
@@ -2069,49 +2095,51 @@ function save() {
     _saveHasPendingBaseline = false;
     S.lastSnapshot = extendLastSnapshotFigures(computeSnapshotFigures());
   } catch (e) {}
-  var prepared = geodeFinancialJsonToStore();
-  if (prepared) {
-    var json = prepared.json;
-    var prevRev = prepared.prev;
-    try {
-      localStorage.setItem(KEY, json);
-      if (localStorage.getItem(KEY) !== json) {
-        S._rev = prevRev;
-        toast('Could not save data (storage may be full).', 'warn');
-      } else {
-        geodeAcceptFinancialWrite(json);
-      }
-    } catch (e2) {
-      S._rev = prevRev;
-      toast('Could not save data (storage may be full).', 'warn');
-    }
-  }
+  var result = geodeStoreFinancialState();
   if (typeof _geodeBootstrap !== 'undefined' && !_geodeBootstrap) {
     markActive();
   }
+  return result;
 }
 
-/** Persist S (e.g. nudgeHistory) without snapshot / lastSnapshot side effects. */
+/** Persist S (e.g. nudgeHistory) without snapshot / lastSnapshot side effects. Same results as save(). */
 function persistGeodeToLocalStorage() {
-  if (!geodeFinancialWriteAllowed()) return;
+  if (!geodeFinancialWriteAllowed()) return 'refused';
   geodeEndFinancialAction();
+  return geodeStoreFinancialState();
+}
+
+/**
+ * P2-9: the one KEY write of save() and persistGeodeToLocalStorage(), after their guard. 'saved': the whole state was
+ * stored and read back exactly. 'no_change': S already is the stored text. 'failed': setItem threw or the text did not
+ * read back — S goes back to the committed text (its _rev included), so nothing that never reached storage stays in
+ * memory for a later write or month boundary to use, and the rest of the task shows nothing after the failure message.
+ */
+function geodeStoreFinancialState() {
   var prepared = geodeFinancialJsonToStore();
-  if (!prepared) return;
-  var prevRev = prepared.prev;
-  var json = prepared.json;
-  try {
-    localStorage.setItem(KEY, json);
-    if (localStorage.getItem(KEY) !== json) {
-      S._rev = prevRev;
-      throw new Error('lose');
-    }
-    geodeAcceptFinancialWrite(json);
-  } catch (e) {
-    S._rev = prevRev;
-    try {
-      toast('Could not save data (storage may be full).', 'warn');
-    } catch (e2) {}
+  if (!prepared) {
+    _geodeCommittedText = _geodeKnownRaw;
+    return 'no_change';
   }
+  try {
+    localStorage.setItem(KEY, prepared.json);
+    if (localStorage.getItem(KEY) === prepared.json) {
+      geodeAcceptFinancialWrite(prepared.json);
+      return 'saved';
+    }
+  } catch (e) {}
+  S._rev = prepared.prev;
+  geodeRestoreCommittedState();
+  try {
+    toast('Could not save data (storage may be full).', 'warn');
+  } catch (e2) {}
+  if (!_geodeWriteFailedTask) {
+    _geodeWriteFailedTask = true;
+    setTimeout(function () {
+      _geodeWriteFailedTask = false;
+    }, 0);
+  }
+  return 'failed';
 }
 
 var geodeCoachingCopy = null;
@@ -10154,8 +10182,9 @@ function geodeApplySavingsRelease(event) {
     reserveTier: releaseRecord.reserveTier
   });
 
-  save();
+  var stored = save();
   render();
+  if (stored === 'failed' || stored === 'refused') return { ok: false, reason: 'not_saved' };
   return { ok: true, event: releaseRecord, remainingBalance: remaining };
 }
 
@@ -10610,8 +10639,8 @@ function geodePrepareFinancialMutation() {
   if (S && geodeRecurrenceWouldMutateBoundary() && !geodeBoundaryTransitionOutstanding()) {
     var before = Object.create(null);
     (S.payments || []).forEach(function (p) { if (p && p.id != null) before[p.id] = [geodePaymentCompletionMark(p), String(p.date || '')]; });
-    syncRecurringPayments();
-    if (_geodeRuntimeStale) return false;
+    // P2-9: a boundary that could not be stored was undone; the action must not run on top of it.
+    if (syncRecurringPayments() === 'failed' || _geodeRuntimeStale) return false;
     var changed = Object.create(null);
     (S.payments || []).forEach(function (p) {
       var b = p && p.id != null ? before[p.id] : undefined;
@@ -10708,7 +10737,7 @@ function syncRecurringPayments() {
   if (rollupRecurringExpenseDueDates()) changed = true;
   if (geodeArchiveExpiredOneOffExpenses(S)) changed = true;
   if (gaps && gaps.added) changed = true;
-  if (changed) save();
+  if (changed) return save();
 }
 function monthlyInterest(aprPercent, balance) {
   return (toNum(aprPercent) / 100 / 12) * toNum(balance);
@@ -12198,6 +12227,7 @@ function geodeBumpPaymentCompletionSessionCount() {
 
 /** Display-only: one calm completion channel per paid contribution (toast or Home note). */
 function geodeEmitPaymentCompletionFeedback(p, opts) {
+  if (_geodeWriteFailedTask) return;
   opts = opts || {};
   if (!p || String(p.status || '') !== 'paid') return;
   geodeMarkRecentUserSave();
@@ -12231,6 +12261,7 @@ try {
   if (typeof window.geodeLastAdjustment === 'undefined') window.geodeLastAdjustment = null;
 } catch (eGeodeAdjInit) {}
 function toast(msg, type, durationMs) {
+  if (_geodeWriteFailedTask) return;
   var old = document.querySelector('.toast');
   if (old) old.remove();
   var t = document.createElement('div');
@@ -40932,7 +40963,7 @@ function geodeRemoveSub(id, kind) {
 }
 
 function geodeSubOnSave(name, amount, rec) {
-  if (!geodeIsSubscription(name, rec)) return;
+  if (_geodeWriteFailedTask || !geodeIsSubscription(name, rec)) return;
   var annual = Number(amount)*12;
   setTimeout(function(){
     toast(escHtmlLite(name) + ' added as recurring — ' + fm(annual) + '/year. Review it in Spending anytime.', 'info');
