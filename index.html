@@ -6816,21 +6816,16 @@ function computeAffordabilityContext(state) {
   return out;
 }
 
-/** Ephemeral clone for modal inline impact only — does not persist and does not mutate S. */
+/**
+ * Ephemeral clone for modal inline impact only — does not persist and does not mutate S.
+ * Null when the state cannot be deep-copied: a shallow copy would share row objects with S, so callers drop the preview.
+ */
 function geodeCloneStateForUiCalc(state) {
   state = state || S;
   try {
     return JSON.parse(JSON.stringify(state));
   } catch (e) {
-    return {
-      income: toNum(state.income),
-      debts: (state.debts || []).slice(),
-      goals: (state.goals || []).slice(),
-      investments: (state.investments || []).slice(),
-      payments: (state.payments || []).slice(),
-      expenses: (state.expenses || []).slice(),
-      planStrategy: state.planStrategy
-    };
+    return null;
   }
 }
 
@@ -24131,31 +24126,39 @@ function geodePaymentMonthYmFromDate(iso) {
 }
 
 /**
+ * The legacy same-month duplicate group a payment row belongs to ('' when it can never merge): unpaid, not debt, linked
+ * to exactly one goal or investment, not a contribution the user added separately, with a dated month. Rows share a
+ * group when month, link and frequency match — the identity geodeFindExistingLinkedPaymentForYm reuses.
+ */
+function geodeDuplicateLinkedContributionKey(p) {
+  if (!p || String(p.status || '') === 'paid' || p.debtId || p.directContribution === true) return '';
+  var link = '';
+  if (p.goalId && !p.investId) link = 'g|' + String(p.goalId);
+  else if (p.investId && !p.goalId) link = 'i|' + String(p.investId);
+  else return '';
+  var ym = geodePaymentMonthYmFromDate(p.date);
+  return ym ? ym + '|' + link + '|' + String(p.rec || 'no') + '|u' : '';
+}
+
+/**
  * Merge duplicate linked contributions (same goal OR investment, same calendar month).
  * Unpaid rows merge together; paid rows are never merged — each completed payment keeps its own identity.
  * Goal/investment rows merge only with the same frequency, and never when the user added them as separate contributions.
  * P2-3: debt rows never merge — each unpaid debt payment is its own intent and template id. Rows an earlier runtime
  * already merged stay as stored.
  * Keeps one row per group (oldest createdAt wins id) and summed amounts.
- * Runs only inside a prepared payment save: merging can move a stored-overdue sum into this month's outflow.
+ * P3-4B.1: an action merges only the one group it acts on (onlyKey, from geodeDuplicateLinkedContributionKey) and an
+ * empty key merges nothing; merging can move a stored-overdue sum into this month's outflow, so no action may sweep
+ * other groups.
  */
-function geodeMergeDuplicateLinkedContributionsSameMonth() {
+function geodeMergeDuplicateLinkedContributionsSameMonth(onlyKey) {
   if (!S || !Array.isArray(S.payments) || S.payments.length < 2) return false;
+  if (arguments.length && !onlyKey) return false;
   var byKey = {};
   for (var i = 0; i < S.payments.length; i++) {
     var p = S.payments[i];
-    if (!p) continue;
-    if (String(p.status || '') === 'paid') continue;
-    if (p.debtId) continue;
-    var link = '';
-    if (p.goalId && !p.investId) link = 'g|' + String(p.goalId);
-    else if (p.investId && !p.goalId) link = 'i|' + String(p.investId);
-    else continue;
-    if (p.directContribution === true) continue;
-    link += '|' + String(p.rec || 'no');
-    var ym = geodePaymentMonthYmFromDate(p.date);
-    if (!ym) continue;
-    var key = ym + '|' + link + '|' + (String(p.status || '') === 'paid' ? 'p' : 'u');
+    var key = geodeDuplicateLinkedContributionKey(p);
+    if (!key || (onlyKey && key !== onlyKey)) continue;
     if (!byKey[key]) byKey[key] = [];
     byKey[key].push(p);
   }
@@ -40690,7 +40693,7 @@ function geodeQuickSetupNum(v) {
 }
 function geodeQuickSetupBuildTempState(qs) {
   var t = geodeCloneStateForUiCalc(S);
-  if (!t) t = {};
+  if (!t) return null;
   if (!Array.isArray(t.expenses)) t.expenses = [];
   if (!Array.isArray(t.payments)) t.payments = [];
   if (!Array.isArray(t.debts)) t.debts = [];
@@ -40774,6 +40777,7 @@ function geodeQuickSetupLiveLeft() {
   if (!qs) return '';
   try {
     var temp = geodeQuickSetupBuildTempState(qs);
+    if (!temp) return '';
     var left = calcMonthlyLeftover(temp);
     if (!isFinite(left)) return '';
     return fm(left);
@@ -41824,9 +41828,6 @@ function savePay(id) {
     }
   }
   if (!geodeModalCommitBegin()) return;
-  try {
-    geodeMergeDuplicateLinkedContributionsSameMonth();
-  } catch (ePre) {}
   if (!geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, payKind, amtNum)) geodeModalCommitRelease();
 }
 function geodeSaveExpApply(id, nm, am, edRaw, cat, rec) {
@@ -41936,7 +41937,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     // P2-3: a debt save without a row id is a new intent with its own template id. Only openPayModal(id) edits a debt row.
     if (debtid || payLinkedIntent === 'new') return false;
     try {
-      geodeMergeDuplicateLinkedContributionsSameMonth();
+      geodeMergeDuplicateLinkedContributionsSameMonth(geodeDuplicateLinkedContributionKey({ status: 'upcoming', goalId: gid, investId: invid, rec: rec, date: dt }));
     } catch (_ePreUps) {}
     var ym = geodePayYmFromDateStr(dt);
     var existing = null;
@@ -42067,9 +42068,6 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
   geodeRecordDebtPaymentTransition(savedPayBefore, savedPayRow, 'payment_form');
   geodeRecordBillPaymentTransition(savedPayBillBefore, savedPayRow, 'payment_form');
   geodeRecordContributionTransition(savedPayContributionBefore, savedPayRow, 'payment_form');
-  try {
-    geodeMergeDuplicateLinkedContributionsSameMonth();
-  } catch (ePost) {}
   if (savedPayRowId && S && Array.isArray(S.payments)) {
     for (var _spi = 0; _spi < S.payments.length; _spi++) {
       var _spr = S.payments[_spi];
@@ -42323,6 +42321,10 @@ function geodePayModalImpactRefresh() {
   if (rec === 'yes' && st === 'paid') row.lastPaidYM = currentYM();
 
   var temp = geodeCloneStateForUiCalc(S);
+  if (!temp) {
+    host.innerHTML = '';
+    return;
+  }
   if (!Array.isArray(temp.payments)) temp.payments = [];
   if (editId) {
     var replaced = false;
@@ -42380,6 +42382,10 @@ function geodeExpModalImpactRefresh() {
   var amt = Number(amRaw);
   var row = { id: editId || 'geode_impact_exp', name: nm || 'Expense', amount: amt, cat: cat, date: edRaw, rec: rec };
   var temp = geodeCloneStateForUiCalc(S);
+  if (!temp) {
+    host.innerHTML = '';
+    return;
+  }
   if (!Array.isArray(temp.expenses)) temp.expenses = [];
   if (editId) {
     var rep = false;

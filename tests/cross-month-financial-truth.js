@@ -40,7 +40,7 @@ const PRODUCTION_FUNCTIONS = [
   'currentYM', 'geodeTodayISO', 'geodeTodayLocalISO', 'geodeDateToLocalISO', 'geodeIsoDateIsPast',
   // payments: save / complete / delete / same-month identity
   'geodeSavePayApply', 'togglePay', 'delPay', 'geodeFindExistingLinkedPaymentForYm', 'geodePayYmFromDateStr',
-  'geodeNormalizePayLinkedIntent', 'geodeMergeDuplicateLinkedContributionsSameMonth', 'geodePaymentMonthYmFromDate',
+  'geodeNormalizePayLinkedIntent', 'geodeMergeDuplicateLinkedContributionsSameMonth', 'geodeDuplicateLinkedContributionKey', 'geodePaymentMonthYmFromDate',
   'geodePaymentEffectiveStatus', 'advancePaymentDueDateOneMonth', 'migratePaymentFlowFields',
   // recurring occurrence lifecycle (FA-4B): calendar-safe advance, undo inverse, paid-occurrence month, annual reset
   'geodeIsoDateAddMonths', 'geodeIsoDateMonthsBehind', 'geodePaymentUndoDueDate', 'geodePaymentPaidOccurrenceInMonth',
@@ -637,10 +637,9 @@ class App {
     const gid = o.goalId || '', invid = o.investId || '', debtid = o.debtId || '';
     const kind = gid ? 'goal' : invid ? 'invest' : debtid ? 'debt' : 'bill';
     this.run('window._geodePayLinkedIntent = ' + JSON.stringify(o.intent || (o.id ? 'replace' : 'new')) + ';');
-    // As savePay: the commit (P2-8: admission and the month boundary) before the first change — its legacy same-month
-    // merge included (o.merge) — then the save; released when refused.
+    // As savePay: the commit (P2-8: admission and the month boundary) before the first change, then the save; released
+    // when refused. P3-4B.1: no global same-month merge — only the linked upsert merges its own target group.
     if (!this.run('geodeModalCommitBegin()')) return null;
-    if (o.merge) this.merge();
     const applied = this.call('geodeSavePayApply', [o.id || null, o.name || 'Contribution', String(o.amount), o.date, o.status, o.rec || 'no',
       o.date, gid, invid, debtid, kind, Number(o.amount)]);
     if (!applied) this.run('geodeModalCommitRelease()');
@@ -699,7 +698,7 @@ class App {
     const f = opened.prefill;
     const intent = f._geodePayIntent ? this.call('geodeNormalizePayLinkedIntent', [f._geodePayIntent]) : 'new';
     this.run('window._geodePayPrefillBufferContribution = ' + JSON.stringify(f.bufferContribution === true) + ';');
-    this.contribute({ id: null, intent, merge: true, name: f.name, amount: amount != null ? amount : f.amount, date: f.date,
+    this.contribute({ id: null, intent, name: f.name, amount: amount != null ? amount : f.amount, date: f.date,
       status: f.status, rec: f.rec ? 'yes' : 'no', goalId: f.goalId, investId: f.investId, debtId: f.debtId });
     return intent;
   }
@@ -725,9 +724,9 @@ class App {
     const rec = f.rec === 'yes' || f.rec === 'annual' ? f.rec : 'no';
     const gid = f.goalId || '', invid = gid ? '' : f.investId || '', debtid = gid || invid ? '' : f.debtId || '';
     this.run('window._geodePayPrefillBufferContribution = false;');
-    this.contribute({ id, intent: 'replace', merge: true, name: f.name, amount: f.amount, date: f.date, status: f.status, rec, goalId: gid, investId: invid, debtId: debtid });
+    this.contribute({ id, intent: 'replace', name: f.name, amount: f.amount, date: f.date, status: f.status, rec, goalId: gid, investId: invid, debtId: debtid });
   }
-  /** savePay and geodeSavePayApply run the legacy same-month merge inside the payment save. */
+  /** The legacy same-month merge over every group (the rule under test; P3-4B.1: no user action runs it unscoped). */
   merge() { return this.call('geodeMergeDuplicateLinkedContributionsSameMonth'); }
   toggle(id) { this.call('togglePay', [id]); }
   completeAllUnpaid() { this.state().payments.filter(p => p.status !== 'paid').forEach(p => this.toggle(p.id)); }
@@ -6481,10 +6480,10 @@ function p2DebtIdentity() {
 
     const mm = debtApp([debtRow('d1', 50, 'yes', 1), debtRow('d2', 100, 'no', 2)]);
     mm.run(`(function () {
-      var src = geodeMergeDuplicateLinkedContributionsSameMonth.toString();
-      var out = src.replace("if (p.debtId) continue;", "if (p.debtId) { var dym = geodePaymentMonthYmFromDate(p.date); if (dym) (byKey[dym + '|d|' + p.debtId + '|u'] = byKey[dym + '|d|' + p.debtId + '|u'] || []).push(p); continue; }");
+      var src = geodeDuplicateLinkedContributionKey.toString();
+      var out = src.replace("=== 'paid' || p.debtId || p.directContribution === true) return '';", "=== 'paid' || p.directContribution === true) return ''; if (p.debtId) { var dym = geodePaymentMonthYmFromDate(p.date); return dym ? dym + '|d|' + p.debtId + '|u' : ''; }");
       if (out === src) throw new Error('mutation did not apply');
-      geodeMergeDuplicateLinkedContributionsSameMonth = (0, eval)('(' + out + ')');
+      geodeDuplicateLinkedContributionKey = (0, eval)('(' + out + ')');
     })()`);
     mm.merge();
     invariant('P2.debt.merge.disabled', 'With debt rows grouped again, the merge sums them into one £150 row — the exclusion is what keeps them apart',
@@ -8966,6 +8965,200 @@ function p31bOccurrence() {
   });
 }
 
+// ───────────────────────────── P3-4B.1 plan mutation isolation ─────────────────────────────
+
+/**
+ * P3-4B.1: one payment save changes only the row it saves (or, for a linked Plan save, the one same-month group that
+ * row's upsert targets); legacy duplicate groups elsewhere stay byte-for-byte as stored. A UI preview that cannot
+ * deep-copy the state shows nothing rather than computing on rows shared with S.
+ */
+function p34b1Isolation() {
+  const row = (id, kind, amount, date, status, rec, createdAt) => ({ id, name: (kind === 'g' ? 'Holiday ' : 'ISA ') + id, amount, date, status, rec,
+    lastPaidYM: '', goalId: kind === 'g' ? 'gH' : '', investId: kind === 'i' ? 'iA' : '', debtId: '', payKind: kind === 'g' ? 'goal' : 'invest', createdAt });
+  /** Legacy same-month duplicate groups: current (different amounts; mixed statuses), future, historical, and a paid row beside the current investment group. */
+  const GROUPS = {
+    current: ['gC1', 'gC2', 'iC1', 'iC2'], future: ['gF1', 'gF2'], historical: ['iH1', 'iH2'], paid: ['iP']
+  };
+  const ALL = [].concat(GROUPS.current, GROUPS.future, GROUPS.historical, GROUPS.paid);
+  const fixture = () => baseState({ payments: [
+    row('gC1', 'g', 100, '2026-06-20', 'upcoming', 'yes', 1), row('gC2', 'g', 120, '2026-06-25', 'upcoming', 'yes', 2),
+    row('iC1', 'i', 40, '2026-06-01', 'overdue', 'no', 3), row('iC2', 'i', 60, '2026-06-28', 'upcoming', 'no', 4),
+    row('gF1', 'g', 75, '2026-08-10', 'upcoming', 'no', 5), row('gF2', 'g', 75, '2026-08-12', 'upcoming', 'no', 6),
+    row('iH1', 'i', 30, '2026-04-10', 'overdue', 'no', 7), row('iH2', 'i', 45, '2026-04-15', 'overdue', 'no', 8),
+    row('iP', 'i', 200, '2026-06-02', 'paid', 'no', 9)
+  ] });
+  const stored = app => { const o = {}; app.state().payments.forEach(p => { o[p.id] = JSON.stringify(p); }); return o; };
+  /** Of these ids, the ones whose stored row is not byte-for-byte what it was (removed rows included). */
+  const touched = (before, after, ids) => ids.filter(id => before[id] !== after[id]);
+  /** Contribution, carry and settlement ledgers (a save logs its own activity line, so the activity log is not compared here). */
+  const evidence = app => { const s = app.state(); return JSON.stringify([s.contributionEvents || [], s.contributionCarry || [], s.billPaymentEvents || [], s.debtPaymentEvents || [], s.expectationGaps || []]); };
+  const position = app => { const s = app.snap(); return [s.goal.gH, s.inv.iA]; };
+  /** Production savePay on a new-row form opened with this intent. */
+  const saveNew = (app, form, intent) => { p1Open(app, p1PayForm(form), intent); app.run('savePay(""); __runTimers();'); };
+  /** Production savePay on the edit form openPayModal fills for a row, these fields changed. */
+  const saveEdit = (app, id, changes) => {
+    p1Open(app, p1PayForm(Object.assign(app.modalForm(id), changes)), 'replace');
+    app.run('savePay(' + JSON.stringify(id) + '); __runTimers();');
+  };
+  /** Replaces a production function in this app with its source edited (a mutant: the fix reverted). */
+  const patch = (app, fn, from, to) => app.run(`(function () {
+    var src = ${fn}.toString(), out = src.split(${JSON.stringify(from)}).join(${JSON.stringify(to)});
+    if (out === src) throw new Error('mutation did not apply');
+    ${fn} = (0, eval)('(' + out + ')');
+  })()`);
+  const UNSCOPED_SAVE = ['if (!geodeModalCommitBegin()) return;', 'if (!geodeModalCommitBegin()) return; geodeMergeDuplicateLinkedContributionsSameMonth();'];
+  const UNSCOPED_UPSERT = ["geodeMergeDuplicateLinkedContributionsSameMonth(geodeDuplicateLinkedContributionKey({ status: 'upcoming', goalId: gid, investId: invid, rec: rec, date: dt }))",
+    'geodeMergeDuplicateLinkedContributionsSameMonth()'];
+  /** One action on the fixture: [unrelated rows it touched, Monthly Left change, goal/investment positions, evidence unchanged]. */
+  const act = (action, unrelated, mutant) => {
+    const app = new App(fixture(), '2026-06-05', PROGRAM.commit);
+    if (mutant) patch(app, mutant[0], mutant[1], mutant[2]);
+    const before = stored(app), left0 = app.snap().left, pos0 = position(app), ev0 = evidence(app);
+    action(app);
+    return { app, before, touched: touched(before, stored(app), unrelated), left: app.snap().left - left0, positions: [pos0, position(app)], evidence: evidence(app) === ev0 };
+  };
+
+  scenario('P3-4B.1 ORDINARY SAVE — saving one payment leaves every unrelated duplicate group byte-for-byte as stored', () => {
+    const water = app => saveNew(app, { name: 'Water', amount: 30, date: '2026-06-15', status: 'upcoming' }, 'new');
+    const a = act(water, ALL);
+    invariant('P34B1.A.current', 'Bill save: the current-month duplicate groups (Holiday £100 + £120 monthly; ISA £40 overdue + £60 upcoming one-off) are untouched',
+      touched(a.before, stored(a.app), GROUPS.current), []);
+    invariant('P34B1.B.future', 'Bill save: the August Holiday duplicates are untouched', touched(a.before, stored(a.app), GROUPS.future), []);
+    invariant('P34B1.C.historical', 'Bill save: the April ISA overdue duplicates are untouched', touched(a.before, stored(a.app), GROUPS.historical), []);
+    invariant('P34B1.A.left', 'Bill save: Monthly Left moves by the £30 bill only; Holiday, ISA and the evidence ledgers are unchanged',
+      [a.left, a.positions[1], a.evidence], [-30, a.positions[0], true]);
+    invariant('P34B1.A.disabled', 'With the global merge restored in savePay, the same bill save rewrites every duplicate group — the isolation is what keeps them',
+      act(water, ALL, ['savePay'].concat(UNSCOPED_SAVE)).touched, GROUPS.current.concat(GROUPS.future, GROUPS.historical));
+
+    const goal = app => saveNew(app, { name: 'Holiday extra', amount: 50, date: '2026-06-15', status: 'upcoming', rec: 'no', goalId: 'gH' }, 'set');
+    const d = act(goal, ALL);
+    invariant('P34B1.D.goal', 'Goal Plan save (Holiday, June, one-off): the ISA groups and the Holiday monthly and August groups are untouched; Monthly Left −£50 only; positions and evidence unchanged',
+      [d.touched, d.left, d.positions[1], d.evidence], [[], -50, d.positions[0], true]);
+    invariant('P34B1.D.disabled', 'With the upsert merge unscoped again, the same goal save rewrites the unrelated groups',
+      act(goal, ALL, ['geodeSavePayApply'].concat(UNSCOPED_UPSERT)).touched, GROUPS.current.concat(GROUPS.future, GROUPS.historical));
+
+    const isa = app => saveNew(app, { name: 'ISA monthly', amount: 80, date: '2026-06-15', status: 'upcoming', rec: 'yes', investId: 'iA' }, 'set');
+    const e = act(isa, ALL);
+    invariant('P34B1.E.investment', 'Investment Plan save (ISA, June, monthly): the Holiday groups and the ISA one-off and April groups are untouched; Monthly Left −£80 only; positions and evidence unchanged',
+      [e.touched, e.left, e.positions[1], e.evidence], [[], -80, e.positions[0], true]);
+  });
+
+  scenario('P3-4B.1 SAME GROUP — a save inside a duplicate group changes that row, or that one group for a linked Plan save', () => {
+    const f1 = act(app => saveEdit(app, 'gC1', { amount: 110 }), ALL);
+    invariant('P34B1.F.edit', 'Editing Holiday £100 → £110: only that row changes (its £120 duplicate stays a separate row); Monthly Left −£10; positions and evidence unchanged',
+      [f1.touched, JSON.parse(stored(f1.app).gC1).amount, f1.left, f1.positions[1], f1.evidence], [['gC1'], 110, -10, f1.positions[0], true]);
+
+    const f2 = act(app => saveNew(app, { name: 'Holiday monthly', amount: 30, date: '2026-06-20', status: 'upcoming', rec: 'yes', goalId: 'gH' }, 'add'), ALL);
+    const gC1 = JSON.parse(stored(f2.app).gC1);
+    invariant('P34B1.H.group', 'Plan "add" £30 to the Holiday June monthly (F.3, no duplicates): its own £100 + £120 group becomes one row (oldest id kept) of £250; no other row changes; Monthly Left −£30; Holiday and evidence unchanged',
+      [f2.touched, [gC1.amount, gC1.status, gC1.date], f2.left, f2.positions[1], f2.evidence], [['gC1', 'gC2'], [250, 'upcoming', '2026-06-20'], -30, f2.positions[0], true]);
+
+    const g = act(app => saveNew(app, { name: 'ISA extra', amount: 10, date: '2026-06-20', status: 'upcoming', rec: 'no', investId: 'iA' }, 'add'), ALL);
+    const iC1 = JSON.parse(stored(g.app).iC1);
+    invariant('P34B1.G.mixed', 'Plan "add" £10 to the ISA June one-offs: the unpaid £40 overdue + £60 upcoming become one £110 overdue row; the paid £200 beside them, its evidence and the ISA position are untouched',
+      [g.touched, [iC1.amount, iC1.status, iC1.date], g.left, g.positions[1], g.evidence], [['iC1', 'iC2'], [110, 'overdue', '2026-06-01'], -10, g.positions[0], true]);
+  });
+
+  scenario('P3-4B.1 SMART IMPORT AND LEGACY — import never merges by itself; legacy duplicates stay until the user resolves them', () => {
+    const i1 = act(app => app.smartImport([{ name: 'Holiday top-up', amount: 25, date: '2026-06-20', link: 'goal:gH' }]), ALL);
+    invariant('P34B1.I.add', 'A goal-linked import added as new beside the Holiday duplicates: one new row, every stored row untouched',
+      [i1.touched, i1.app.state().payments.length], [[], ALL.length + 1]);
+    const i2 = act(app => app.smartImport([{ name: 'Holiday', amount: 100, date: '2026-06-20', link: 'goal:gH', mergeId: 'gC2' }]), ALL);
+    invariant('P34B1.I.merge', 'An import the user merges into Holiday £120: only that chosen row changes; no row is added or removed',
+      [i2.touched, i2.app.state().payments.length], [['gC2'], ALL.length]);
+
+    const j = act(app => { saveNew(app, { name: 'Water', amount: 30, date: '2026-06-15', status: 'upcoming' }, 'new'); app.render(); app.reload(); app.render(); }, ALL);
+    invariant('P34B1.J.legacy', 'After a save, a render and a reload, every legacy duplicate group is still stored exactly as before',
+      j.touched, []);
+  });
+
+  /** Payments render and the three UI previews, in one program with a page holding the impact host and the payments list. */
+  const UI_SHIMS = String.raw`
+var __host = { innerHTML: 'stale' }, __plist = null, __gebiBase = document.getElementById;
+document.getElementById = function (id) {
+  if (id === 'geode-pay-impact-host' || id === 'geode-exp-impact-host') return __host;
+  if (id === 'plist') return __plist;
+  return __gebiBase(id);
+};
+document.createElement = function () { var e = new __Element(); e.style = {}; e.innerHTML = ''; e.children = []; e.appendChild = function (c) { this.children.push(c); }; return e; };
+`;
+  const ui = buildEntryProgram(PROGRAM.src, readSource(FOUNDATION_JS), PROGRAM.extracted, UI_SHIMS, [],
+    ['rPayments', 'geodeExpModalImpactRefresh', 'geodeQuickSetupLiveLeft', 'geodePayModalImpactRefresh'], 'p34b1-ui');
+  const uiApp = () => {
+    const app = new App(fixture(), '2026-06-05', ui);
+    watchWrites(app);
+    app.run('var __saveCalls = 0; save = (function (inner) { return function () { __saveCalls++; return inner(); }; })(save);' +
+      ' __impact = null; geodeRenderModalImpactBlock = function (line1, sentence) { __impact = [line1, sentence]; return "rendered"; };');
+    return app;
+  };
+  /** Makes JSON.stringify(S) throw (as a cyclic or unserialisable state would) until healed; S's rows are untouched. */
+  const FAULT = "Object.defineProperty(S, '__cloneFault', { enumerable: true, configurable: true, get: function () { throw new Error('clone fault'); } });";
+  const HEAL = 'delete S.__cloneFault;';
+  const PAY = { 'geode-pay-impact-host': '', pn: 'Water', pa: '30', pd: '2026-06-15', ps: 'upcoming', prec: 'no', pglid: '', geode_pay_edit_id: '' };
+  const PAY_EDIT = Object.assign({}, PAY, { pn: 'Holiday gC1', pa: '500', pd: '2026-06-20', prec: 'yes', pglid: 'gH', geode_pay_edit_id: 'gC1' });
+  const EXP = { 'geode-exp-impact-host': '', en: 'Taxi', ea: '50', ed: '2026-06-10', ecat: 'transport', er: 'no', geode_exp_edit_id: '' };
+  const QS = { quickSetupData: { income: '3000', expenses: { housing: '500' }, debt: {}, goal: {} } };
+  /** A preview run: [what it returned or threw, the impact it rendered, the host's content, saves, stored writes]; then S compared with before. */
+  const preview = (app, code, fields, fault) => {
+    const before = app.run('JSON.stringify(S)'), left0 = app.snap().left;
+    app.run('__fields = ' + JSON.stringify(fields || {}) + '; __impact = null; __host.innerHTML = "stale"; __saveCalls = 0; window._geodeQS = ' + JSON.stringify(QS) + ';');
+    if (fault) app.run(FAULT);
+    let out;
+    try { out = app.run(code); } catch (err) { out = 'threw: ' + err.message; }
+    if (fault) app.run(HEAL);
+    return { out: out === undefined ? null : out, impact: JSON.parse(app.run('JSON.stringify(__impact)')), host: app.run('__host.innerHTML'),
+      saves: app.run('__saveCalls'), writes: writes(app), same: app.run('JSON.stringify(S)') === before, left: app.snap().left === left0 };
+  };
+
+  scenario('P3-4B.1 PREVIEW ISOLATION — previews compute on a deep copy, or show nothing when the state cannot be copied', () => {
+    const app = uiApp();
+    const left = app.snap().left;
+    const fmt = v => '£' + Math.round(v);
+    const pay = preview(app, 'geodePayModalImpactRefresh()', PAY), exp = preview(app, 'geodeExpModalImpactRefresh()', EXP), qs = preview(app, 'geodeQuickSetupLiveLeft()', {});
+    invariant('P34B1.K.normal', 'Copy succeeds: the payment preview shows Monthly Left −£30, the expense preview −£50, Quick Setup the live total; S, Monthly Left, saves and writes untouched',
+      [[pay.impact, pay.same, pay.left, pay.saves, pay.writes], [exp.impact, exp.same, exp.left, exp.saves, exp.writes], [qs.out, qs.same, qs.saves, qs.writes]],
+      [[['Left this month: ' + fmt(left) + ' → ' + fmt(left - 30), 'This lowers left this month on your plan.'], true, true, 0, 0],
+        [['Left this month: ' + fmt(left) + ' → ' + fmt(left - 50), 'This lowers left this month on your plan.'], true, true, 0, 0],
+        [fmt(left - 500), true, 0, 0]]);
+
+    app.run(FAULT);
+    const copy = app.run('geodeCloneStateForUiCalc(S) === null');
+    app.run(HEAL);
+    invariant('P34B1.L.copy', 'When the state cannot be deep-copied the UI copy is null — never a shallow copy holding S\'s row objects', copy, true);
+    const shallow = uiApp();
+    patch(shallow, 'geodeCloneStateForUiCalc', 'return null;', 'return { payments: (state.payments || []).slice(), expenses: (state.expenses || []).slice() };');
+    shallow.run(FAULT);
+    const shared = shallow.run('(function () { var t = geodeCloneStateForUiCalc(S); return !!t && t.payments[0] === S.payments[0]; })()');
+    shallow.run(HEAL);
+    invariant('P34B1.L.disabled', 'With a shallow fallback restored, the copy shares S\'s payment row objects — what the null result rules out', shared, true);
+
+    const SUPPRESSED = { impact: null, host: '', saves: 0, writes: 0, same: true, left: true };
+    const pick = r => ({ impact: r.impact, host: r.host, saves: r.saves, writes: r.writes, same: r.same, left: r.left });
+    invariant('P34B1.M.payment', 'Copy fails on a payment preview (new row, and an edit of Holiday £100 → £500): no preview, the stale one cleared, nothing thrown; S byte-for-byte, Monthly Left, saves and writes untouched',
+      [pick(preview(app, 'geodePayModalImpactRefresh()', PAY, true)), pick(preview(app, 'geodePayModalImpactRefresh()', PAY_EDIT, true))], [SUPPRESSED, SUPPRESSED]);
+    invariant('P34B1.N.expense', 'Copy fails on an expense preview: no preview, the stale one cleared; S, Monthly Left, saves and writes untouched',
+      pick(preview(app, 'geodeExpModalImpactRefresh()', EXP, true)), SUPPRESSED);
+    const qsFail = preview(app, 'geodeQuickSetupLiveLeft()', {}, true);
+    invariant('P34B1.L.quick-setup', 'Copy fails on the Quick Setup live total: it shows nothing (\'\'); S, saves and writes untouched',
+      [qsFail.out, qsFail.same, qsFail.saves, qsFail.writes], ['', true, 0, 0]);
+    invariant('P34B1.K.after', 'Once the state can be copied again, the payment preview works as before',
+      preview(app, 'geodePayModalImpactRefresh()', PAY).impact, pay.impact);
+  });
+
+  scenario('P3-4B.1 PAYMENTS RENDER — rendering Payments repeatedly is read-only and shows every legacy duplicate', () => {
+    const app = uiApp();
+    const before = app.run('JSON.stringify(S)');
+    const seen = [1, 2, 3].map(() => {
+      app.run('__saveCalls = 0; __plist = document.createElement("div"); rPayments(document.createElement("div"));');
+      const ids = JSON.parse(app.run('JSON.stringify(__plist.children.map(function (c) { var m = c.innerHTML.match(/openPayModal\\(\'([^\']+)\'\\)/); return m ? m[1] : ""; }))'));
+      return [ids.slice().sort(), app.run('JSON.stringify(S)') === before, app.run('__saveCalls'), writes(app)];
+    });
+    const once = [ALL.slice().sort(), true, 0, 0];
+    invariant('P34B1.O.render', 'Three Payments renders: each lists all nine rows (both rows of every duplicate group); S byte-for-byte, no save, no stored write',
+      seen, [once, once, once]);
+  });
+}
+
 let PROGRAM;
 function main() {
   try {
@@ -8993,6 +9186,7 @@ function main() {
   p2ModalClose();
   migrationFixtures();
   p31bOccurrence();
+  p34b1Isolation();
 
   console.log('Beynd cross-month financial truth harness');
   console.log('production: ' + path.relative(process.cwd(), INDEX_HTML) + ' (' + PROGRAM.extracted.length + ' functions) + ' + path.relative(process.cwd(), FOUNDATION_JS));

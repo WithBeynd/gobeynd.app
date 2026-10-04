@@ -448,16 +448,29 @@ function checksFor(src) {
     Object.keys(EXCEPTIONS).flatMap(n => EXCEPTIONS[n].covers.map(c => [c, callersOf(c)])),
     Object.keys(EXCEPTIONS).flatMap(n => EXCEPTIONS[n].covers.map(c => [c, [n]])));
 
-  section('PAYMENTS RENDER — the legacy same-month merge no longer runs or saves while the list renders');
+  section('PAYMENTS RENDER AND SAVE SCOPE — the legacy same-month merge never runs over every group: not while the list renders, not around a payment save');
   const rp = def('rPayments').code;
   check('render.no-merge', 'rPayments calls neither the merge nor any write (save, persist, store)',
     ['geodeMergeDuplicateLinkedContributionsSameMonth(', 'save(', 'persistGeodeToLocalStorage(', 'geodeStoreFinancialState('].map(k => new RegExp('(?<![\\w$.])' + k.replace('(', '\\(')).test(rp)),
     [false, false, false, false]);
-  check('render.merge-callers', 'The merge runs only inside the payment save: savePay after its commit, and geodeSavePayApply, which only admitted saves reach',
-    [callersOf('geodeMergeDuplicateLinkedContributionsSameMonth'), refs.get('geodeMergeDuplicateLinkedContributionsSameMonth').entry,
-      admitAt(def('savePay')) < refs.get('geodeMergeDuplicateLinkedContributionsSameMonth').callers.get(def('savePay')), verdictOf('geodeSavePayApply'),
+  check('render.merge-callers', 'The merge runs only inside geodeSavePayApply (its linked upsert), which only admitted saves reach; savePay, render and import never call it',
+    [callersOf('geodeMergeDuplicateLinkedContributionsSameMonth'), refs.get('geodeMergeDuplicateLinkedContributionsSameMonth').entry, verdictOf('geodeSavePayApply'),
       verdictOf('geodeMergeDuplicateLinkedContributionsSameMonth')],
-    [['geodeSavePayApply', 'savePay'], [], true, 'callers', 'callers']);
+    [['geodeSavePayApply'], [], 'callers', 'callers']);
+  const mergeCalls = [];
+  const mergeCallRe = /(?<![\w$.]|function\s)geodeMergeDuplicateLinkedContributionsSameMonth\s*\(([^\n]*)\);/g;
+  let mc;
+  while ((mc = mergeCallRe.exec(M.noComments))) mergeCalls.push([(M.ownerAt(mc.index) || { name: '(top level)' }).name, mc[1].replace(/\s+/g, ' ').trim()]);
+  const ups = M.noComments.slice(def('geodeSavePayApply').start, def('geodeSavePayApply').end);
+  check('merge.scoped', 'The one merge call passes the upsert\'s own group (unpaid, this link, frequency and month), before the upsert looks up that group\'s row',
+    [mergeCalls, ups.indexOf('geodeMergeDuplicateLinkedContributionsSameMonth(') < ups.indexOf('geodeFindExistingLinkedPaymentForYm(\'goal\', gid, ym, rec)')],
+    [[['geodeSavePayApply', "geodeDuplicateLinkedContributionKey({ status: 'upcoming', goalId: gid, investId: invid, rec: rec, date: dt })"]], true]);
+  const mergeSrc = M.noComments.slice(def('geodeMergeDuplicateLinkedContributionsSameMonth').start, def('geodeMergeDuplicateLinkedContributionsSameMonth').end);
+  const keySrc = M.noComments.slice(def('geodeDuplicateLinkedContributionKey').start, def('geodeDuplicateLinkedContributionKey').end);
+  check('merge.only-key', 'The merge groups rows by the key helper, merges only the group it is given, and merges nothing for an empty key; the key never covers paid, debt or separately added rows',
+    [/if \(arguments\.length && !onlyKey\) return false;/.test(mergeSrc), /var key = geodeDuplicateLinkedContributionKey\(p\);\s*if \(!key \|\| \(onlyKey && key !== onlyKey\)\) continue;/.test(mergeSrc),
+      /if \(!p \|\| String\(p\.status \|\| ''\) === 'paid' \|\| p\.debtId \|\| p\.directContribution === true\) return '';/.test(keySrc)],
+    [true, true, true]);
 
   section('BANK ESTIMATE — the dormant income writer admits after its confirm and before its first change');
   const be = def('geodeIntelApplyBankEstimate').code;
@@ -502,8 +515,16 @@ function checksFor(src) {
       cacheWrites.filter(s => !/^geodeHighlightFullRankedCache = \[\]$|^geodeHighlightFullRankedCache\.push\(cloneHighlightNudge\(/.test(s)),
       /^\s*if \(!n\) return null;\s*var o = \{/.test(def('cloneHighlightNudge').code.replace(/^function[^{]*\{/, ''))],
     [['geodeApplyK71ContextToHighlightCache'], [], true, [], true]);
-  check('clone.deep', 'The UI calculation copy is a JSON deep copy, so writes to its rows stay local',
-    /^\s*state = state \|\| S;\s*try \{\s*return JSON\.parse\(JSON\.stringify\(state\)\);/.test(def('geodeCloneStateForUiCalc').code.replace(/^function[^{]*\{/, '')), true);
+  check('clone.deep', 'The UI calculation copy is a JSON deep copy, so writes to its rows stay local; when it cannot be made the copy is null (never a shallow copy sharing S\'s rows)',
+    /^\s*state = state \|\| S;\s*try \{\s*return JSON\.parse\(JSON\.stringify\(state\)\);\s*\} catch \(e\) \{\s*return null;\s*\}\s*\}\s*$/.test(def('geodeCloneStateForUiCalc').code.replace(/^function[^{]*\{/, '')), true);
+  const failsClosed = (name, re) => re.test(M.noComments.slice(def(name).start, def(name).end));
+  check('clone.callers', 'Every UI copy caller drops its preview when the copy is null (payment and expense previews clear their host; Quick Setup shows no total)',
+    [callersOf('geodeCloneStateForUiCalc'), refs.get('geodeCloneStateForUiCalc').entry, callersOf('geodeQuickSetupBuildTempState'), refs.get('geodeQuickSetupBuildTempState').entry,
+      failsClosed('geodePayModalImpactRefresh', /var temp = geodeCloneStateForUiCalc\(S\);\s*if \(!temp\) \{\s*host\.innerHTML = '';\s*return;\s*\}/),
+      failsClosed('geodeExpModalImpactRefresh', /var temp = geodeCloneStateForUiCalc\(S\);\s*if \(!temp\) \{\s*host\.innerHTML = '';\s*return;\s*\}/),
+      failsClosed('geodeQuickSetupBuildTempState', /var t = geodeCloneStateForUiCalc\(S\);\s*if \(!t\) return null;/),
+      failsClosed('geodeQuickSetupLiveLeft', /var temp = geodeQuickSetupBuildTempState\(qs\);\s*if \(!temp\) return '';/)],
+    [['geodeExpModalImpactRefresh', 'geodePayModalImpactRefresh', 'geodeQuickSetupBuildTempState'], [], ['geodeQuickSetupLiveLeft'], [], true, true, true, true]);
 
   section('HANDLERS AND PURE MODULES — no plan write outside the inline functions');
   const handlerWrites = [];
@@ -552,8 +573,24 @@ const MUTANTS = {
   'nudge transform on a plan row': inRender('geodeK71TransformNudgeInPlace(S.expenses[0]);'),
   'parity bridge on plan rows': inRender('geodePresentationParityBridgePostAdaptiveRows(S.payments);'),
   'nudge cache holds plan rows': ['    geodeHighlightFullRankedCache.push(cloneHighlightNudge(fullRanked[_ci]));', '    geodeHighlightFullRankedCache.push(S.expenses[_ci]);'],
-  'UI copy made shallow': ['  try {\n    return JSON.parse(JSON.stringify(state));\n  } catch (e) {\n    return {\n      income: toNum(state.income),',
-    '  try {\n    return Object.assign({}, state);\n  } catch (e) {\n    return {\n      income: toNum(state.income),']
+  'UI copy made shallow': ['  try {\n    return JSON.parse(JSON.stringify(state));\n  } catch (e) {\n    return null;',
+    '  try {\n    return Object.assign({}, state);\n  } catch (e) {\n    return null;'],
+  'UI copy falls back to shared rows': ['    return JSON.parse(JSON.stringify(state));\n  } catch (e) {\n    return null;',
+    '    return JSON.parse(JSON.stringify(state));\n  } catch (e) {\n    return { income: toNum(state.income), payments: (state.payments || []).slice(), expenses: (state.expenses || []).slice() };'],
+  'payment preview ignores a failed copy': ["  if (!temp) {\n    host.innerHTML = '';\n    return;\n  }\n  if (!Array.isArray(temp.payments))", '  if (!Array.isArray(temp.payments))'],
+  'expense preview ignores a failed copy': ["  if (!temp) {\n    host.innerHTML = '';\n    return;\n  }\n  if (!Array.isArray(temp.expenses))", '  if (!Array.isArray(temp.expenses))'],
+  'Quick Setup copy falls back': ['  if (!t) return null;\n  if (!Array.isArray(t.expenses))', '  if (!t) t = {};\n  if (!Array.isArray(t.expenses))'],
+  'Quick Setup total ignores a failed copy': ["    if (!temp) return '';\n    var left = calcMonthlyLeftover(temp);", '    var left = calcMonthlyLeftover(temp);'],
+  'global merge in ordinary save': ['  if (!geodeModalCommitBegin()) return;\n  if (!geodeSavePayApply(',
+    '  if (!geodeModalCommitBegin()) return;\n  geodeMergeDuplicateLinkedContributionsSameMonth();\n  if (!geodeSavePayApply('],
+  'global merge after the save': ["  geodeRecordContributionTransition(savedPayContributionBefore, savedPayRow, 'payment_form');\n  if (savedPayRowId",
+    "  geodeRecordContributionTransition(savedPayContributionBefore, savedPayRow, 'payment_form');\n  geodeMergeDuplicateLinkedContributionsSameMonth(geodeDuplicateLinkedContributionKey(savedPayRow));\n  if (savedPayRowId"],
+  'upsert merge unscoped': ["geodeMergeDuplicateLinkedContributionsSameMonth(geodeDuplicateLinkedContributionKey({ status: 'upcoming', goalId: gid, investId: invid, rec: rec, date: dt }));",
+    'geodeMergeDuplicateLinkedContributionsSameMonth();'],
+  'merge ignores its key': ['    if (!key || (onlyKey && key !== onlyKey)) continue;', '    if (!key) continue;'],
+  'empty key merges every group': ['  if (arguments.length && !onlyKey) return false;\n', ''],
+  'key merges paid rows': ["  if (!p || String(p.status || '') === 'paid' || p.debtId", '  if (!p || p.debtId'],
+  'merge in Smart Import': ['function geodeSmartImportConfirm() {', 'function geodeSmartImportConfirm() {\n  geodeMergeDuplicateLinkedContributionsSameMonth();']
 };
 
 function main() {
