@@ -38321,6 +38321,125 @@ function geodeHeroAtmosphereClass(state, opts) {
   }
 }
 
+/**
+ * P3-2 Month Pulse: what Home shows of the Living Month model, read from the model alone — no payment row, expense or
+ * clock is read and no total is formed here. Null unless the model is ready: a pending boundary, another schema, another
+ * month, an invalid clock or state shows nothing rather than a figure for a month that is not this one.
+ */
+function geodeMonthPulseView(model) {
+  if (!model || model.status !== 'ready' || !model.month || !model.plan || !model.payments || !model.available) return null;
+  var remainder = model.available.planRemainder;
+  if (typeof remainder !== 'number' || !isFinite(remainder)) return null;
+  var done = model.payments.done || [];
+  var ahead = model.payments.ahead || [];
+  var due = 0;
+  for (var i = 0; i < ahead.length; i++) {
+    if (ahead[i] && ahead[i].state === 'due_no_outcome_recorded') due++;
+  }
+  var income = model.income || {};
+  return {
+    ym: String(model.month.ym || ''),
+    planRemainder: remainder,
+    done: { count: done.length, total: model.payments.doneTotal },
+    ahead: { count: ahead.length, total: model.payments.aheadTotal },
+    dueNoOutcome: due,
+    unplaced: (model.payments.unplaced || []).length,
+    incomePlanned: income.planned,
+    incomeType: income.type,
+    incomeReceived: income.received === undefined ? null : income.received
+  };
+}
+
+/**
+ * P3-2: the Month Pulse surface, or '' without a view. The remainder is Monthly Left — a plan figure, never cash, a
+ * balance or money that is safe to spend. Completed / still ahead are the model's done / ahead totals of scheduled
+ * payments and contributions, not spending. Income received is not evidenced before P3-5, so no received figure is shown.
+ * opts.dueShownElsewhere: Home's needs-attention card already lists the due items.
+ */
+function geodeMonthPulseHtml(view, opts) {
+  if (!view) return '';
+  opts = opts || {};
+  var months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  var month = months[Number(view.ym.slice(5, 7)) - 1] || '';
+  var over = view.planRemainder < 0;
+  var h =
+    '<section class="geode-month-pulse" data-geode-month-pulse="1" aria-label="' +
+    escHtmlLite(month ? 'This month, ' + month : 'This month') +
+    '" data-geode-css="margin-bottom:12px;padding:14px 16px;border-radius:14px;background:var(--bg-surface);border:1px solid var(--bd)">';
+  if (month) {
+    h +=
+      '<div data-geode-css="font-size:10px;font-weight:700;color:var(--gem-l);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">' +
+      escHtmlLite(month) +
+      '</div>';
+  }
+  if (over) {
+    h +=
+      '<div data-geode-month-pulse-remainder="1" data-geode-css="font-size:18px;font-weight:800;color:var(--guide);line-height:1.3">' +
+      escHtmlLite('Your current plan is ' + fm(-view.planRemainder) + ' over') +
+      '</div>';
+  } else {
+    h +=
+      '<div data-geode-month-pulse-remainder="1" data-geode-css="line-height:1.3">' +
+      '<span data-geode-css="font-size:20px;font-weight:800;color:var(--tx-1)">' +
+      escHtmlLite(fm(view.planRemainder)) +
+      '</span> <span data-geode-css="font-size:12px;color:var(--tx-2)">' +
+      escHtmlLite('left if the month goes to plan') +
+      '</span></div>';
+  }
+  if (view.done.count || view.ahead.count) {
+    var doneText = view.done.count ? fm(view.done.total) + ' completed' : 'Nothing completed yet';
+    var aheadText = view.ahead.count ? fm(view.ahead.total) + ' still ahead' : 'nothing still ahead';
+    h +=
+      '<div data-geode-css="margin-top:10px;font-size:10px;color:var(--tx-3);line-height:1.4">' +
+      escHtmlLite('Scheduled payments and contributions') +
+      '</div>' +
+      '<div data-geode-month-pulse-commitments="1" data-geode-css="font-size:13px;font-weight:600;color:var(--tx-1);line-height:1.45">' +
+      escHtmlLite(doneText + ' \u00b7 ' + aheadText) +
+      '</div>';
+  }
+  var notes = [];
+  if (view.dueNoOutcome && !opts.dueShownElsewhere) {
+    notes.push(view.dueNoOutcome === 1
+      ? '1 scheduled item is due, with no outcome recorded.'
+      : view.dueNoOutcome + ' scheduled items are due, with no outcome recorded.');
+  }
+  if (view.unplaced) {
+    notes.push(view.unplaced === 1 ? '1 completed item has no known month.' : view.unplaced + ' completed items have no known month.');
+  }
+  if (notes.length) {
+    h +=
+      '<div data-geode-month-pulse-attention="1" data-geode-css="margin-top:10px;font-size:11px;color:var(--notice);line-height:1.5">' +
+      notes.map(function (n) { return '<div>' + escHtmlLite(n) + '</div>'; }).join('') +
+      '</div>';
+  }
+  if (over) {
+    h +=
+      '<button type="button" onclick="geodeGoPlanFromHome()" data-geode-css="display:block;margin-top:10px;padding:0;border:none;background:transparent;' +
+      'font-family:inherit;font-size:11px;font-weight:600;color:rgba(155,127,232,0.88);cursor:pointer;line-height:1.45;text-align:left;' +
+      '-webkit-tap-highlight-color:transparent">' +
+      escHtmlLite('Review this month in Plan') +
+      ' \u203a</button>';
+  }
+  if (view.incomeReceived === null && view.incomePlanned > 0) {
+    h +=
+      '<div data-geode-month-pulse-income="1" data-geode-css="margin-top:10px;font-size:10px;color:var(--tx-3);line-height:1.45">' +
+      escHtmlLite(view.incomeType === 'irregular'
+        ? 'Planned income can vary. Income received isn\u2019t tracked yet.'
+        : 'Income received isn\u2019t tracked yet.') +
+      '</div>';
+  }
+  return h + '</section>';
+}
+
+/** P3-2: Home's Month Pulse for the given clock, or '' when the Living Month model is not ready. Reads only. */
+function geodeHomeMonthPulseHtml(state, now, opts) {
+  try {
+    return geodeMonthPulseHtml(geodeMonthPulseView(geodeLivingMonthModel(state, now)), opts);
+  } catch (_eMonthPulse) {
+    return '';
+  }
+}
+
 function rHome() {
   var isNewDay = geodeIsNewDay();
   var streak = geodeUpdateOnTrackStreak(S);
@@ -38421,6 +38540,13 @@ function rHome() {
     '</div>' +
     '</details>';
   h += '</div>';
+  var _monthPulseHtml = '';
+  try {
+    _monthPulseHtml = geodeHomeMonthPulseHtml(S, new Date(), { dueShownElsewhere: geodeHomeNeedsAttentionWouldShow(S) });
+  } catch (_eMonthPulseRh) {
+    _monthPulseHtml = '';
+  }
+  h += _monthPulseHtml;
   h += geodeHomeAnticipatoryMaybeHtml(S);
   try {
     if (geodeHomeShouldShowSinceLastVisit(prevLastSeen, { recoveryActive: !!recovery })) {
@@ -38512,8 +38638,10 @@ function rHome() {
   } catch (_eIrr) {}
   // Overdue items
   // Persistent over-budget card — returning users (orchestration-gated; Stage 79B-B)
+  // P3-2: a shown Month Pulse already states the plan is over, with the same way into Plan.
   try {
     if (
+      !_monthPulseHtml &&
       geodeHomeOrchSurfaceShowResolved('overBudget', function () {
         return geodeHomePersistentOverBudgetCardVisible(S);
       })
