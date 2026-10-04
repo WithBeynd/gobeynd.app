@@ -125,15 +125,15 @@
   },
   "nudges": {
     "cash_pressure_home": {
-      "title": "Cash flow",
+      "title": "This month\u2019s plan",
       "type": "warning",
       "topic": "cash_pressure_home",
       "variants": [
-        "You\u2019re over budget this month \u2014 rebalance spending or due dates.",
-        "Cash flow is negative right now \u2014 trim or reschedule before adding new commitments.",
-        "This month is tight \u2014 stabilise cash before chasing growth moves."
+        "Your plan has more going out than coming in this month. Moving a due date or trimming a planned expense would help.",
+        "This month\u2019s plan is over. Worth easing something before you add anything new.",
+        "Your plan is stretched this month, so it\u2019s worth holding off on growth moves for now."
       ],
-      "explain": "Scheduled payments and expenses count against income, so a negative left-this-month means the plan reads strained for this month."
+      "explain": "Planned payments and expenses count against planned income, so when Monthly Left drops below zero the plan is over for this month. It doesn\u2019t show what\u2019s in your account."
     },
     "spending_update": {
       "title": "Expense plan",

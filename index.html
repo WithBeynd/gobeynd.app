@@ -14815,7 +14815,7 @@ function geodeSmartImportConfirm() {
           geodeRecordBillPaymentTransition(bpeBefore, pex, 'smart_import');
           geodeRecordContributionTransition(cevBefore, pex, 'smart_import');
           try { evaluatePaymentFollowthrough(pex); } catch (e2) {}
-          appendActivityLog('payment', am, { payKind: pk, goalId: gid, investId: invid, debtId: did, name: name });
+          appendActivityLog('payment', am, { payKind: pk, goalId: gid, investId: invid, debtId: did, name: name, completed: st === 'paid' && cevBefore.status !== 'paid' });
           geodeSmartImportRememberLearn(name, 'payment', linkRaw, '');
           mergedContrib++;
           if (pk === 'debt') linkedKinds.debt++;
@@ -14833,7 +14833,7 @@ function geodeSmartImportConfirm() {
       geodeRecordBillPaymentTransition(null, row, 'smart_import');
       geodeRecordContributionTransition(null, row, 'smart_import');
       try { evaluatePaymentFollowthrough(row); } catch (e2) {}
-      appendActivityLog('payment', am, { payKind: pk, goalId: gid, investId: invid, debtId: did, name: name });
+      appendActivityLog('payment', am, { payKind: pk, goalId: gid, investId: invid, debtId: did, name: name, completed: st === 'paid' });
       geodeSmartImportRememberLearn(name, 'payment', linkRaw, '');
       addedContrib++;
       if (pk === 'debt') linkedKinds.debt++;
@@ -15135,6 +15135,40 @@ function appendActivityLog(type, delta, extras) {
   trimActivityLogForRetention();
 }
 
+/**
+ * P3-6D: whether a 'payment' activity entry records a completion (the user marked the money as moved), not a row
+ * that was only scheduled or edited. Writers that can save a row without completing it flag the entry (`completed`).
+ * An unflagged entry (togglePay, or written before the flag existed) counts only when a completion ledger recorded
+ * the same action for the same debt, goal or investment.
+ */
+function geodeActivityPaymentCompleted(e, state) {
+  if (!e || e.type !== 'payment') return false;
+  if (e.completed === true) return true;
+  if (e.completed === false) return false;
+  var ts = Number(e.ts);
+  if (!isFinite(ts)) return false;
+  state = state || S;
+  function recordedWith(list, matches) {
+    list = Array.isArray(list) ? list : [];
+    for (var i = 0; i < list.length; i++) {
+      var ev = list[i];
+      if (!ev || ev.eventType !== 'completion' || ev.source === 'migration' || typeof ev.recordedAt !== 'number') continue;
+      if (Math.abs(ev.recordedAt - ts) <= 5000 && matches(ev)) return true;
+    }
+    return false;
+  }
+  var did = String(e.debtId || '');
+  var gid = String(e.goalId || '');
+  var iid = String(e.investId || '');
+  if (did && recordedWith(state.debtPaymentEvents, function (ev) { return String(ev.debtId || '') === did; })) return true;
+  if (!gid && !iid) return false;
+  return recordedWith(state.contributionEvents, function (ev) {
+    return gid
+      ? ev.entityType === 'goal' && String(ev.entityId || '') === gid
+      : ev.entityType === 'investment' && String(ev.entityId || '') === iid;
+  });
+}
+
 /** Keep ~75 days (behaviour layer) plus a hard cap so localStorage stays bounded. */
 function trimActivityLogForRetention() {
   if (!S.activityLog || !Array.isArray(S.activityLog)) S.activityLog = [];
@@ -15191,6 +15225,7 @@ function geodeLatestActionKind(latest) {
   if (t === 'debt') return 'debt';
   if (t === 'invest') return investActivityEntryIsBalanceOnly(latest) ? 'invest_balance' : 'invest';
   if (t === 'payment') {
+    if ((latest.debtId || latest.goalId || latest.investId) && !geodeActivityPaymentCompleted(latest)) return 'payment_scheduled';
     if (latest.debtId) return 'debt_payment';
     if (latest.goalId) return 'goal_payment';
     if (latest.investId) return 'invest_payment';
@@ -15277,7 +15312,7 @@ function geodeFilterHighlightPool(raw, latestKind, pressure) {
     if (latestKind === 'expense' && pressure !== 'ok' && tp === 'balanced_behavior') return false;
     if ((latestKind === 'debt_payment' || latestKind === 'debt') && investish && pressure !== 'ok') return false;
     if ((latestKind === 'goal' || latestKind === 'goal_payment') && investCelebrate && pressure !== 'ok') return false;
-    if (latestKind === 'payment' && investish && pressure !== 'ok') return false;
+    if ((latestKind === 'payment' || latestKind === 'payment_scheduled') && investish && pressure !== 'ok') return false;
     return true;
   });
 }
@@ -15426,16 +15461,16 @@ function geodeApplyK71ContextToHighlightCache(state) {
 function geodeSyntheticCashPressure() {
   var reps = geodeNudgeRepeatIndex('cash_pressure_home', 10);
   var msgs = geodeCopy('nudges.cash_pressure_home.variants', [
-    'You\u2019re over budget this month \u2014 rebalance spending or due dates.',
-    'Cash flow is negative right now \u2014 trim or reschedule before adding new commitments.',
-    'This month is tight \u2014 stabilise cash before chasing growth moves.'
+    'Your plan has more going out than coming in this month. Moving a due date or trimming a planned expense would help.',
+    'This month\u2019s plan is over. Worth easing something before you add anything new.',
+    'Your plan is stretched this month, so it\u2019s worth holding off on growth moves for now.'
   ]);
   return {
-    title: geodeCopy('nudges.cash_pressure_home.title', 'Cash flow'),
+    title: geodeCopy('nudges.cash_pressure_home.title', 'This month\u2019s plan'),
     message: msgs[reps % msgs.length],
     type: geodeCopy('nudges.cash_pressure_home.type', 'warning'),
     topic: geodeCopy('nudges.cash_pressure_home.topic', 'cash_pressure_home'),
-    explain: geodeCopy('nudges.cash_pressure_home.explain', 'Scheduled payments and expenses count against income, so a negative left-this-month means the plan reads strained for this month.')
+    explain: geodeCopy('nudges.cash_pressure_home.explain', 'Planned payments and expenses count against planned income, so when Monthly Left drops below zero the plan is over for this month. It doesn\u2019t show what\u2019s in your account.')
   };
 }
 
@@ -15568,6 +15603,13 @@ function hasRecentInvestmentFlowActivity(state, days) {
   return hasRecentStrongInvestActivity(state, d) || e5PaymentsLinkedSince(state, 'investId', d);
 }
 
+/** E.5 ordering only: invest flow activity, or an invest-linked payment scheduled or completed recently. */
+function hasRecentInvestmentPlannedActivity(state, days) {
+  state = state || S;
+  var d = Math.max(1, Number(days) || 14);
+  return hasRecentStrongInvestActivity(state, d) || e5PaymentsLinkedPlannedSince(state, 'investId', d);
+}
+
 function behaviourCountMeaningful(entries, kind) {
   var c = 0;
   for (var i = 0; i < entries.length; i++) {
@@ -15674,8 +15716,50 @@ function getFinancialContext(state) {
   return 'stable';
 }
 
-/** E.5: linked payment created recently or marked paid this calendar month (lightweight). */
+/**
+ * E.5 / P3-6D: a payment linked by `field` (debtId, goalId, investId) was completed recently: a completion its ledger
+ * recorded in the last `days`, or a row marked paid this calendar month. Creating or scheduling a row is not evidence
+ * that the money moved.
+ */
 function e5PaymentsLinkedSince(state, field, days) {
+  state = state || S;
+  var cut = Date.now() - Math.max(1, Number(days) || 14) * 24 * 60 * 60 * 1000;
+  var pay = state.payments || [];
+  var ym = currentYM();
+  var pi,
+    p;
+  for (pi = 0; pi < pay.length; pi++) {
+    p = pay[pi];
+    if (!p || !p[field]) continue;
+    if (p.status === 'paid' && p.lastPaidYM === ym) return true;
+  }
+  var done = [];
+  var entityType = '';
+  try {
+    if (field === 'debtId') done = geodeDebtPaymentActiveCompletions(state);
+    else if (field === 'goalId' || field === 'investId') {
+      entityType = field === 'goalId' ? 'goal' : 'investment';
+      done = geodeContributionActiveCompletions(state);
+    }
+  } catch (_eE5Done) {
+    done = [];
+  }
+  for (var di = 0; di < done.length; di++) {
+    var ev = done[di];
+    if (!ev || typeof ev.recordedAt !== 'number' || ev.recordedAt < cut) continue;
+    if (entityType && ev.entityType !== entityType) continue;
+    // A legacy seed is stamped when the upgrade ran, not when the money moved.
+    if (ev.source === 'migration') continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * E.5 ordering only: a payment linked by `field` was created recently or marked paid this calendar month. A scheduled
+ * row is a planned action, which may reorder suggestions; it is never read as money having moved.
+ */
+function e5PaymentsLinkedPlannedSince(state, field, days) {
   state = state || S;
   var cut = Date.now() - Math.max(1, Number(days) || 14) * 24 * 60 * 60 * 1000;
   var pay = state.payments || [];
@@ -15698,10 +15782,10 @@ function e5PaymentsLinkedSince(state, field, days) {
 function getPriorityRebalanceContext(state) {
   state = state || S;
   var recentDebtAction =
-    hasRecentActivity(state, 'debt', 14) || e5PaymentsLinkedSince(state, 'debtId', 14);
+    hasRecentActivity(state, 'debt', 14) || e5PaymentsLinkedPlannedSince(state, 'debtId', 14);
   var recentGoalAction =
-    hasRecentActivity(state, 'goal', 14) || e5PaymentsLinkedSince(state, 'goalId', 14);
-  var recentInvestmentAction = hasRecentInvestmentFlowActivity(state, 14);
+    hasRecentActivity(state, 'goal', 14) || e5PaymentsLinkedPlannedSince(state, 'goalId', 14);
+  var recentInvestmentAction = hasRecentInvestmentPlannedActivity(state, 14);
   var recentInvestmentBalanceBump = hasRecentInvestBalanceOnlyBump(state, 14);
   var goals = state.goals || [];
   var bufferStarted = false;
@@ -16999,8 +17083,6 @@ function geodeFinancialMemoryProfile(state) {
     hasBreathingRoomPressure: false,
     hasProtectedSpendingPressure: false,
     isGenerallyConsistent: false,
-    hasRecentSlowOrUnsurePattern: false,
-    hasRecentMovedPattern: false,
     hasContributionReliability: false,
     hasDebtMinimumReliability: false,
     hasExtraDebtConsistency: false,
@@ -17182,6 +17264,8 @@ function geodeFinancialMemoryProfile(state) {
     }
   } catch (_eMemConsistent) {}
 
+  // Feeling chips are what the user said about today, not financial behaviour: counted for reference only, never a
+  // memory pattern or evidence. The session feeling already shapes today's guidance through the context posture.
   try {
     var ev = Array.isArray(state.behaviourEvents) ? state.behaviourEvents : [];
     var ym = geodeCurrentYm();
@@ -17190,16 +17274,6 @@ function geodeFinancialMemoryProfile(state) {
       if (!be || be.ym !== ym) continue;
       if (be.kind === 'feeling_slow' || be.kind === 'feeling_unsure') out.evidence.slowOrUnsureEvents++;
       if (be.kind === 'feeling_moved') out.evidence.movedEvents++;
-    }
-    if (out.evidence.slowOrUnsureEvents >= 2) {
-      out.hasRecentSlowOrUnsurePattern = true;
-      mark();
-      mark();
-    }
-    if (out.evidence.movedEvents >= 2) {
-      out.hasRecentMovedPattern = true;
-      mark();
-      mark();
     }
   } catch (_eMemFeel) {}
 
@@ -17217,7 +17291,7 @@ function geodeFinancialMemoryProfile(state) {
       var le = log[li];
       if (!le || typeof le.ts !== 'number' || le.ts < cut) continue;
       if (le.type === 'goal' || le.type === 'invest') out.evidence.contributionSignals++;
-      if (le.type === 'payment' && contributionPayment(le)) out.evidence.contributionSignals++;
+      if (le.type === 'payment' && contributionPayment(le) && geodeActivityPaymentCompleted(le, state)) out.evidence.contributionSignals++;
     }
     if (out.evidence.contributionSignals >= 3) {
       out.hasContributionReliability = true;
@@ -17344,8 +17418,6 @@ function geodeFinancialMemoryPlanModifiers(state, affordability, posture) {
     profile.hasRepeatedTightMonths ||
     profile.hasBreathingRoomPressure ||
     profile.hasProtectedSpendingPressure ||
-    profile.hasRecentSlowOrUnsurePattern ||
-    profile.hasRecentMovedPattern ||
     profile.hasLapsedUsePattern;
   var canAffectAmounts =
     profile.confidence === 'high' || (profile.confidence === 'medium' && (hasCurrentPressure || hasMemoryPressure));
@@ -17354,8 +17426,6 @@ function geodeFinancialMemoryPlanModifiers(state, affordability, posture) {
   if (profile.hasRepeatedTightMonths) pushReason('memory_repeated_tight_months');
   if (profile.hasBreathingRoomPressure) pushReason('memory_breathing_room_pressure');
   if (profile.hasProtectedSpendingPressure) pushReason('memory_protected_spending_pressure');
-  if (profile.hasRecentSlowOrUnsurePattern) pushReason('memory_slow_or_unsure_pattern');
-  if (profile.hasRecentMovedPattern) pushReason('memory_moved_pattern');
   if (profile.hasLapsedUsePattern) pushReason('memory_lapsed_use');
   if (profile.hasContributionReliability || profile.isGenerallyConsistent) pushReason('memory_consistency');
   if (profile.hasDebtMinimumReliability) pushReason('memory_debt_minimum_reliability');
@@ -17370,7 +17440,6 @@ function geodeFinancialMemoryPlanModifiers(state, affordability, posture) {
       profile.hasRepeatedTightMonths ||
       profile.hasBreathingRoomPressure ||
       profile.hasProtectedSpendingPressure ||
-      profile.hasRecentSlowOrUnsurePattern ||
       profile.hasLapsedUsePattern
         ? 0.55
         : 0.75;
@@ -17382,7 +17451,7 @@ function geodeFinancialMemoryPlanModifiers(state, affordability, posture) {
     out.goalRecoveryMultiplier = Math.max(out.goalRecoveryMultiplier, 0.85);
     out.investmentMultiplier = Math.max(out.investmentMultiplier, 0.65);
   }
-  if (profile.hasExtraDebtConsistency && !profile.hasRepeatedTightMonths && !profile.hasBreathingRoomPressure && !profile.hasProtectedSpendingPressure && !profile.hasRecentSlowOrUnsurePattern && !profile.hasLapsedUsePattern) {
+  if (profile.hasExtraDebtConsistency && !profile.hasRepeatedTightMonths && !profile.hasBreathingRoomPressure && !profile.hasProtectedSpendingPressure && !profile.hasLapsedUsePattern) {
     out.debtExtraMultiplier = 1;
   }
   return out;
@@ -18004,7 +18073,7 @@ function geodeChooseHomePrimary(pool, latest, latestKind, pressure) {
             'Because income sets the ceiling for monthly flow, updates help Beynd reflect what you can work with when money is coming in again.'
         };
       }
-      if (latestKind === 'payment') {
+      if (latestKind === 'payment' || latestKind === 'payment_scheduled') {
         var pNi = geodePickHighlightByTopics(pool, ['debt', 'debt_momentum', 'priority_goal', 'safety', 'tight_month']);
         if (pNi) return geodeCloneHighlight(pNi);
       }
@@ -18074,7 +18143,7 @@ function geodeChooseHomePrimary(pool, latest, latestKind, pressure) {
       if (soft) return geodeCloneHighlight(soft);
     }
     if (latestKind === 'income') return geodeSyntheticIncome();
-    if (latestKind === 'payment') {
+    if (latestKind === 'payment' || latestKind === 'payment_scheduled') {
       var p = geodePickHighlightByTopics(pool, ['debt', 'debt_momentum', 'priority_goal', 'invest_gap', 'growth_alignment']);
       if (p) return geodeCloneHighlight(p);
     }
@@ -18092,7 +18161,8 @@ function geodeChooseHomePrimary(pool, latest, latestKind, pressure) {
   var _stalePick = geodePickHighlightByTopics(pool, ['stale_contribution']);
   if (_stalePick) return geodeCloneHighlight(_stalePick);
   if (pool.length) return geodeCloneHighlight(pool[0]);
-  return geodeSyntheticCashPressure();
+  // Only a plan over for the month (pressure 'strong', handled above) supports the plan-pressure card.
+  return null;
 }
 
 function geodeHomeNudgeMessage(src, latestKind, pressure, opts) {
@@ -19224,6 +19294,7 @@ function geodeOrchestrationSnapshotV2(state, opts) {
         if (day) days[day] = true;
       }
       if (e.ts < followCutoff || delta <= 0) continue;
+      if (type === 'payment' && !geodeActivityPaymentCompleted(e, st0)) continue;
       if (type === 'goal' || (type === 'payment' && payKind === 'goal')) flags.goalActions++;
       if (type === 'payment' && (payKind === 'goal' || payKind === 'debt' || payKind === 'invest')) {
         flags.contributionActions++;
@@ -21315,6 +21386,7 @@ function geodeHumanMomentConsistencyFlags(state) {
         if (day) days[day] = true;
       }
       if (e.ts < followCutoff || delta <= 0) continue;
+      if (type === 'payment' && !geodeActivityPaymentCompleted(e, state)) continue;
       if (type === 'goal' || (type === 'payment' && payKind === 'goal')) flags.goalActions++;
       if (
         type === 'payment' &&
@@ -28647,6 +28719,8 @@ function geodeHomeMainActionHtml(_geodeHomeSubRenewCardVisible) {
             _actFamily = 'goal';
           } else if (_lk === 'invest' || _lk === 'invest_payment' || _lk === 'invest_balance') {
             _actFamily = 'invest';
+          } else if (_lk === 'payment_scheduled') {
+            _actFamily = _latestAct.debtId ? 'debt' : _latestAct.goalId ? 'goal' : 'invest';
           } else if (_lk === 'payment') {
             var _pn = String(_latestAct.name || '').toLowerCase();
             if (_pn.indexOf('buffer') >= 0 || geodePaymentNameLooksLikeBuffer(_latestAct.name)) {
@@ -30357,7 +30431,10 @@ function geodeRealityHumanMomentToneFromPosture(postureObj) {
 function geodeRealitySelfReportToast(kind) {
   try {
     if (!geodeSetRealityFeelingFromChip(kind)) return;
-    var m = 'Noted for today. Your plan has not changed.';
+    var m =
+      kind === 'on_track'
+        ? 'Noted for today. Your plan stays as it is.'
+        : 'Noted for today. Your plan stays as it is, but Beynd may go a bit easier on the next step.';
     toast(m, 'ok', 2600);
     if (typeof tab !== 'undefined' && tab === 'money' && msub === 'reality') {
       var c = document.getElementById('content');
@@ -30613,7 +30690,7 @@ function geodeRealityPageHtml() {
     '</div>';
   h +=
     '<div data-geode-css="font-size:10px;color:rgba(189,183,220,0.52);line-height:1.45;margin-bottom:10px">' +
-    escHtmlLite('Shapes today\u2019s interpretation only. Your plan stays the same.') +
+    escHtmlLite('Your plan stays as it is. This just helps Beynd judge how gently to suggest the next step.') +
     '</div>';
   var _rf = geodeGetRealityFeeling();
   function _rfChipStyle(active) {
@@ -36469,7 +36546,7 @@ function geodeHomeAnticipatoryLine(state) {
       if (allowsPlan) {
         return 'Your plan is under pressure this month. A quick review can help you choose the next steady move.';
       }
-      return 'Spending looks tight this month. A quick look at what you entered may help.';
+      return 'What you\u2019ve entered adds up to more than your income this month. A quick look may help.';
     }
   } catch (_eAaaLeft) {}
   try {
@@ -39873,11 +39950,11 @@ function geodeQuickSetupFinish() {
   }
   if (debtId && debtMin != null && debtMin > 0) {
     upsertForYm('debt', debtId, 'Toward Total debt', debtMin);
-    appendActivityLog('payment', debtMin, { payKind: 'debt', goalId: '', investId: '', debtId: debtId, name: 'Toward Total debt' });
+    appendActivityLog('payment', debtMin, { payKind: 'debt', goalId: '', investId: '', debtId: debtId, name: 'Toward Total debt', completed: false });
   }
   if (goalId && gm != null && gm > 0) {
     upsertForYm('goal', goalId, 'Toward ' + gn, gm);
-    appendActivityLog('payment', gm, { payKind: 'goal', goalId: goalId, investId: '', debtId: '', name: 'Toward ' + gn });
+    appendActivityLog('payment', gm, { payKind: 'goal', goalId: goalId, investId: '', debtId: '', name: 'Toward ' + gn, completed: false });
   }
 
   S.hasOnboarded = true;
@@ -41004,7 +41081,8 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     debtId: debtid,
     name: nm,
     plan: _spMk,
-    aligned: (_spMk !== '' && _spMk !== 'none' && payKind === _spMk)
+    aligned: (_spMk !== '' && _spMk !== 'none' && payKind === _spMk),
+    completed: st === 'paid' && !(savedPayBefore && savedPayBefore.status === 'paid')
   });
   geodeRememberLastPaymentDraft(nm, am);
   var linkedSave = !!(debtid || gid || invid);
