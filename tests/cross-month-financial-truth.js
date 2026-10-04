@@ -116,6 +116,9 @@ const PRODUCTION_FUNCTIONS = [
   'geodeBoundaryHoldMessage', 'geodeInvestmentTransitionOutstanding', 'geodeRecurrenceWouldMutateBoundary',
   'geodeBoundaryEvidenceLocked', 'geodeShowBoundaryHoldNotice', 'geodeNoteBoundaryHold', 'geodeClearBoundaryHold',
   'geodeRefuseBoundaryEvidenceEdit',
+  // pre-mutation boundary (P2-8): admission, then the boundary, before an action's first change; no sync until its write
+  'geodePrepareFinancialMutation', 'geodeEndFinancialAction', 'geodePaymentCompletionMark', 'geodeBoundaryChangedRow',
+  'geodeRefuseBoundaryChangedRow', 'calcLeftover', 'delExp', 'setPrimaryGoal',
   // carry lifecycle and contribution input integrity (FA-3C-B): payment actions resolve the carry a row still holds
   'geodeContributionCarryFor', 'geodeContributionCarryForRow', 'geodeResolveContributionCarry', 'geodeContributionCarryFollowRow',
   'geodeContributionSaveRefusal',
@@ -131,7 +134,8 @@ const PRODUCTION_FUNCTIONS = [
 /** Production top-level constants the extracted base functions read. */
 const BASE_CONSTANTS = ['GEODE_SCHEMA_VERSION', 'BEYND_RUNTIME_VERSION', '_geodeRuntimeStale', '_geodeFinancialKeySeen',
   '_geodeKnownRaw', '_geodeKnownRev', '_geodeRevN', '_geodeBoundaryHoldAttempts', '_geodeBoundaryHoldNotice',
-  '_geodeBoundaryHoldReady', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
+  '_geodeBoundaryHoldReady', '_geodeFinancialActionOpen', '_geodeFinancialActionSeq', '_geodeBoundaryChangedRows',
+  'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
 
 /**
  * Read-only structural checks: the reload and render shims below must mirror these production bodies, and the
@@ -174,6 +178,7 @@ var __store = null;
 /** Production save() minus its snapshot/archive side effects: the same release guard, then the whole state to the store. */
 function save() {
   if (!geodeFinancialWriteAllowed()) return;
+  geodeEndFinancialAction();
   var __prepared = geodeFinancialJsonToStore();
   if (!__prepared) return;
   var __json = __prepared.json;
@@ -243,8 +248,19 @@ var __toasts = [];
 function toast(m) { __toasts.push(String(m)); } function geodeSuccessToast() {} function geodeStageLToastAfterSave(m) { return m; }
 function geodeEmitPaymentCompletionFeedback() {} function geodeMarkRecentUserSave() {} function geodeSubOnSave() {}
 function setLastSnapshotBeforeChange() {} function geodeInvalidateDecisionCaches() {}
-function evaluatePaymentFollowthrough() {} function geodeHomeMainActionInsightKind() { return ''; }
-function geodeRememberLastPaymentDraft() {} function geodeReconcileFrozenSuggestedActionsAfterLinkedSave() {}
+function evaluatePaymentFollowthrough() {} function geodeRememberLastPaymentDraft() {}
+/**
+ * P2-8 fidelity: payment actions reach these before their write, and in production each begins with getMonthPlan(),
+ * whose first statement is calcLeftover() → syncRecurringPayments(). Only that side effect is kept; plan sizing and the
+ * insight kind are not under test (production skips getMonthPlan without income or expenses — reaching it always is the
+ * stricter case).
+ */
+function getMonthPlan() { calcLeftover(); return { steps: [] }; }
+function geodeHomeMainActionInsightKind() { getMonthPlan(); return ''; }
+function geodeReconcileFrozenSuggestedActionsAfterLinkedSave() { getMonthPlan(); }
+/** The payment modal is UI: record what it was opened with (P2-8 reopens an edit form whose row the boundary reset). */
+var __opened = null;
+function openPayModal(id, prefill) { __opened = { id: id || null, prefill: prefill ? JSON.parse(JSON.stringify(prefill)) : null }; }
 function geodeEnsureEmergencyBufferGoalForPayment() { return { applied: false }; }
 function geodeNormalizeGoalTargetDateInput() { return null; }
 function geodeConfirm(msg, onYes) { onYes(); }
@@ -255,6 +271,7 @@ function geodePlanReadinessState() { return 'active'; }
 function __reload() {
   _geodeRuntimeStale = ''; _geodeFinancialKeySeen = false; __staleGate = ''; // a reload is a new page
   _geodeBoundaryHoldAttempts = 0; _geodeBoundaryHoldNotice = false; _geodeBoundaryHoldReady = false;
+  _geodeFinancialActionOpen = 0; _geodeBoundaryChangedRows = null;
   geodeNoteFinancialBoot(__store);
   S = JSON.parse(__store);
   S._schemaVersion = geodePersistedSchemaVersion(S._schemaVersion);
@@ -379,9 +396,9 @@ const PLAN_CONSTANTS = ['_FOLLOWTHROUGH_MS_2D', '_FOLLOWTHROUGH_MS_3D', 'SUGGEST
 /** Plan-program environment: UI entry points and plan sizing, which these scenarios do not test. */
 const PLAN_SHIMS = String.raw`
 var msub = '';
-/** getMonthPlan sizing is not under test: each scenario fixes the month's plan steps. */
+/** getMonthPlan sizing is not under test: each scenario fixes the month's plan steps. Its first statement, calcLeftover(), is kept (P2-8). */
 var __plan = { steps: [] };
-function getMonthPlan() { return __plan; }
+function getMonthPlan() { calcLeftover(); return __plan; }
 /** The payment modal is UI: record what it was opened with; App.saveModal performs its save. */
 var __opened = null;
 function openPayModal(id, prefill) { __opened = { id: id || null, prefill: prefill ? JSON.parse(JSON.stringify(prefill)) : null }; }
@@ -605,8 +622,13 @@ class App {
     const gid = o.goalId || '', invid = o.investId || '', debtid = o.debtId || '';
     const kind = gid ? 'goal' : invid ? 'invest' : debtid ? 'debt' : 'bill';
     this.run('window._geodePayLinkedIntent = ' + JSON.stringify(o.intent || (o.id ? 'replace' : 'new')) + ';');
-    this.call('geodeSavePayApply', [o.id || null, o.name || 'Contribution', String(o.amount), o.date, o.status, o.rec || 'no',
+    // As savePay: the commit (P2-8: admission and the month boundary) before the first change — its legacy same-month
+    // merge included (o.merge) — then the save; released when refused.
+    if (!this.run('geodeModalCommitBegin()')) return null;
+    if (o.merge) this.merge();
+    const applied = this.call('geodeSavePayApply', [o.id || null, o.name || 'Contribution', String(o.amount), o.date, o.status, o.rec || 'no',
       o.date, gid, invid, debtid, kind, Number(o.amount)]);
+    if (!applied) this.run('geodeModalCommitRelease()');
     const added = this.state().payments.filter(p => !before.has(p.id));
     return added.length ? added[0].id : null;
   }
@@ -662,8 +684,7 @@ class App {
     const f = opened.prefill;
     const intent = f._geodePayIntent ? this.call('geodeNormalizePayLinkedIntent', [f._geodePayIntent]) : 'new';
     this.run('window._geodePayPrefillBufferContribution = ' + JSON.stringify(f.bufferContribution === true) + ';');
-    this.merge();
-    this.contribute({ id: null, intent, name: f.name, amount: amount != null ? amount : f.amount, date: f.date,
+    this.contribute({ id: null, intent, merge: true, name: f.name, amount: amount != null ? amount : f.amount, date: f.date,
       status: f.status, rec: f.rec ? 'yes' : 'no', goalId: f.goalId, investId: f.investId, debtId: f.debtId });
     return intent;
   }
@@ -689,8 +710,7 @@ class App {
     const rec = f.rec === 'yes' || f.rec === 'annual' ? f.rec : 'no';
     const gid = f.goalId || '', invid = gid ? '' : f.investId || '', debtid = gid || invid ? '' : f.debtId || '';
     this.run('window._geodePayPrefillBufferContribution = false;');
-    this.merge();
-    this.contribute({ id, intent: 'replace', name: f.name, amount: f.amount, date: f.date, status: f.status, rec, goalId: gid, investId: invid, debtId: debtid });
+    this.contribute({ id, intent: 'replace', merge: true, name: f.name, amount: f.amount, date: f.date, status: f.status, rec, goalId: gid, investId: invid, debtId: debtid });
   }
   /** rPayments and savePay run the legacy same-month merge before showing or saving payments. */
   merge() { return this.call('geodeMergeDuplicateLinkedContributionsSameMonth'); }
@@ -731,8 +751,12 @@ class App {
   }
   countedCheck(goalId) { return JSON.parse(this.run('__countedCheck(' + JSON.stringify(goalId) + ')')); }
   deposit(goalId, amount) { this.run('__fields = ' + JSON.stringify({ ['di-' + goalId]: String(amount) }) + ';'); this.call('doDep', [goalId]); }
+  /** As geodeConfirmSavingsRelease: the commit (P2-8: admission and the month boundary), the release, released when refused. */
   release(goalId, amount) {
-    return JSON.parse(this.run('JSON.stringify(geodeApplySavingsRelease(' + JSON.stringify({ sourceType: 'goal', sourceId: goalId, amount, reason: 'emergency' }) + '))'));
+    if (!this.run('geodeModalCommitBegin()')) return { ok: false, refused: 'commit' };
+    const r = JSON.parse(this.run('JSON.stringify(geodeApplySavingsRelease(' + JSON.stringify({ sourceType: 'goal', sourceId: goalId, amount, reason: 'emergency' }) + '))'));
+    if (!r.ok) this.run('geodeModalCommitRelease()');
+    return r;
   }
   quickSetup(data) { this.run('window._geodeQS = ' + JSON.stringify({ quickSetupData: data }) + '; geodeQsDone();'); }
   /** Contribution ledger as stored, and the active completions its rules derive. */
@@ -5101,8 +5125,8 @@ function releaseSafetyWrites() {
     invariant('REL.write.unreadable', 'Unreadable stored data keeps the behaviour from before the guard: the save writes this page\'s schema 3 state over it',
       atWrite('unreadable', () => '{bad'), ['unreadable', ['', ''], 'wrote mine', []]);
     const lww = atWrite('same schema', r => JSON.stringify(Object.assign(JSON.parse(r), { income: 4000 })));
-    invariant('REL.write.same-schema', 'A same-schema change that keeps this page\'s revision id is an unfenced write (P2-1 compatibility): it is logged and this page\'s save still replaces it. A newer fenced revision is refused separately (P2-1)',
-      lww, ['same schema', ['', ''], 'wrote mine', ['? [geode] unfenced financial write observed; this write proceeds']]);
+    invariant('REL.write.same-schema', 'A same-schema change that keeps this page\'s revision id is an unfenced write (P2-1 compatibility): it is logged — at the action\'s admission (P2-8) and again at its save — and this page\'s save still replaces it. A newer fenced revision is refused separately (P2-1)',
+      lww, ['same schema', ['', ''], 'wrote mine', ['? [geode] unfenced financial write observed; this write proceeds', '? [geode] unfenced financial write observed; this write proceeds']]);
 
     const sticky = schema2App();
     const mine = rawStore(sticky);
@@ -7108,16 +7132,17 @@ function p2Expectations() {
     app.advance('2026-10-02', mode);
     const range = app.state().expectationGaps;
     const before = app.state().billPaymentEvents.length;
-    app.modalEdit(ids.bill, { date: '2026-08-15' });
-    app.toggle(ids.bill);
-    invariant('P2.exp.range', 'July–September recorded as one range; confirming the August occurrence later through the existing edit and complete path reads July expected, August confirmed, September expected — the range record is unchanged and the ledger gains only that completion',
+    // P2-8: production's late-settlement path is one form save (August date, Completed). Saving the date alone, then
+    // tapping complete, never reached August there: the save's render() rolls the row back to October first.
+    app.modalEdit(ids.bill, { date: '2026-08-15', status: 'paid' });
+    invariant('P2.exp.range', 'July–September recorded as one range; confirming the August occurrence later through the payment form (August date, Completed) reads July expected, August confirmed, September expected — the range record is unchanged and the ledger gains only that completion',
       [gaps(app, ids), status(app, ids.bill, ['2026-07', '2026-08', '2026-09']), same(app.state().expectationGaps, range), app.state().billPaymentEvents.length - before],
       [[['bill', 'bill', '2026-07', '2026-09', 80]], [E, C, E], true, 1]);
     const occurrences = JSON.parse(app.run('JSON.stringify(geodeExpectationOccurrences(S).map(function (o) { return [o.periodYm, o.status]; }))'));
     invariant('P2.exp.range.read', 'The read model lists each recorded period with its current outcome', occurrences, [['2026-07', E], ['2026-08', C], ['2026-09', E]]);
     app.advance('2026-11-02', mode);
-    invariant('P2.exp.range.next', 'At the November boundary September is already recorded and October (no outcome) is added as its own record', gaps(app, ids),
-      [['bill', 'bill', '2026-07', '2026-09', 80], ['bill', 'bill', '2026-10', '2026-10', 80]]);
+    invariant('P2.exp.range.next', 'At the November boundary September is already recorded and nothing is claimed for October: a form completion keeps no settled due date (lastPaidDueDate), so the row\'s only evidence is its paid month, October, and October reads unknown — never expected or confirmed',
+      [gaps(app, ids), status(app, ids.bill, ['2026-10'])], [[['bill', 'bill', '2026-07', '2026-09', 80]], [U]]);
 
     const cs = world('2026-06-01', ['bill']);
     confirmAll(cs.app, cs.ids, '2026-06-15');
@@ -7235,8 +7260,8 @@ function p2Continuity() {
   const ymAdd = (ym, n) => { const t = Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1 + n; return Math.floor(t / 12) + '-' + String(t % 12 + 1).padStart(2, '0'); };
   const addRow = (app, d, date, amount, rec) => app.contribute(Object.assign({ name: d + ' monthly', amount: amount || AMOUNT[d], date, status: 'upcoming', rec: rec || 'yes' }, LINK[d]));
   /** A page first opened on clock (default 1 June: schema-3 floor June) with one monthly row per domain due on the 15th: Holiday £1,000, ISA £5,000, Card £4,000. */
-  const world = (clock, domains, date, extra) => {
-    const app = new App(baseState(Object.assign({ debts: [CARD()] }, extra || {})), clock || '2026-06-01');
+  const world = (clock, domains, date, extra, program) => {
+    const app = new App(baseState(Object.assign({ debts: [CARD()] }, extra || {})), clock || '2026-06-01', program);
     const ids = {};
     (domains || DOMAINS).forEach(d => { ids[d] = addRow(app, d, date || '2026-06-15'); });
     return { app, ids };
@@ -7766,8 +7791,16 @@ function p2Continuity() {
     lw.app.at('2026-08-03');
     lw.app.release('gH', 50);
     lw.app.render();
-    current('P2.limit.first-write', 'A page left open from June whose first act after the month turns is a write (here a £50 release) before any render: that write moves the seen month to August, so the boundary that follows records nothing for July — July reads unknown (never fabricated, never "missed"). A render, checkAlerts or calcLeftover first records July (P2.longlived); so does any fresh load',
-      [gaps(lw.app, lw.ids), classify(lw.app, lw.ids, ['2026-07'])], [[], every(lw.ids, [U])]);
+    invariant('P2.limit.first-write', 'P2-8 (was a known limitation): a page left open from June whose first act after the month turns is a financial write (here a £50 release) before any render processes the boundary first — July is recorded from the evidence as it stood (expected, no recorded outcome) and the release lands after it, as a render, checkAlerts, calcLeftover or fresh load first would (P2.longlived)',
+      [gaps(lw.app, lw.ids), classify(lw.app, lw.ids, ['2026-07'])],
+      [[['bill', '2026-07', '2026-07', 80], ['debt', '2026-07', '2026-07', 50], ['goal', '2026-07', '2026-07', 100], ['investment', '2026-07', '2026-07', 200]], every(lw.ids, [E])]);
+    const pw = world();
+    confirmAll(pw.app, pw.ids, '2026-06-15');
+    pw.app.at('2026-08-03');
+    pw.app.run("setPrimaryGoal('gH');");
+    pw.app.render();
+    current('P2.limit.first-preference-write', 'Narrower residual after P2-8: a first act that stores no payment, completion or valuation (here choosing the primary goal) is not a financial mutation and does not process the boundary; its save moves the seen month to August, so July reads unknown — never fabricated, never "missed"',
+      [gaps(pw.app, pw.ids), classify(pw.app, pw.ids, ['2026-07'])], [[], every(pw.ids, [U])]);
 
     const paidRow = lastPaidYM => {
       const app = new App(baseState({ investments: [], _schemaVersion: 3, expectationGaps: [], expectationFloorYm: '2026-06', contributionEvents: [], contributionCarry: [], billPaymentEvents: [],
@@ -7847,11 +7880,12 @@ function p2Continuity() {
     const record = JSON.stringify(app.state().expectationGaps);
     const read = () => status(app, ids.bill, ['2026-07', '2026-08', '2026-09', '2026-10']);
     const steps = [['recorded', read()]];
-    app.modalEdit(ids.bill, { date: '2026-08-15' }); app.toggle(ids.bill); settle(app, mode);
+    // P2-8: late settlement as production offers it — one form save with the August date and Completed (P2.exp.range).
+    app.modalEdit(ids.bill, { date: '2026-08-15', status: 'paid' }); settle(app, mode);
     steps.push(['August settled', read()]);
     app.toggle(ids.bill); settle(app, mode);
     steps.push(['August reversed', read()]);
-    app.modalEdit(ids.bill, { date: '2026-08-15' }); app.toggle(ids.bill); settle(app, mode);
+    app.modalEdit(ids.bill, { date: '2026-08-15', status: 'paid' }); settle(app, mode);
     steps.push(['August re-completed', read()]);
     app.del(ids.bill); settle(app, mode);
     steps.push(['template deleted in October', read()]);
@@ -7862,12 +7896,287 @@ function p2Continuity() {
     const fromBackup = JSON.parse(app.run(`(function () { var d = JSON.parse(__backupJson); geodeNormalizeExpectationGaps(d); var once = JSON.stringify(d.expectationGaps); geodeNormalizeExpectationGaps(d);
       return JSON.stringify([once === JSON.stringify(d.expectationGaps), ['2026-07', '2026-08', '2026-09', '2026-10'].map(function (m) { return geodeExpectationOccurrenceStatus(d, ${JSON.stringify(ids.bill)}, m); })]); })()`));
     app.advance('2026-11-03', mode);
-    invariant('P2.range.torture', 'Rent: June confirmed, away until October → one July–September record. The settlement overlay alone decides each month: August settled (late, through the existing edit and complete path) → [expected, confirmed, expected]; reversed → all expected; completed again → confirmed again; template deleted in October → August stays confirmed (its evidence survives), October unknown; reload and the backup data (normalised twice, idempotent) read the same; the record is byte-identical throughout and never split; November records nothing for a deleted template',
+    invariant('P2.range.torture', 'Rent: June confirmed, away until October → one July–September record. The settlement overlay alone decides each month: August settled (late, through the payment form saved with the August date as Completed) → [expected, confirmed, expected]; reversed → all expected; completed again → confirmed again; template deleted in October → August stays confirmed (its evidence survives), October unknown; reload and the backup data (normalised twice, idempotent) read the same; the record is byte-identical throughout and never split; November records nothing for a deleted template',
       [steps, JSON.stringify(app.state().expectationGaps) === record, JSON.stringify(envelope.data.expectationGaps) === record, fromBackup, gaps(app, ids), app.state().billPaymentEvents.map(e => [e.eventType, e.occurrenceYm])],
       [[['recorded', [E, E, E, U]], ['August settled', [E, C, E, U]], ['August reversed', [E, E, E, U]], ['August re-completed', [E, C, E, U]], ['template deleted in October', [E, C, E, U]], ['reload', [E, C, E, U]]],
         true, true, [true, [E, C, E, U]], [['bill', '2026-07', '2026-09', 80]],
         [['completion', '2026-06'], ['completion', '2026-08'], ['reversal', '2026-08'], ['completion', '2026-08']]]);
   }));
+
+  // ── U. P2-8 PRE-MUTATION BOUNDARY ──
+  // A page last written in June and left open with no render since: its first act after the month turns changes money.
+  // geodePrepareFinancialMutation: write admission, then the boundary from the evidence as it stood, then the change and its one save.
+  const NEW8 = { goal: 300, investment: 500, debt: 150, bill: 500 };
+  const MOVED = 'This item moved into a new month before your change was saved. Check it and try again.';
+  /** Expectation records as [template name, amount]: the intent each one keeps. */
+  const intents = app => (app.state().expectationGaps || []).map(g => [g.templateNameSnapshot, g.expectedAmount]);
+  const rowOf = (app, id) => { const p = app.state().payments.filter(x => x.id === id)[0]; return p ? [p.name, toNumber(p.amount), p.date, p.status] : null; };
+  /** The payment form opened on a row as production fills it, these fields changed, saved through production savePay; returns its toasts. */
+  const formSave = (app, id, changes) => {
+    p1Open(app, p1PayForm(Object.assign(app.modalForm(id), changes || {})), 'replace');
+    app.run('savePay(' + JSON.stringify(id) + '); __runTimers();');
+    return p1Toasts(app);
+  };
+  /** world() in the program that holds production savePay; June confirmed (unless confirm === false); then the clock moves to iso with no render. */
+  const away = (iso, domains, confirm) => {
+    const w = world('2026-06-01', domains, undefined, undefined, PROGRAM.commit);
+    confirmAll(w.app, confirm === false ? {} : w.ids, '2026-06-15');
+    w.app.at(iso);
+    return w;
+  };
+  /** Every text save() stores from now on. */
+  const watchSaves = app => app.run('var __saves = []; save = (function (inner) { return function () { var b = __store; inner(); if (__store !== b) __saves.push(__store); }; })(save);');
+  const takeSaves = app => JSON.parse(app.run('JSON.stringify(__saves.splice(0))'));
+  /** In a stored text, the row's completion and its own settlement ledger agree for the occurrence the row holds. */
+  const coherent = (app, text, id) => app.run(`(function (d) {
+    var p = (d.payments || []).filter(function (x) { return x.id === ${JSON.stringify(id)}; })[0];
+    if (!p) return 'no row';
+    var paid = p.status === 'paid', ym = paid ? geodeBillPaidOccurrenceYm(p) : geodeBillDueYm(p.date);
+    return paid === geodeExpectationSettled(geodeExpectationSettlementIndex(d), geodeExpectationDomain(p), String(p.id), ym);
+  })(JSON.parse(${JSON.stringify(text)}))`);
+  /** Settlement and position evidence a boundary never writes: ledgers, releases, valuations, debt balances. */
+  const evidence = d => JSON.stringify([d.contributionEvents, d.debtPaymentEvents, d.billPaymentEvents, d.savingsReleases, (d.investments || []).map(i => i.valuations), (d.debts || []).map(x => x.balance)]);
+  /** Pre-P2-8 behaviour: admission only — no boundary first, no action window. */
+  const bypass = app => app.run('geodePrepareFinancialMutation = function () { geodeEndFinancialAction(); return geodeFinancialWriteAllowed(); };');
+
+  scenario('P2-8 EDIT FIRST — a long-lived page\'s first act after 2, 12 and 18 months edits Rent £80 → Rent NEW £500', () => {
+    [['2026-08-03', 2], ['2027-06-03', 12], ['2027-12-03', 18]].forEach(([iso, n]) => {
+      const { app, ids } = away(iso, ['bill']);
+      const now = iso.slice(0, 7), last = ymAdd(now, -1);
+      const refused = formSave(app, ids.bill, { name: 'Rent NEW', amount: '500' });
+      const atRefusal = [gaps(app, ids), intents(app), rowOf(app, ids.bill), JSON.parse(app.run('JSON.stringify(__opened)')), same(stored(app).expectationGaps, app.state().expectationGaps)];
+      formSave(app, ids.bill, { name: 'Rent NEW', amount: '500' });
+      const record = JSON.stringify(app.state().expectationGaps);
+      app.render(); app.reload();
+      invariant('P2.first.edit.' + n, 'Rent £80 confirmed in June; the page is left open ' + n + ' months and its first act is the Rent form (still showing June completed) saved as Rent NEW £500. The boundary runs first, from the evidence as it stood: one ' +
+        '2026-07…' + last + ' record at £80 under "bill monthly", stored before the edit. The form described a completion the boundary has just reset, so it is refused and opens again on the row as it now is; saved again, Rent NEW £500 applies to ' + now + ' only. After render and reload the record is byte-identical and no past month reads £500',
+        [refused, atRefusal, gaps(app, ids), intents(app), rowOf(app, ids.bill), status(app, ids.bill, ['2026-06', '2026-07', last, now]), JSON.stringify(app.state().expectationGaps) === record],
+        [[MOVED], [[['bill', '2026-07', last, 80]], [['bill monthly', 80]], ['bill monthly', 80, now + '-15', 'upcoming'], { id: ids.bill, prefill: null }, true],
+          [['bill', '2026-07', last, 80]], [['bill monthly', 80]], ['Rent NEW', 500, now + '-15', 'upcoming'], [C, E, E, U], true]);
+    });
+
+    const open = away('2027-06-03', ['bill'], false);
+    const firstTry = formSave(open.app, open.ids.bill, { name: 'Rent NEW', amount: '500' });
+    const saved = [gaps(open.app, open.ids), intents(open.app), rowOf(open.app, open.ids.bill)];
+    open.app.render(); open.app.reload();
+    invariant('P2.first.edit.open', 'Never confirmed (Rent still open on 15 June 2026): the form carries its own date, so the first save after 12 months proceeds — June 2026–May 2027 recorded at £80 first, then the edit (saved with the date the stale form showed). The next render rolls the row into June 2027 and records nothing new',
+      [firstTry, saved, gaps(open.app, open.ids), intents(open.app), rowOf(open.app, open.ids.bill)],
+      [[], [[['bill', '2026-06', '2027-05', 80]], [['bill monthly', 80]], ['Rent NEW', 500, '2026-06-15', 'upcoming']],
+        [['bill', '2026-06', '2027-05', 80]], [['bill monthly', 80]], ['Rent NEW', 500, '2027-06-15', 'upcoming']]);
+
+    const imm = away('2026-08-03', ['bill']);
+    formSave(imm.app, imm.ids.bill, { name: 'Rent NEW', amount: '500' });
+    formSave(imm.app, imm.ids.bill, { name: 'Rent NEW', amount: '500' });
+    const july = JSON.stringify(imm.app.state().expectationGaps[0]);
+    imm.app.render(); imm.app.reload();
+    imm.app.advance('2026-09-03', 'reload');
+    invariant('P2.first.edit.immutable', 'Captured at £80, edited to £500, rendered, reloaded, then the September boundary: the July record is byte-identical and August — the first month under the new template — is recorded at Rent NEW £500',
+      [JSON.stringify(imm.app.state().expectationGaps[0]) === july, gaps(imm.app, imm.ids), intents(imm.app)],
+      [true, [['bill', '2026-07', '2026-07', 80], ['bill', '2026-08', '2026-08', 500]], [['bill monthly', 80], ['Rent NEW', 500]]]);
+
+    ['goal', 'investment', 'debt'].forEach(d => {
+      const { app, ids } = away('2027-06-03', [d]);
+      const pos = position(app), vals = JSON.stringify(fa7bVals(app));
+      const refused = formSave(app, ids[d], { amount: String(NEW8[d]) });
+      formSave(app, ids[d], { amount: String(NEW8[d]) });
+      app.render(); app.reload();
+      invariant('P2.first.edit.' + d, 'The ' + d + ' row (£' + AMOUNT[d] + ', June confirmed) edited to £' + NEW8[d] + ' as the first act after 12 months: July 2026–May 2027 recorded at £' + AMOUNT[d] + ' first; the form is refused once (its June completion was reset) and the retry edits the same row; Holiday, ISA (and its valuations) and Card stay as they were — the boundary moves no position',
+        [refused, gaps(app, ids), intents(app).map(x => x[1]), app.state().payments.map(p => [p.id === ids[d], toNumber(p.amount)]), position(app), JSON.stringify(fa7bVals(app)) === vals],
+        [[MOVED], [[d, '2026-07', '2027-05', AMOUNT[d]]], [AMOUNT[d]], [[true, NEW8[d]]], pos, true]);
+    });
+
+    const mut = away('2027-06-03', ['bill'], false);
+    bypass(mut.app);
+    formSave(mut.app, mut.ids.bill, { name: 'Rent NEW', amount: '500' });
+    invariant('P2.first.edit.mut', 'Mutation: with the preparation reduced to admission alone (pre-P2-8), the same first save records June 2026–May 2027 as Rent NEW £500 — the boundary ran from the edited row mid-action. The preparation is what keeps £80',
+      [gaps(mut.app, mut.ids), intents(mut.app)], [[['bill', '2026-06', '2027-05', 500]], [['Rent NEW', 500]]]);
+
+    const fab = away('2026-08-03', ['bill']);
+    fab.app.run('geodeBoundaryChangedRow = function () { return false; };');
+    const fabToasts = formSave(fab.app, fab.ids.bill, { name: 'Rent NEW', amount: '500' });
+    invariant('P2.first.edit.mut-reset', 'Mutation: without the changed-row refusal the June form (Completed, due 15 July) is applied after the boundary reopened Rent — it stores a July settlement nobody made, turning the July just recorded as expected into confirmed. The refusal is what prevents it',
+      [fabToasts, rowOf(fab.app, fab.ids.bill)[3], status(fab.app, fab.ids.bill, ['2026-07', '2026-08'])], [[], 'paid', [C, U]]);
+  });
+
+  scenario('P2-8 TOGGLE FIRST — one coherent action write; a tap on a row the boundary changed is refused', () => {
+    const page = () => {
+      const w = world('2026-06-01', DOMAINS, undefined, undefined, PROGRAM.commit);
+      w.vet = w.app.contribute({ name: 'Vet', amount: 30, date: '2026-08-20', status: 'upcoming', rec: 'no' });
+      confirmAll(w.app, w.ids, '2026-06-15');
+      w.app.at('2026-08-03');
+      watchSaves(w.app);
+      return w;
+    };
+    const vetBill = app => app.state().billPaymentEvents.filter(e => e.paymentId !== undefined).map(e => [e.eventType, e.occurrenceYm, toNumber(e.amount)]).slice(-1);
+    const t = page();
+    t.app.toggle(t.vet);
+    const saves = takeSaves(t.app);
+    invariant('P2.first.toggle', 'All four rows confirmed in June and a one-off Vet bill (£30, due 20 August) still open; the first act on 3 August completes Vet. Two whole-state writes: the boundary (four July records at the June templates, Vet untouched and still open) and then the completion — Vet paid with its August settlement in the same text. No stored text ever holds Vet paid without its settlement',
+      [saves.length, saves.map(x => coherent(t.app, x, t.vet)), saves.map(x => JSON.parse(x).expectationGaps.length), saves.map(x => rowOf({ state: () => JSON.parse(x) }, t.vet)[3]), gaps(t.app, t.ids), vetBill(t.app)],
+      [2, [true, true], [4, 4], ['upcoming', 'paid'], each(d => row(d, '2026-07', '2026-07')), [['completion', '2026-08', 30]]]);
+
+    const m = page();
+    bypass(m.app);
+    m.app.toggle(m.vet);
+    invariant('P2.first.toggle.mut', 'Mutation: with the preparation reduced to admission alone, completing Vet writes twice and the first write — recurring sync reached through the Home insight helper mid-action — stores Vet paid with no settlement',
+      takeSaves(m.app).map(x => coherent(m.app, x, m.vet)), [false, true]);
+
+    const moved = away('2026-08-03', ['bill'], false);
+    watchSaves(moved.app);
+    moved.app.run('__toasts = [];');
+    moved.app.toggle(moved.ids.bill);
+    const first = [p1Toasts(moved.app), takeSaves(moved.app).length, rowOf(moved.app, moved.ids.bill), gaps(moved.app, moved.ids)];
+    moved.app.toggle(moved.ids.bill);
+    const paidReset = away('2026-08-03', ['bill']);
+    paidReset.app.run('__toasts = [];');
+    paidReset.app.toggle(paidReset.ids.bill);
+    const reset = [p1Toasts(paidReset.app), rowOf(paidReset.app, paidReset.ids.bill), paidReset.app.state().billPaymentEvents.length];
+    invariant('P2.first.toggle.moved', 'A tap made on the June screen is never applied to another month: Rent still open on 15 June is tapped on 3 August — the boundary records June–July and moves the row to 15 August, so the tap is refused (one write: the boundary); the next tap completes August. Rent completed in June (shown completed) tapped on 3 August — the boundary reopened it, so the tap neither reopens nor completes anything',
+      [first, [takeSaves(moved.app).length, rowOf(moved.app, moved.ids.bill), status(moved.app, moved.ids.bill, ['2026-06', '2026-07', '2026-08'])], reset],
+      [[[MOVED], 1, ['bill monthly', 80, '2026-08-15', 'upcoming'], [['bill', '2026-06', '2026-07', 80]]], [1, ['bill monthly', 80, '2026-09-15', 'paid'], [E, E, C]],
+        [[MOVED], ['bill monthly', 80, '2026-08-15', 'upcoming'], 1]]);
+
+    const silent = away('2026-08-03', ['bill'], false);
+    silent.app.run('geodeBoundaryChangedRow = function (id) { return !!(_geodeBoundaryChangedRows && _geodeBoundaryChangedRows[id] === "completion"); };');
+    silent.app.run('__toasts = [];');
+    silent.app.toggle(silent.ids.bill);
+    invariant('P2.first.toggle.mut-moved', 'Mutation: when a tap is refused only for a reset (not a moved due date), the tap on the June screen silently completes August — a month the user never saw. Refusing a moved row is what prevents it',
+      [p1Toasts(silent.app), status(silent.app, silent.ids.bill, ['2026-06', '2026-07', '2026-08'])], [[], [E, E, C]]);
+  });
+
+  scenario('P2-8 OTHER FIRST ACTIONS — delete, contribution, release, valuation, new payment and Smart Import each process the boundary first', () => {
+    const FOUR = each(d => row(d, '2026-07', '2026-07'));
+    [
+      ['delete Rent', (app, ids) => { app.del(ids.bill); return app.state().payments.some(p => p.id === ids.bill); }, false],
+      ['complete a £50 Holiday contribution', app => !!app.contribute({ name: 'Top-up', amount: 50, date: '2026-08-03', status: 'paid', goalId: 'gH' }), true],
+      ['release £50 from Holiday', app => app.release('gH', 50).ok, true],
+      ['value the ISA at £5,600', app => { app.saveInvestment('iA', 'ISA', 5600); return fa7bVals(app).map(v => [v[0], v[2]]).pop(); }, [5600, 'manual']],
+      ['create a Vet payment', app => !!app.contribute({ name: 'Vet', amount: 30, date: '2026-08-20', status: 'upcoming', rec: 'no' }), true],
+      ['Smart Import a £75 Holiday payment', app => { app.smartImport([{ name: 'Holiday savings', amount: 75, date: '2026-08-02', link: 'goal:gH' }]); return app.state().payments.length; }, 5]
+    ].forEach(([label, act, effect]) => {
+      const { app, ids } = away('2026-08-03', DOMAINS);
+      const done = act(app, ids);
+      app.reload();
+      invariant('P2.first.other.' + label.split(' ')[0].toLowerCase(), 'All four rows confirmed in June; the first act on 3 August is to ' + label + ': it happens, and July is recorded for every row at its June template (expected, no recorded outcome) — the act cannot remove or rewrite that evidence',
+        [done, gaps(app, ids), classify(app, ids, ['2026-07'])], [effect, FOUR, every(ids, [E])]);
+    });
+  });
+
+  scenario('P2-8 FRESH LOAD, PRIOR RENDER AND HELD BOUNDARY — nothing processed twice; a held boundary stays held', () => {
+    const fresh = away('2027-06-03', ['bill']);
+    fresh.app.run('__reload()');
+    watchSaves(fresh.app);
+    const freshToasts = formSave(fresh.app, fresh.ids.bill, { name: 'Rent NEW', amount: '500' });
+    const rendered = away('2026-08-03', ['bill']);
+    rendered.app.render();
+    watchSaves(rendered.app);
+    const renderedToasts = formSave(rendered.app, rendered.ids.bill, { name: 'Rent NEW', amount: '500' });
+    invariant('P2.first.fresh', 'A fresh load after 12 months (boundary processed at load), or a render first in the long-lived page: the edit is the only write, applies at once, and leaves exactly one range at £80',
+      [[freshToasts, takeSaves(fresh.app).length, gaps(fresh.app, fresh.ids), rowOf(fresh.app, fresh.ids.bill)], [renderedToasts, takeSaves(rendered.app).length, gaps(rendered.app, rendered.ids)]],
+      [[[], 1, [['bill', '2026-07', '2027-05', 80]], ['Rent NEW', 500, '2027-06-15', 'upcoming']], [[], 1, [['bill', '2026-07', '2026-07', 80]]]]);
+
+    const f = p1rFixture('P2');
+    const withRent = JSON.parse(JSON.stringify(f.state));
+    withRent.payments.push({ id: 'bR', name: 'Rent', amount: 80, date: '2026-08-15', status: 'upcoming', rec: 'yes', lastPaidYM: '', payKind: 'bill', createdAt: new Date(2026, 7, 1, 12).getTime() });
+    const held = edit => {
+      const app = p1rPage(withRent, f.clock, P1R_PREVIOUS);
+      app.at('2026-09-02');
+      if (edit) app.modalEdit('bR', { name: 'Rent NEW', amount: '500' });
+      const during = [app.snap().inv.iA, app.state().payments.map(p => [p.id, p.status, toNumber(p.amount), p.date]), (app.state().expectationGaps || []).length, app.state()._schemaVersion];
+      p1rReady(app); app.reload();
+      return [during, intents(app), app.run("geodeExpectationOccurrenceStatus(S, 'bR', '2026-08')"), app.snap().inv.iA, app.state().expectationFloorYm];
+    };
+    invariant('P2.first.held', 'P2-2 fixture opened in August with the investment transition outstanding, plus an open £80 Rent due 15 August. On 2 September (boundary held) the first act edits Rent to £500: the boundary stays held — nothing recorded, Rent not rolled, the ISA row still paid, ISA £5,200 — and the edit applies. The held page is still schema 2, so no record can exist before the September schema-3 floor: at the ready load August reads unknown with or without the edit, and never Rent NEW £500',
+      [held(true), held(false)],
+      [[[5200, [['id1', 'paid', 200, '2026-09-05'], ['bR', 'upcoming', 500, '2026-08-15']], 0, 2], [], U, 5200, '2026-09'],
+        [[5200, [['id1', 'paid', 200, '2026-09-05'], ['bR', 'upcoming', 80, '2026-08-15']], 0, 2], [], U, 5200, '2026-09']]);
+  });
+
+  scenario('P2-8 STALE TAB — an action in a page another window has written behind is refused before capture, roll or change', () => {
+    [
+      ['edit', (app, ids) => formSave(app, ids.bill, { name: 'Rent NEW', amount: '500' })],
+      ['toggle', (app, ids) => app.toggle(ids.bill)],
+      ['release', app => app.release('gH', 50)]
+    ].forEach(([label, act]) => {
+      const { app, ids } = away('2026-08-03', DOMAINS);
+      const other = JSON.parse(rawStore(app));
+      other._rev = { seq: other._rev.seq + 1, id: 'rev_other_tab', by: other._rev.by, at: new Date(2026, 7, 2, 12).getTime() };
+      other.income = 4100;
+      const theirs = JSON.stringify(other);
+      foreignStore(app, theirs);
+      const mine = JSON.stringify(app.state());
+      act(app, ids);
+      invariant('P2.first.stale.' + label, 'Another window of the same runtime stored a newer revision on 2 August; this June page\'s first act (' + label + ') is refused at admission: storage is exactly the other window\'s text, and this page records, rolls and changes nothing — its memory is as it was',
+        [rawStore(app) === theirs, staleState(app), JSON.stringify(app.state()) === mine, relWarnings(app)], [true, ['foreign', 'foreign'], true, ['stale:foreign']]);
+    });
+  });
+
+  scenario('P2-8 ACTION ATOMICITY — with a boundary pending, each action stores the boundary and then itself; nothing half-made', () => {
+    const page = () => {
+      const w = world('2026-06-01', DOMAINS, undefined, undefined, PROGRAM.commit);
+      w.vet = w.app.contribute({ name: 'Vet', amount: 30, date: '2026-08-20', status: 'upcoming', rec: 'no' });
+      w.extra = w.app.contribute({ intent: 'set', name: 'Card extra', amount: 100, date: '2026-08-20', status: 'upcoming', rec: 'no', debtId: 'dC' });
+      w.early = w.app.contribute({ name: 'Insurance', amount: 40, date: '2026-08-25', status: 'upcoming', rec: 'no' });
+      confirmAll(w.app, w.ids, '2026-06-15');
+      w.app.toggle(w.early);
+      w.app.at('2026-08-03');
+      return w;
+    };
+    const table = [
+      ['toggle bill', w => w.app.toggle(w.vet), 'vet'],
+      ['toggle debt', w => w.app.toggle(w.extra), 'extra'],
+      ['contribution', w => w.app.contribute({ name: 'Top-up', amount: 50, date: '2026-08-03', status: 'paid', goalId: 'gH' })],
+      ['undo', w => w.app.toggle(w.early), 'early'],
+      ['release', w => w.app.release('gH', 50)],
+      ['valuation', w => w.app.saveInvestment('iA', 'ISA', 5600)],
+      ['payment form', w => formSave(w.app, w.vet, { amount: '35' }), 'vet']
+    ].map(([label, act, rowKey]) => {
+      const w = page();
+      const before = evidence(w.app.state());
+      watchSaves(w.app);
+      act(w);
+      const saves = takeSaves(w.app);
+      const id = rowKey ? w[rowKey] : null;
+      const look = x => { const d = JSON.parse(x); return evidence(d) + JSON.stringify(d.payments.map(p => [p.id, p.status, toNumber(p.amount)])); };
+      return [label, saves.length, evidence(JSON.parse(saves[0])) === before, look(saves[saves.length - 1]) !== look(saves[0]),
+        saves[saves.length - 1] === rawStore(w.app), id ? saves.map(x => coherent(w.app, x, id)) : [true, true]];
+    });
+    invariant('P2.atomic', 'June page, 3 August, each first act in its own page: exactly two writes — the boundary (no settlement, release, valuation or debt balance in it changed) and the action (the whole change in that one text, which is what stays stored). Every row the action completes or reopens agrees with its own ledger in every stored text',
+      table, table.map(r => [r[0], 2, true, true, true, [true, true]]));
+  });
+
+  scenario('P2-8 HARNESS FIDELITY — the production edit-first call graph, and what the harness may stub', () => {
+    const src = PROGRAM.src;
+    const text = n => extractFunction(src, n).text;
+    const strip = t => t.replace(/\/\/[^\n]*/g, '').replace(/'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"/g, '""');
+    const at = (t, k) => { const i = t.indexOf(k); return i < 0 ? Infinity : i; };
+    const actionSave = n => strip(text(n)).lastIndexOf('\n  save();');
+    invariant('P2.fidelity.graph', 'Production: the payment form save and togglePay ask the Home insight helper before their save; it reads getMonthPlan, whose first work is calcLeftover, whose first statement is recurring sync; the frozen Suggested Actions reconcile reaches getMonthPlan through getSuggestedActions. So any month boundary still pending when an action starts is processed in the middle of it — unless it was processed before the first change',
+      [at(strip(text('geodeSavePayApply')), 'geodeHomeMainActionInsightKind()') < actionSave('geodeSavePayApply'), at(strip(text('togglePay')), 'geodeHomeMainActionInsightKind()') < actionSave('togglePay'),
+        at(text('geodeHomeMainActionInsightKind'), 'getMonthPlan()') < Infinity, text('getMonthPlan').split('\n').slice(1, 3).map(s => s.trim()), text('calcLeftover').split('\n')[1].trim(),
+        at(text('geodeReconcileFrozenSuggestedActionsAfterLinkedSave'), 'getSuggestedActions(') < Infinity, at(text('getSuggestedActions'), 'getMonthPlan()') < Infinity],
+      [true, true, true, ['var steps = [];', 'var left = calcLeftover();'], 'syncRecurringPayments();', true, true]);
+
+    const probe = new App(baseState(), '2026-06-10');
+    probe.run('var __syncs = 0, __sync = syncRecurringPayments; syncRecurringPayments = function () { __syncs++; return __sync.apply(null, arguments); };' +
+      ' geodeHomeMainActionInsightKind(); geodeReconcileFrozenSuggestedActionsAfterLinkedSave(); getMonthPlan();');
+    invariant('P2.fidelity.shims', 'The harness keeps that path: its insight, reconcile and getMonthPlan shims each reach production calcLeftover, which runs recurring sync (three calls); the Plan program\'s getMonthPlan shim does the same',
+      [probe.run('__syncs'), PROGRAM.extracted.some(f => f.name === 'calcLeftover'), /function getMonthPlan\(\) \{ calcLeftover\(\);/.test(PLAN_SHIMS)], [3, true, true]);
+
+    const ENTRIES = ['savePay', 'geodeDupPayResolve', 'geodeDupExpResolve', 'saveExp', 'saveGoal', 'saveInv', 'saveDebt', 'saveInc', 'geodeConfirmSavingsRelease',
+      'geodeSmartImportConfirm', 'togglePay', 'delPay', 'delGoal', 'delInv', 'delDebt', 'delExp', 'doDep', 'geodeSpendingQuickAdd', 'geodeRemoveSub', 'geodeQsDone',
+      'geodeSmartImportUseAsIncome', 'geodeApplySuggestion', 'geodeUndoLastAdjustment'];
+    const CHANGE = /\bS\.[\w$.\[\]"]+\s*=(?!=)|\.push\(|\.splice\(|\b(p|g|ex|inv|d|row|exp)\.\w+\s*=(?!=)|delete\s+[a-z]\.|geodeSavePayApply\(|geodeSaveExpApply\(|geodeApplySavingsRelease\(|geodeMergeDuplicateLinkedContributionsSameMonth\(|(?<!function )_doSave\w*\(/;
+    const UI = ['render()', 'rGoals()', 'checkAlerts()', 'rHome()', 'geodeEmitPaymentCompletionFeedback('];
+    const order = ENTRIES.map(n => {
+      const t = strip(text(n)).replace(/function _doSave\w*\(/g, 'function __local(');
+      const admit = Math.min(at(t, 'geodePrepareFinancialMutation()'), at(t, 'geodeModalCommitBegin()'));
+      const m = t.match(CHANGE), save = at(t, 'save()'), ui = Math.min(...UI.map(k => at(t, k)));
+      return [n, admit < (m ? m.index : Infinity), ui === Infinity || save < ui];
+    });
+    invariant('P2.fidelity.entries', 'Every live financial entry point (payment, expense, goal, investment, debt and income forms, duplicate prompts, release, Smart Import, toggle, deletes, deposit, quick add, subscriptions, Quick Setup, import as income, suggestion apply and undo) admits — geodePrepareFinancialMutation or the commit — before its first change (the legacy same-month merge included); and each calls render, rGoals, checkAlerts, rHome or completion feedback only after its save, which is why the harness may stub those as no-ops',
+      order, ENTRIES.map(n => [n, true, true]));
+  });
 }
 
 /**

@@ -1624,6 +1624,14 @@ var _geodeRevN = 0;
 var _geodeBoundaryHoldAttempts = 0;
 var _geodeBoundaryHoldNotice = false;
 var _geodeBoundaryHoldReady = false;
+/**
+ * P2-8: the user action geodePrepareFinancialMutation() admitted, until its own write, its commit release or the end of
+ * its task (0: none). While one is open recurring sync does nothing. _geodeBoundaryChangedRows: payment id → what that
+ * preparation's boundary changed on the row ('completion': reset; 'due': only its due date moved).
+ */
+var _geodeFinancialActionOpen = 0;
+var _geodeFinancialActionSeq = 0;
+var _geodeBoundaryChangedRows = null;
 /** geode_shell: this runtime's version once geodeShellCleanup removed every older Beynd cache in this browser. */
 var GEODE_SHELL_KEY = 'geode_shell';
 var GEODE_CACHE_PREFIX = 'beynd-cache-';
@@ -2048,6 +2056,7 @@ function load() {
 }
 function save() {
   if (!geodeFinancialWriteAllowed()) return;
+  geodeEndFinancialAction();
   geodeNormalizeIncomeTypeFields();
   try {
     geodeArchiveExpiredOneOffExpenses(S);
@@ -2085,6 +2094,7 @@ function save() {
 /** Persist S (e.g. nudgeHistory) without snapshot / lastSnapshot side effects. */
 function persistGeodeToLocalStorage() {
   if (!geodeFinancialWriteAllowed()) return;
+  geodeEndFinancialAction();
   var prepared = geodeFinancialJsonToStore();
   if (!prepared) return;
   var prevRev = prepared.prev;
@@ -10573,8 +10583,78 @@ function geodeRefuseBoundaryEvidenceEdit() {
   return false;
 }
 
+/** P2-8: whether a payment row is completed, and for which month — what a boundary reset changes. */
+function geodePaymentCompletionMark(p) {
+  return (p.status === 'paid' ? 'paid|' : 'open|') + String(p.lastPaidYM || '');
+}
+
+/** P2-8: ends the admitted action: at its write, its commit release, or the end of its task. */
+function geodeEndFinancialAction() {
+  _geodeFinancialActionOpen = 0;
+  _geodeBoundaryChangedRows = null;
+}
+
+/**
+ * P2-8: the one step a user action takes before its first financial change; returns whether it may proceed.
+ * Write admission comes first: a page another window has written behind is refused before anything is recorded,
+ * rolled or changed. Then an elapsed month boundary is processed from the evidence as it still stands — expectation
+ * capture and the roll, stored by recurring sync as one write — so nothing the action changes is ever recorded as an
+ * earlier month's intent. A boundary held for an outstanding transition (P2-2, P2-5) stays held: it records nothing,
+ * geodeBoundaryEvidenceLocked refuses the rows its evidence needs, and a later write can only leave those months
+ * unknown. Once admitted, recurring sync stays off until the action's own write: helpers it reads through
+ * (getMonthPlan → calcLeftover) must not store a half-made action.
+ */
+function geodePrepareFinancialMutation() {
+  geodeEndFinancialAction();
+  if (!geodeFinancialWriteAllowed()) return false;
+  if (S && geodeRecurrenceWouldMutateBoundary() && !geodeBoundaryTransitionOutstanding()) {
+    var before = Object.create(null);
+    (S.payments || []).forEach(function (p) { if (p && p.id != null) before[p.id] = [geodePaymentCompletionMark(p), String(p.date || '')]; });
+    syncRecurringPayments();
+    if (_geodeRuntimeStale) return false;
+    var changed = Object.create(null);
+    (S.payments || []).forEach(function (p) {
+      var b = p && p.id != null ? before[p.id] : undefined;
+      if (!b) return;
+      if (b[0] !== geodePaymentCompletionMark(p)) changed[p.id] = 'completion';
+      else if (b[1] !== String(p.date || '')) changed[p.id] = 'due';
+    });
+    _geodeBoundaryChangedRows = changed;
+  }
+  var token = ++_geodeFinancialActionSeq;
+  _geodeFinancialActionOpen = token;
+  setTimeout(function () {
+    if (_geodeFinancialActionOpen === token) geodeEndFinancialAction();
+  }, 0);
+  return true;
+}
+
+/**
+ * P2-8: the preparation just reset this row's completion for the new month — or, with anyMove, also only moved its due
+ * date there. A form carries its own date, so only a reset makes it stale; a tap acts on whatever the row now holds.
+ */
+function geodeBoundaryChangedRow(id, anyMove) {
+  var c = _geodeBoundaryChangedRows && id != null ? _geodeBoundaryChangedRows[id] : '';
+  return c === 'completion' || (!!anyMove && c === 'due');
+}
+
+/**
+ * P2-8: refuses a tap or form made before the boundary reset or moved its row: applying it would complete or reopen
+ * an occurrence nobody acted on. The boundary itself is already stored. A form opens again with the row as it now is.
+ */
+function geodeRefuseBoundaryChangedRow(id, reopenForm) {
+  geodeEndFinancialAction();
+  toast('This item moved into a new month before your change was saved. Check it and try again.', 'warn');
+  try {
+    if (reopenForm) openPayModal(id);
+    else render();
+  } catch (e) {}
+}
+
 function syncRecurringPayments() {
   if (!S) return;
+  // P2-8: an admitted action already processed the boundary; it runs again after that action's own write.
+  if (_geodeFinancialActionOpen) return;
   var crossing = geodeRecurrenceWouldMutateBoundary();
   // Hold every boundary mutation while a transition it depends on is outstanding. Holding only some rows
   // would leave a half-rolled month. Same-month recurrence still runs: the preview is false when nothing would cross.
@@ -12557,6 +12637,8 @@ function openModal(html) {
  * A save handler checks geodeModalCommitOpen() before reading its form, takes geodeModalCommitBegin() after its
  * validation and before its first change, and calls geodeModalCommitRelease() only when the save was refused without
  * changing anything. A closing modal takes no commit. With no modal open, each call is its own action.
+ * P2-8: the commit is the action's geodePrepareFinancialMutation(), so the month boundary is processed before the form
+ * changes anything.
  */
 function geodeModalCommitOpen() {
   var m = document.getElementById('modal');
@@ -12565,13 +12647,14 @@ function geodeModalCommitOpen() {
 }
 function geodeModalCommitBegin() {
   var m = document.getElementById('modal');
-  if (!m) return true;
+  if (!m) return geodePrepareFinancialMutation();
   if (!geodeModalCommitOpen()) return false;
-  if (!geodeFinancialWriteAllowed()) return false;
+  if (!geodePrepareFinancialMutation()) return false;
   m.setAttribute('data-geode-commit', '1');
   return true;
 }
 function geodeModalCommitRelease() {
+  geodeEndFinancialAction();
   var m = document.getElementById('modal');
   if (m && !m.classList.contains('mo-bg--closing')) m.removeAttribute('data-geode-commit');
 }
@@ -13494,6 +13577,7 @@ function geodeSmartImportUseAsIncome(amount, label) {
     toast('Could not read that amount.', 'warn');
     return;
   }
+  if (!geodePrepareFinancialMutation()) return;
   S.income = amt;
   S.incomeExplicitlySet = true;
   persistGeodeToLocalStorage();
@@ -27817,6 +27901,7 @@ function geodeUndoLastAdjustment() {
 
   var exp = geodeFindExpenseByName(last.name);
   if (!exp) return;
+  if (!geodePrepareFinancialMutation()) return;
 
   exp.amount = last.oldAmount;
 
@@ -27844,6 +27929,7 @@ function geodeApplySuggestion(name, reduction) {
     var newAmount = Math.max(0, oldAmount - reduction);
 
     if (newAmount === oldAmount) return;
+    if (!geodePrepareFinancialMutation()) return;
 
     window.geodeLastAdjustment = {
       name: name,
@@ -39088,6 +39174,7 @@ function geodeShouldCascadeDeleteLinkedPayment(p, idStr, kind) {
 
 function delGoal(id) {
   geodeConfirm('Remove this goal? Scheduled contributions linked to it will also be removed from Beynd. Paid one-time contributions stay in your history. Any investment linked to this goal will stay in Investments but will no longer count toward this goal. This does not move any money.', function() {
+    if (!geodePrepareFinancialMutation()) return;
     var idStr = String(id);
     S.goals = S.goals.filter(function(g) { return String(g.id) !== idStr; });
     var inv = S.investments || [];
@@ -39126,6 +39213,7 @@ function doDep(id) {
   if (isNaN(v) || v <= 0) return;
   var g = S.goals.filter(function (x) { return x.id === id; })[0];
   if (!g) return;
+  if (!geodePrepareFinancialMutation()) return;
   setLastSnapshotBeforeChange();
   if (g.baseSaved === undefined) g.baseSaved = toNum(g.saved);
   g.baseSaved = toNum(g.baseSaved) + v;
@@ -39768,6 +39856,7 @@ function saveDebt(id) {
 }
 function delDebt(id){
   geodeConfirm('Remove this debt from Beynd? Scheduled payments linked to it will also be removed. This does not affect what you owe.', function() {
+    if (!geodePrepareFinancialMutation()) return;
     var idStr = String(id);
     S.debts = S.debts.filter(function(d){ return String(d.id) !== idStr; });
     S.payments = (S.payments || []).filter(function(p) {
@@ -40289,6 +40378,7 @@ function geodeQsNext(){
 function geodeQsDone(){
   geodeQuickSetupSyncFromUi();
   var qs=window._geodeQS; if(!qs) return;
+  if (!geodePrepareFinancialMutation()) return;
   var qd=qs.quickSetupData||{};
   var inc=geodeQuickSetupNum(qd.income);
   if(inc!=null&&inc>=0){S.income=inc;S.incomeExplicitlySet=true;}
@@ -40829,6 +40919,7 @@ function geodeSubKeepIt() {
 }
 
 function geodeRemoveSub(id, kind) {
+  if (!geodePrepareFinancialMutation()) return;
   if (kind === 'expense') {
     S.expenses = (S.expenses||[]).filter(function(e){return e.id!==id;});
   } else {
@@ -40992,9 +41083,6 @@ function savePay(id) {
     toast('Choose a due date before saving.', 'warn');
     return;
   }
-  try {
-    geodeMergeDuplicateLinkedContributionsSameMonth();
-  } catch (ePre) {}
   var st = (document.getElementById('ps') || {}).value;
   var recEl = document.getElementById('prec');
   var rec = recEl ? recEl.value || 'no' : 'no';
@@ -41049,6 +41137,9 @@ function savePay(id) {
     }
   }
   if (!geodeModalCommitBegin()) return;
+  try {
+    geodeMergeDuplicateLinkedContributionsSameMonth();
+  } catch (ePre) {}
   if (!geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, payKind, amtNum)) geodeModalCommitRelease();
 }
 function geodeSaveExpApply(id, nm, am, edRaw, cat, rec) {
@@ -41079,6 +41170,11 @@ function geodeSaveExpApply(id, nm, am, edRaw, cat, rec) {
   return true;
 }
 function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, payKind, amtNum) {
+  // P2-8: the caller's commit processed the month boundary; a form opened before it reset this row no longer describes it.
+  if (id && geodeBoundaryChangedRow(id)) {
+    geodeRefuseBoundaryChangedRow(id, true);
+    return false;
+  }
   var bufPrefill = false;
   try {
     bufPrefill = !!window._geodePayPrefillBufferContribution;
@@ -41356,6 +41452,8 @@ function togglePay(id){
     toast('This contribution needs an amount above \u00a30 before it can be marked complete. Nothing has been changed.', 'warn');
     return;
   }
+  if (!geodePrepareFinancialMutation()) return;
+  if (geodeBoundaryChangedRow(p.id, true)) { geodeRefuseBoundaryChangedRow(p.id); return; }
   var _dpeBefore = geodeDebtPaymentEventSnapshot(p);
   var _bpeBefore = geodeBillPaymentEventSnapshot(p);
   var _cevBefore = geodeContributionEventSnapshot(p);
@@ -41413,6 +41511,7 @@ function togglePay(id){
 function delPay(id){
   var _boundaryDel = (S.payments || []).filter(function (p) { return p.id === id; })[0];
   if (_boundaryDel && geodeBoundaryEvidenceLocked(_boundaryDel)) { geodeRefuseBoundaryEvidenceEdit(); return; }
+  if (!geodePrepareFinancialMutation()) return;
   geodeInvalidateDecisionCaches();
   geodeRecordContributionDeletion(S.payments.filter(function (p) { return p.id === id; })[0], 'delete_payment');
   S.payments = S.payments.filter(function (p) {
@@ -41842,6 +41941,7 @@ function geodeSpendingQuickAdd() {
       cat = 'other';
     }
 
+    if (!geodePrepareFinancialMutation()) return;
     if (!Array.isArray(S.expenses)) S.expenses = [];
     var today = geodeTodayLocalISO();
     S.expenses.push({ id: uid(), name: name, amount: amt, cat: cat, date: today, rec: 'no' });
@@ -42112,7 +42212,7 @@ function saveExp(id){
   if (!geodeModalCommitBegin()) return;
   if (!geodeSaveExpApply(id, nm, am, edRaw, cat, rec)) geodeModalCommitRelease();
 }
-function delExp(id){S.expenses=S.expenses.filter(function(e){return e.id!==id;});save();render();}
+function delExp(id){if(!geodePrepareFinancialMutation())return;S.expenses=S.expenses.filter(function(e){return e.id!==id;});save();render();}
 
 // ── INVEST ────────────────────────────────────────
 function rInvest(_target) {
@@ -42316,6 +42416,7 @@ function saveInv(id){
 }
 function delInv(id){
   geodeConfirm('Remove this investment from Beynd? Scheduled contributions linked to it will also be removed. Nothing is sold or moved. Any goal using this investment for progress will show its manually saved amount instead.', function() {
+    if (!geodePrepareFinancialMutation()) return;
     var idStr = String(id);
     S.investments = S.investments.filter(function(e){ return String(e.id) !== idStr; });
     S.payments = (S.payments || []).filter(function(p) {
