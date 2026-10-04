@@ -871,13 +871,13 @@ function harnessFidelity() {
     invariant('fidelity.intent.direct', 'User-added goal/investment entry points pass the new intent; debt entry points keep set',
       ['geodePayFromGoal', 'geodePayFromInvest', 'openPayQuick', 'geodePayFromDebt'].map(n => [n, intents(n)]),
       [['geodePayFromGoal', ['new']], ['geodePayFromInvest', ['new']], ['openPayQuick', ['set', 'new', 'new']], ['geodePayFromDebt', ['set']]]);
-    invariant('fidelity.intent.plan', 'Plan prefills in source order: debt keeps set; buffer/goal/investment gap actions add; untouched fallbacks set',
+    invariant('fidelity.intent.plan', 'Plan prefills in source order: debt schedule actions keep set (each save is its own row, P2-3); buffer/goal/investment gap actions add; untouched fallbacks set',
       ['geodePlanDetailActionForStep', 'geodeMainActionFromPriorityStep', 'openSuggestedAction'].map(n => [n, intents(n)]),
-      [['geodePlanDetailActionForStep', ['set', 'set', 'set', 'add', 'set', 'add', 'set', 'add', 'set']],
+      [['geodePlanDetailActionForStep', ['set', 'set', 'add', 'set', 'add', 'set', 'add', 'set']],
         ['geodeMainActionFromPriorityStep', ['set', 'add', 'add', 'add']], ['openSuggestedAction', ['set', 'add', 'add', 'add']]]);
-    invariant('fidelity.adjust', 'Non-debt "Adjust scheduled amount" runs geodePlanAdjustScheduledRun (edit by id / Payments); debt keeps its prefill',
+    invariant('fidelity.adjust', 'Every "Adjust scheduled amount", debt included since P2-3, runs geodePlanAdjustScheduledRun (edit the one row by id, else open Payments)',
       (PROGRAM.structural.geodePlanDetailActionForStep.match(/setScheduleAction\('Adjust scheduled amount'[^\n]*/g) || [])
-        .map(l => l.indexOf('geodePlanAdjustScheduledRun(state, step)') >= 0), [false, true, true, true]);
+        .map(l => l.indexOf('geodePlanAdjustScheduledRun(state, step)') >= 0), [true, true, true, true]);
     invariant('fidelity.plan.declarations', 'Plan-program production functions declared exactly once',
       PROGRAM.plan.extracted.filter(f => f.declarations > 1).map(f => f.name + ' ×' + f.declarations), []);
     const goalModal = PROGRAM.structural.openGoalModal, invModal = PROGRAM.structural.openInvModal;
@@ -1814,18 +1814,19 @@ function identityMatrix() {
     invRec(f); invPlan(f, 50);
     invariant('FA1.G.plan-vs-user', 'Plan £50 does not overwrite the user\'s recurring £200', signature(f.rows()), [{ rec: 'yes', amount: 200 }, { rec: 'yes', amount: 50 }]);
   });
-  scenario('FA-1 H — debt shared path keeps its existing same-month behaviour', () => {
+  scenario('FA-1 H — debt: each unpaid payment intent keeps its own row (P2-3)', () => {
     const debts = [{ id: 'dC', name: 'Card', balance: 1000, minPayment: 50, apr: 20 }];
     const app = new App(baseState({ debts }), '2026-06-05');
     app.planSchedule({ name: 'Card payment', amount: 50, date: '2026-06-15', status: 'upcoming', rec: 'yes', debtId: 'dC' });
     app.contribute({ name: 'Extra debt payment: Card', amount: 100, date: '2026-06-20', status: 'upcoming', rec: 'no', debtId: 'dC' });
-    current('FA1.H.upsert', 'A second unpaid same-month debt payment updates the existing row (unchanged debt behaviour)',
-      app.rows().map(r => ({ rec: r.rec, amount: r.amount, direct: r.direct })), [{ rec: 'yes', amount: 100, direct: false }]);
+    invariant('FA1.H.upsert', 'A second unpaid same-month debt payment is its own row: the £50 monthly stays monthly and the £100 one-off stays one-off',
+      signature(app.rows()), [{ rec: 'no', amount: 100 }, { rec: 'yes', amount: 50 }]);
     const legacy = new App(baseState({ debts, payments: [
       Object.assign(holidayRow('d1', 50, 'yes'), { goalId: '', debtId: 'dC', payKind: 'debt' }),
       Object.assign(holidayRow('d2', 100, 'no'), { goalId: '', debtId: 'dC', payKind: 'debt', createdAt: 2 })] }), '2026-06-05');
     legacy.merge();
-    current('FA1.H.merge', 'Unpaid same-month debt rows still merge (unchanged debt behaviour)', signature(legacy.rows()), [{ rec: 'yes', amount: 150 }]);
+    invariant('FA1.H.merge', 'Unpaid same-month debt rows are not merged: no summed amount, no promoted frequency, both ids kept',
+      legacy.state().payments.map(p => [p.id, p.rec, p.amount]).sort(), [['d1', 'yes', 50], ['d2', 'no', 100]]);
   });
   scenario('FA-1 LEGACY — saved states without the marker', () => {
     const app = new App(baseState({ payments: [holidayRow('p1', 100, 'yes', { date: '2026-06-15' })] }), '2026-06-05');
@@ -2107,17 +2108,18 @@ function planActions() {
     const app = planApp([], debts);
     invariant('PA.DEBT.tap', 'Debt gap action still uses set', [pick(app.planView(DEBT_STEP), 'label', 'amount'), tapped(app.planTap(DEBT_STEP))],
       [{ label: 'Schedule this step', amount: 120 }, ['payments', null, 'set']]);
-    invariant('PA.DEBT.adjust', 'Debt Adjust still opens a set prefill (no row id) and re-saving keeps one row',
+    invariant('PA.DEBT.adjust', 'Debt Adjust opens the one scheduled row by id (the shared Adjust helper; P2-3 no longer reuses a debt row without an id) and re-saving keeps one row',
       [pick(app.planView(DEBT_STEP), 'label', 'amount'), tapped(app.planTap(DEBT_STEP)), unpaid(app)],
-      [{ label: 'Adjust scheduled amount', amount: 120 }, ['payments', null, 'set'], [['id1', 'yes', 120, false]]]);
+      [{ label: 'Adjust scheduled amount', amount: 120 }, ['payments', 'id1', 'replace'], [['id1', 'yes', 120, false]]]);
     const covered = planApp([pay('d0', 50, 'no', { debtId: 'dC', payKind: 'debt' }, Object.assign({ name: 'Extra debt payment: Card' }, PAID)),
       pay('d1', 70, 'yes', { debtId: 'dC', payKind: 'debt' }, { name: 'Extra debt payment: Card', createdAt: 2 })], debts);
     covered.setPlan([DEBT_STEP]);
     current('PA.DEBT.covered', 'Debt paid £50 + scheduled £70 keeps the debt action state (remaining £70 offered; debt is outside FA-1C)',
       [pick(covered.planView(DEBT_STEP), 'label', 'amount', 'actionable', 'scheduledOnly', 'actionAmount'), covered.homeView(DEBT_STEP)],
       [{ label: 'Schedule remaining amount', amount: 70, actionable: true, scheduledOnly: false, actionAmount: 70 }, { cta: 'Schedule extra payment', amount: 70 }]);
-    current('PA.DEBT.covered.tap', 'Its set action reuses the scheduled debt row (no duplicate)', [tapped(covered.planTap(DEBT_STEP)), unpaid(covered)],
-      [['payments', null, 'set'], [['d1', 'yes', 70, false]]]);
+    current('PA.DEBT.covered.tap', 'Its "Schedule remaining amount" tap now saves the £70 it offers as its own row next to d1 (P2-3: a debt save without a row id never overwrites another row); the offer itself is PA.DEBT.covered',
+      [tapped(covered.planTap(DEBT_STEP)), unpaid(covered)],
+      [['payments', null, 'set'], [['d1', 'yes', 70, false], ['id1', 'yes', 70, false]]]);
   });
 }
 
@@ -6213,6 +6215,144 @@ function p2BoundaryHold() {
   });
 }
 
+function p2DebtIdentity() {
+  const CARD4K = () => ({ id: 'dC', name: 'Card', balance: 4000, apr: 20, minp: 50 });
+  const debtApp = (payments, clock) => new App(baseState({ debts: [CARD4K()], payments: payments || [] }), clock || '2026-06-05', PROGRAM.plan);
+  /** Every debt entry point (debt card, Plan, Home, Suggested Actions, quick pay) opens the form with intent 'set' and no row id. */
+  const debtPay = (app, amount, rec, date, intent) => app.contribute({ intent: intent || 'set', name: 'Card ' + (rec === 'yes' ? 'monthly' : 'extra'),
+    amount, date: date || '2026-06-15', status: 'upcoming', rec, debtId: 'dC' });
+  const view = (app, ids) => app.state().payments.filter(p => p.debtId === 'dC')
+    .map(p => [ids[p.id] || p.id, p.rec, p.amount, p.status, p.date]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  const debtEvents = (app, ids) => app.state().debtPaymentEvents.map(e => [e.eventType, ids[e.paymentId] || e.paymentId, e.occurrenceYm, e.amount == null ? null : e.amount]);
+  const balance = app => app.state().debts[0].balance;
+
+  scenario('P2-3 DEBT IDENTITY — distinct unpaid debt payment intents keep distinct rows', () => {
+    const a = debtApp();
+    const m = debtPay(a, 50, 'yes'), o = debtPay(a, 100, 'no', '2026-06-20');
+    const ids = { [m]: 'm50', [o]: 'o100' };
+    a.merge();
+    invariant('P2.debt.monthly-oneoff', '£50 monthly + £100 one-off for the same card and month: two rows with two ids, each with its own frequency and amount, after the Payments-list merge too; Card stays £4,000; Monthly Left counts both (£3,000 − £150)',
+      [m !== o, view(a, ids), balance(a), a.snap().left],
+      [true, [['m50', 'yes', 50, 'upcoming', '2026-06-15'], ['o100', 'no', 100, 'upcoming', '2026-06-20']], 4000, 2850]);
+
+    const b = debtApp();
+    const b1 = debtPay(b, 50, 'yes'), b2 = debtPay(b, 75, 'yes');
+    b.merge();
+    invariant('P2.debt.two-monthly', '£50 monthly + £75 monthly: two monthly rows, nothing summed', view(b, { [b1]: 'm50', [b2]: 'm75' }),
+      [['m50', 'yes', 50, 'upcoming', '2026-06-15'], ['m75', 'yes', 75, 'upcoming', '2026-06-15']]);
+
+    const c = debtApp();
+    const c1 = debtPay(c, 50, 'yes'), c2 = debtPay(c, 50, 'yes', null, 'new');
+    c.merge();
+    invariant('P2.debt.identical', 'Two identical £50 monthly payments added separately (Plan "set" then plain form "new") stay two rows; a matching amount is not a duplicate',
+      [c1 !== c2, view(c, { [c1]: 'first', [c2]: 'second' }), c.snap().left],
+      [true, [['first', 'yes', 50, 'upcoming', '2026-06-15'], ['second', 'yes', 50, 'upcoming', '2026-06-15']], 2900]);
+
+    a.modalEdit(m, { amount: '60' });
+    invariant('P2.debt.edit', 'Editing the monthly row through its own form keeps its id, changes only it, and adds no row; the one-off is untouched',
+      [view(a, ids), a.state().payments.length, balance(a)],
+      [[['m50', 'yes', 60, 'upcoming', '2026-06-15'], ['o100', 'no', 100, 'upcoming', '2026-06-20']], 2, 4000]);
+
+    a.at('2026-06-15');
+    a.toggle(m);
+    const afterFirst = [view(a, ids).map(r => [r[0], r[3]]), debtEvents(a, ids)];
+    a.toggle(o);
+    const afterSecond = [view(a, ids).map(r => [r[0], r[3]]), debtEvents(a, ids), a.snap().left];
+    a.toggle(m);
+    invariant('P2.debt.complete', 'Completing the monthly records only its own debt event and leaves the one-off upcoming; completing the one-off records only its own; undoing the monthly reverses only its event; Card stays £4,000 throughout',
+      [afterFirst, afterSecond, view(a, ids).map(r => [r[0], r[3]]), debtEvents(a, ids), balance(a)],
+      [[[['m50', 'paid'], ['o100', 'upcoming']], [['completion', 'm50', '2026-06', 60]]],
+        [[['m50', 'paid'], ['o100', 'paid']], [['completion', 'm50', '2026-06', 60], ['completion', 'o100', '2026-06', 100]], 2840],
+        [['m50', 'upcoming'], ['o100', 'paid']], [['completion', 'm50', '2026-06', 60], ['completion', 'o100', '2026-06', 100], ['reversal', 'm50', '2026-06', null]], 4000]);
+
+    const before = view(a, ids);
+    a.reload();
+    invariant('P2.debt.reload', 'Reload keeps both rows, ids, statuses and events exactly as the session had them', [view(a, ids), debtEvents(a, ids).length], [before, 3]);
+
+    const d = debtApp();
+    const d1 = debtPay(d, 50, 'yes'), d2 = debtPay(d, 100, 'no', '2026-06-20');
+    d.del(d1);
+    invariant('P2.debt.delete', 'Deleting the monthly row leaves the one-off row exactly as it was', view(d, { [d2]: 'o100' }), [['o100', 'no', 100, 'upcoming', '2026-06-20']]);
+  });
+
+  MODES.forEach(mode => scenario('P2-3 DEBT BOUNDARY — June monthly £50 + one-off £100 through July and August [' + mode + ']', () => {
+    const app = debtApp();
+    const m = debtPay(app, 50, 'yes'), o = debtPay(app, 100, 'no', '2026-06-20');
+    const ids = { [m]: 'm50', [o]: 'o100' };
+    app.at('2026-06-20'); app.toggle(m); app.toggle(o);
+    app.advance('2026-07-02', mode); app.merge();
+    const july = [view(app, ids), app.snap().left];
+    const x = debtPay(app, 100, 'no', '2026-07-20');
+    ids[x] = 'x100';
+    app.merge();
+    const julyExtra = view(app, ids);
+    app.advance('2026-08-02', mode); app.merge();
+    invariant('P2.debt.boundary.' + mode, 'July: the monthly comes back upcoming on 15 July; the June one-off stays a completed one-off and never becomes monthly (Monthly Left £2,950). A new July one-off next to the July monthly is its own row. August: the monthly moves to 15 August, both one-offs keep their frequency and amounts; Card stays £4,000',
+      [july, julyExtra, view(app, ids), balance(app)],
+      [[[['m50', 'yes', 50, 'upcoming', '2026-07-15'], ['o100', 'no', 100, 'paid', '2026-06-20']], 2950],
+        [['m50', 'yes', 50, 'upcoming', '2026-07-15'], ['o100', 'no', 100, 'paid', '2026-06-20'], ['x100', 'no', 100, 'upcoming', '2026-07-20']],
+        [['m50', 'yes', 50, 'upcoming', '2026-08-15'], ['o100', 'no', 100, 'paid', '2026-06-20'], ['x100', 'no', 100, 'upcoming', '2026-07-20']], 4000]);
+  }));
+
+  scenario('P2-3 DEBT PATHS — Smart Import, legacy state, goals and the stale-write fence', () => {
+    const si = debtApp();
+    const m = debtPay(si, 50, 'yes');
+    si.smartImport([{ name: 'Card extra', amount: 100, date: '2026-06-20', link: 'debt:dC' }]);
+    si.merge(); si.reload(); si.merge();
+    invariant('P2.debt.import', 'A Smart Import debt payment added as new next to the £50 monthly stays its own one-off row through the Payments-list merge and a reload',
+      view(si, { [m]: 'm50' }).map(r => [r[0] === 'm50' ? 'm50' : 'import', r[1], r[2]]), [['import', 'no', 100], ['m50', 'yes', 50]]);
+
+    const merged = debtApp([{ id: 'dm', name: 'Card', amount: 150, date: '2026-06-15', status: 'upcoming', rec: 'yes', lastPaidYM: '', goalId: '', investId: '', debtId: 'dC', payKind: 'debt', createdAt: 1 }]);
+    merged.merge(); merged.reload();
+    invariant('P2.debt.history', 'A £150 monthly row an earlier runtime already merged stays one £150 monthly row: nothing is split or guessed', view(merged, {}), [['dm', 'yes', 150, 'upcoming', '2026-06-15']]);
+
+    const goalRow = (id, created) => ({ id, name: 'Holiday', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes', lastPaidYM: '', goalId: 'gH', investId: '', debtId: '', payKind: 'goal', createdAt: created });
+    const debtRow = (id, amount, rec, created) => ({ id, name: 'Card', amount, date: '2026-06-15', status: 'upcoming', rec, lastPaidYM: '', goalId: '', investId: '', debtId: 'dC', payKind: 'debt', createdAt: created });
+    const mixed = debtApp([goalRow('g1', 1), goalRow('g2', 2), debtRow('d1', 50, 'yes', 3), debtRow('d2', 100, 'no', 4)]);
+    mixed.merge();
+    invariant('P2.debt.goal-merge', 'The goal branch of the merge is unchanged: two unmarked £100 monthly Holiday rows still combine (FA1.M.legacy-dup) while the two debt rows beside them stay apart',
+      mixed.state().payments.map(p => [p.id, p.rec, p.amount]).sort(), [['d1', 'yes', 50], ['d2', 'no', 100], ['g1', 'yes', 200]]);
+
+    const st = debtApp();
+    const s1 = debtPay(st, 50, 'yes');
+    const body = JSON.parse(rawStore(st));
+    body.income = 3333;
+    body._rev = { seq: body._rev.seq + 3, id: 'rev_debt_other', by: 'v1.0.77', at: 9 };
+    const foreign = JSON.stringify(body);
+    foreignStore(st, foreign);
+    debtPay(st, 100, 'no', '2026-06-20');
+    invariant('P2.debt.stale', 'A debt payment saved in a tab another window has overtaken is refused by the P2-1 fence: the other window\'s text stays stored, the page is foreign-stale',
+      [rawStore(st) === foreign, staleState(st), relWarnings(st), JSON.parse(rawStore(st)).payments.map(p => p.id === s1)], [true, ['foreign', 'foreign'], ['stale:foreign'], [true]]);
+
+    const mutateSave = app => {
+      app.run(`(function () {
+        var src = geodeSavePayApply.toString();
+        var out = src.replace("if (debtid || payLinkedIntent === 'new') return false;", "if (!debtid && payLinkedIntent === 'new') return false;")
+          .replace("if (gid) { kindLabel = 'Contribution'; existing = geodeFindExistingLinkedPaymentForYm('goal'",
+            "if (debtid) { kindLabel = 'Payment'; existing = geodeFindExistingLinkedPaymentForYm('debt', debtid, ym); } else if (gid) { kindLabel = 'Contribution'; existing = geodeFindExistingLinkedPaymentForYm('goal'");
+        if (out === src) throw new Error('mutation did not apply');
+        geodeSavePayApply = (0, eval)('(' + out + ')');
+      })()`);
+    };
+    const mu = debtApp();
+    mutateSave(mu);
+    debtPay(mu, 50, 'yes'); debtPay(mu, 100, 'no', '2026-06-20');
+    invariant('P2.debt.upsert.disabled', 'With the old debt upsert restored, the £100 one-off overwrites the £50 monthly row — the guard is what keeps two rows',
+      mu.state().payments.map(p => [p.rec, p.amount]), [['yes', 100]]);
+
+    const mm = debtApp([debtRow('d1', 50, 'yes', 1), debtRow('d2', 100, 'no', 2)]);
+    mm.run(`(function () {
+      var src = geodeMergeDuplicateLinkedContributionsSameMonth.toString();
+      var out = src.replace("if (p.debtId) continue;", "if (p.debtId) { var dym = geodePaymentMonthYmFromDate(p.date); if (dym) (byKey[dym + '|d|' + p.debtId + '|u'] = byKey[dym + '|d|' + p.debtId + '|u'] || []).push(p); continue; }");
+      if (out === src) throw new Error('mutation did not apply');
+      geodeMergeDuplicateLinkedContributionsSameMonth = (0, eval)('(' + out + ')');
+    })()`);
+    mm.merge();
+    invariant('P2.debt.merge.disabled', 'With debt rows grouped again, the merge sums them into one £150 row — the exclusion is what keeps them apart',
+      mm.state().payments.map(p => [p.id, p.amount]), [['d1', 150]]);
+  });
+}
+
 function p2RevisionFence() {
   const UNFENCED_LOG = '? [geode] unfenced financial write observed; this write proceeds';
   const pageOn = (raw, clock) => {
@@ -6370,7 +6510,7 @@ function main() {
   fa7dLinkedGoals();
   p1Close();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
-  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2RevisionFence(); p1RelOldWriter();
+  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2DebtIdentity(); p2RevisionFence(); p1RelOldWriter();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');

@@ -23146,9 +23146,11 @@ function geodePaymentMonthYmFromDate(iso) {
 }
 
 /**
- * Merge duplicate linked contributions (same debt OR goal OR investment, same calendar month).
+ * Merge duplicate linked contributions (same goal OR investment, same calendar month).
  * Unpaid rows merge together; paid rows are never merged — each completed payment keeps its own identity.
  * Goal/investment rows merge only with the same frequency, and never when the user added them as separate contributions.
+ * P2-3: debt rows never merge — each unpaid debt payment is its own intent and template id. Rows an earlier runtime
+ * already merged stay as stored.
  * Keeps one row per group (oldest createdAt wins id) and summed amounts. Display-only cleanup for state shape.
  */
 function geodeMergeDuplicateLinkedContributionsSameMonth() {
@@ -23158,15 +23160,13 @@ function geodeMergeDuplicateLinkedContributionsSameMonth() {
     var p = S.payments[i];
     if (!p) continue;
     if (String(p.status || '') === 'paid') continue;
+    if (p.debtId) continue;
     var link = '';
-    if (p.debtId && !p.goalId && !p.investId) link = 'd|' + String(p.debtId);
-    else if (p.goalId && !p.debtId && !p.investId) link = 'g|' + String(p.goalId);
-    else if (p.investId && !p.debtId && !p.goalId) link = 'i|' + String(p.investId);
+    if (p.goalId && !p.investId) link = 'g|' + String(p.goalId);
+    else if (p.investId && !p.goalId) link = 'i|' + String(p.investId);
     else continue;
-    if (!p.debtId) {
-      if (p.directContribution === true) continue;
-      link += '|' + String(p.rec || 'no');
-    }
+    if (p.directContribution === true) continue;
+    link += '|' + String(p.rec || 'no');
     var ym = geodePaymentMonthYmFromDate(p.date);
     if (!ym) continue;
     var key = ym + '|' + link + '|' + (String(p.status || '') === 'paid' ? 'p' : 'u');
@@ -23188,7 +23188,6 @@ function geodeMergeDuplicateLinkedContributionsSameMonth() {
     var sumAmt = 0;
     var minCreated = typeof keep.createdAt === 'number' ? keep.createdAt : 0;
     var minDate = String(keep.date || '').slice(0, 10) || '';
-    var anyRec = false;
     var anyOver = false;
     var lastYmPick = '';
     for (var j = 0; j < arr.length; j++) {
@@ -23197,14 +23196,12 @@ function geodeMergeDuplicateLinkedContributionsSameMonth() {
       if (cj && (!minCreated || cj < minCreated)) minCreated = cj;
       var dj = String(arr[j].date || '').slice(0, 10);
       if (dj && (!minDate || dj < minDate)) minDate = dj;
-      if (arr[j].rec === 'yes') anyRec = true;
       if (geodePaymentEffectiveStatus(arr[j]) === 'overdue') anyOver = true;
       if (arr[j].lastPaidYM) lastYmPick = String(arr[j].lastPaidYM);
     }
     keep.amount = sumAmt;
     if (minDate) keep.date = minDate;
     if (minCreated > 0) keep.createdAt = minCreated;
-    if (keep.debtId) keep.rec = anyRec ? 'yes' : 'no';
     if (k.slice(-2) === '|p') {
       keep.status = 'paid';
       keep.lastPaidYM = lastYmPick || (keep.rec === 'yes' ? currentYM() : '');
@@ -25349,25 +25346,7 @@ function geodePlanDetailActionForStep(state, step, prog, ix) {
     var did = findDebtIdByName(dn) || geodeDebtIdFromPlanStepLabel(state, step);
     if (actionState.isCompleted) return out;
     if (!actionState.isActionable && actionState.isScheduledOnly && actionState.scheduled > 0) {
-      var debtSched = actionState.scheduled;
-      setScheduleAction('Adjust scheduled amount', 'Schedule extra payment', debtSched, function () {
-        if (!did) {
-          msub = 'payments';
-          goTab('money');
-          return;
-        }
-        msub = 'payments';
-        goTab('money');
-        openPayModal(null, {
-          name: 'Extra debt payment: ' + (dn || 'debt'),
-          amount: debtSched,
-          date: geodeTodayLocalISO(),
-          status: 'upcoming',
-          rec: true,
-          debtId: did,
-          _geodePayIntent: 'set'
-        });
-      });
+      setScheduleAction('Adjust scheduled amount', 'Schedule extra payment', actionState.scheduled, geodePlanAdjustScheduledRun(state, step));
       return out;
     }
     if (actionState.isActionable && payAmt >= 1) {
@@ -26279,7 +26258,7 @@ function geodePlanStepScheduledAmount(state, step) {
 }
 
 /**
- * Plan "Adjust scheduled amount" (non-debt): edit the one row that provides the step's scheduled coverage; when
+ * Plan "Adjust scheduled amount": edit the one row that provides the step's scheduled coverage; when
  * several rows provide it there is no single row to change, so open Payments and let the user choose.
  */
 function geodePlanAdjustScheduledRun(state, step) {
@@ -40671,15 +40650,15 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
     return fm(amtNum) + (isDone ? ' contributed \u2713' : ' scheduled \u2713');
   }
   function geodeUpsertLinkedPaymentForThisMonth() {
-    if (!debtid && payLinkedIntent === 'new') return false;
+    // P2-3: a debt save without a row id is a new intent with its own template id. Only openPayModal(id) edits a debt row.
+    if (debtid || payLinkedIntent === 'new') return false;
     try {
       geodeMergeDuplicateLinkedContributionsSameMonth();
     } catch (_ePreUps) {}
     var ym = geodePayYmFromDateStr(dt);
     var existing = null;
     var kindLabel = '';
-    if (debtid) { kindLabel = 'Payment'; existing = geodeFindExistingLinkedPaymentForYm('debt', debtid, ym); }
-    else if (gid) { kindLabel = 'Contribution'; existing = geodeFindExistingLinkedPaymentForYm('goal', gid, ym, rec); }
+    if (gid) { kindLabel = 'Contribution'; existing = geodeFindExistingLinkedPaymentForYm('goal', gid, ym, rec); }
     else if (invid) { kindLabel = 'Contribution'; existing = geodeFindExistingLinkedPaymentForYm('invest', invid, ym, rec); }
     if (existing) {
       savedPayBefore = geodeDebtPaymentEventSnapshot(existing);
@@ -40693,7 +40672,6 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
       var exD = String(existing.date || '').slice(0, 10);
       var newD = String(dt || '').slice(0, 10);
       existing.date = exD && newD && exD < newD ? existing.date : dt;
-      if (debtid) existing.rec = existing.rec === 'yes' || rec === 'yes' ? 'yes' : 'no';
       delete existing.lastPaidAmount;
       if (st === 'paid') {
         existing.status = 'paid';
