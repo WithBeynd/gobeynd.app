@@ -24136,7 +24136,8 @@ function geodePaymentMonthYmFromDate(iso) {
  * Goal/investment rows merge only with the same frequency, and never when the user added them as separate contributions.
  * P2-3: debt rows never merge — each unpaid debt payment is its own intent and template id. Rows an earlier runtime
  * already merged stay as stored.
- * Keeps one row per group (oldest createdAt wins id) and summed amounts. Display-only cleanup for state shape.
+ * Keeps one row per group (oldest createdAt wins id) and summed amounts.
+ * Runs only inside a prepared payment save: merging can move a stored-overdue sum into this month's outflow.
  */
 function geodeMergeDuplicateLinkedContributionsSameMonth() {
   if (!S || !Array.isArray(S.payments) || S.payments.length < 2) return false;
@@ -41167,15 +41168,6 @@ function geodeOpenManualEntryChooser() {
 }
 
 function rPayments(el) {
-  var mergedDupes = false;
-  try {
-    mergedDupes = !!geodeMergeDuplicateLinkedContributionsSameMonth();
-  } catch (eRp0) {}
-  if (mergedDupes) {
-    try {
-      save();
-    } catch (eRp) {}
-  }
   var sorted=S.payments.slice().sort(function(a,b){return a.date&&b.date?new Date(a.date)-new Date(b.date):0;});
   var payMo=sorted.filter(paymentCountsForMonthlyOutflow);
   var tUp=payMo.reduce(function(s,p){return s+Number(p.amount);},0);
@@ -45072,6 +45064,7 @@ function geodeIntelApplyBankEstimate() {
 
     // Step 1: confirm.
     if (!confirm('Adjust your plan to reflect your current spending from your account? Your income in Beynd will be updated.')) return;
+    if (!geodePrepareFinancialMutation()) return;
 
     // Step 2: update income — S.income is clearly identified; pattern mirrors saveInc().
     var prevInc = Number(S.income) || 0;

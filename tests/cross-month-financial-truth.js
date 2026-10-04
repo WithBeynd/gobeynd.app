@@ -727,7 +727,7 @@ class App {
     this.run('window._geodePayPrefillBufferContribution = false;');
     this.contribute({ id, intent: 'replace', merge: true, name: f.name, amount: f.amount, date: f.date, status: f.status, rec, goalId: gid, investId: invid, debtId: debtid });
   }
-  /** rPayments and savePay run the legacy same-month merge before showing or saving payments. */
+  /** savePay and geodeSavePayApply run the legacy same-month merge inside the payment save. */
   merge() { return this.call('geodeMergeDuplicateLinkedContributionsSameMonth'); }
   toggle(id) { this.call('togglePay', [id]); }
   completeAllUnpaid() { this.state().payments.filter(p => p.status !== 'paid').forEach(p => this.toggle(p.id)); }
