@@ -6303,12 +6303,21 @@ function geodeLivingMonthExpenses(state) {
  * recorded this month for another month), releases dated this month, and valuations dated this month. recordedAt is
  * when Beynd recorded the event (a tap, a form, an import or a migration), never a payment or bank date; eventDate is
  * set only where the record carries a date of its own (a release's date, a valuation's as-of date).
+ * P3-3: paymentName / entityName are display labels only — the row's or entity's current name, else the name the event
+ * recorded, else null.
  */
 function geodeLivingMonthHappened(state, cal, index) {
   var userSources = { mark_completed: true, payment_form: true, smart_import: true };
   var systemSources = { migration: true, rollover_safety_net: true };
   var out = [];
-  function settlements(list, ledger, domainOf, entityOf, type) {
+  function nameIn(list, id) {
+    if (!Array.isArray(list) || id == null || id === '') return null;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && String(list[i].id) === String(id)) return String(list[i].name || '') || null;
+    }
+    return null;
+  }
+  function settlements(list, ledger, domainOf, entityOf, entityNameOf, type) {
     list.forEach(function (e) {
       var by = userSources[e.source] ? 'user' : systemSources[e.source] ? 'system' : 'unknown';
       var inMonth = e.occurrenceYm === cal.ym;
@@ -6316,13 +6325,16 @@ function geodeLivingMonthHappened(state, cal, index) {
       out.push({
         id: e.id, type: type, domain: domainOf(e), amount: e.amount, value: null, paymentId: e.paymentId, entityId: entityOf(e),
         occurrenceYm: e.occurrenceYm, occurrenceInMonth: inMonth, eventDate: null, recordedAt: e.recordedAt,
-        timeBasis: 'recorded_at', recordedBy: by, evidenceSource: ledger, origin: String(e.source || '')
+        timeBasis: 'recorded_at', recordedBy: by, evidenceSource: ledger, origin: String(e.source || ''),
+        paymentName: nameIn(state.payments, e.paymentId) || String(e.paymentNameSnapshot || '') || null, entityName: entityNameOf(e)
       });
     });
   }
-  settlements(index.bill, 'billPaymentEvents', function () { return 'bill'; }, function () { return null; }, 'settlement_recorded');
-  settlements(index.debt, 'debtPaymentEvents', function () { return 'debt'; }, function (e) { return e.debtId; }, 'settlement_recorded');
-  settlements(index.contribution, 'contributionEvents', function (e) { return e.entityType; }, function (e) { return e.entityId; }, 'contribution_recorded');
+  settlements(index.bill, 'billPaymentEvents', function () { return 'bill'; }, function () { return null; }, function () { return null; }, 'settlement_recorded');
+  settlements(index.debt, 'debtPaymentEvents', function () { return 'debt'; }, function (e) { return e.debtId; },
+    function (e) { return nameIn(state.debts, e.debtId) || String(e.debtNameSnapshot || '') || null; }, 'settlement_recorded');
+  settlements(index.contribution, 'contributionEvents', function (e) { return e.entityType; }, function (e) { return e.entityId; },
+    function (e) { return nameIn(e.entityType === 'investment' ? state.investments : state.goals, e.entityId); }, 'contribution_recorded');
 
   (Array.isArray(state.savingsReleases) ? state.savingsReleases : []).forEach(function (r) {
     if (!r || typeof r !== 'object' || r.confirmedByUser === false || !(toNum(r.amount) > 0)) return;
@@ -6334,7 +6346,8 @@ function geodeLivingMonthHappened(state, cal, index) {
       id: String(r.id || ''), type: 'release', domain: st === 'investment' || st === 'linked_investment' ? 'investment' : 'goal',
       amount: toNum(r.amount), value: null, paymentId: null, entityId: String(r.sourceId || ''), occurrenceYm: null,
       occurrenceInMonth: true, eventDate: date, recordedAt: typeof r.createdAt === 'number' ? r.createdAt : null,
-      timeBasis: date ? 'release_date' : 'release_month', recordedBy: 'user', evidenceSource: 'savingsReleases', origin: String(r.reason || '')
+      timeBasis: date ? 'release_date' : 'release_month', recordedBy: 'user', evidenceSource: 'savingsReleases', origin: String(r.reason || ''),
+      paymentName: null, entityName: nameIn(st === 'investment' || st === 'linked_investment' ? state.investments : state.goals, r.sourceId)
     });
   });
 
@@ -6346,7 +6359,8 @@ function geodeLivingMonthHappened(state, cal, index) {
       out.push({
         id: v.id, type: 'valuation', domain: 'investment', amount: null, value: v.value, paymentId: null, entityId: String(inv.id),
         occurrenceYm: null, occurrenceInMonth: true, eventDate: v.date, recordedAt: v.recordedAt,
-        timeBasis: 'valuation_date', recordedBy: 'user', evidenceSource: 'valuations', origin: v.source
+        timeBasis: 'valuation_date', recordedBy: 'user', evidenceSource: 'valuations', origin: v.source,
+        paymentName: null, entityName: String(inv.name || '') || null
       });
     });
   });
@@ -38346,8 +38360,170 @@ function geodeMonthPulseView(model) {
     unplaced: (model.payments.unplaced || []).length,
     incomePlanned: income.planned,
     incomeType: income.type,
-    incomeReceived: income.received === undefined ? null : income.received
+    incomeReceived: income.received === undefined ? null : income.received,
+    detail: geodeMonthDetailView(model)
   };
+}
+
+/** P3-2/P3-3: the month name of a YYYY-MM key, or '' when it names no month. */
+function geodeMonthPulseMonthName(ym) {
+  var months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  return months[Number(String(ym || '').slice(5, 7)) - 1] || '';
+}
+
+/** P3-3: "5 Oct" for a YYYY-MM-DD the model supplies, or '' — text only, never parsed as a time. */
+function geodeMonthPulseDay(iso) {
+  var s = String(iso || '');
+  var month = geodeMonthPulseMonthName(s.slice(0, 7));
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && month ? Number(s.slice(8, 10)) + ' ' + month.slice(0, 3) : '';
+}
+
+/**
+ * P3-3 Happened vs Still ahead: the detail beneath the Month Pulse, from a ready Living Month model only.
+ * Happened is payments.done (the completions Monthly Left counts, totalling doneTotal), then "also recorded": the model's
+ * other events this month. An event a payment item cites as its evidence (evidenceRef source and eventId = the event's
+ * evidenceSource and id) is that item and is not listed again — an event cited by an unplaced item stays with that
+ * item. Releases and valuations are listed, never totalled. Still ahead is payments.ahead (totalling aheadTotal).
+ * Payment items are ordered by the due date the model gives (none last); events keep the model's order.
+ */
+function geodeMonthDetailView(model) {
+  if (!model || model.status !== 'ready' || !model.payments) return null;
+  var payments = model.payments;
+  var cited = Object.create(null);
+  [payments.done || [], payments.unplaced || []].forEach(function (list) {
+    list.forEach(function (x) {
+      if (x && x.evidenceRef) cited[x.evidenceRef.source + '|' + x.evidenceRef.eventId] = true;
+    });
+  });
+  function byDueDate(list) {
+    return (list || []).map(function (x, i) { return { x: x, i: i }; }).sort(function (a, b) {
+      var da = a.x.dueDate || '';
+      var db = b.x.dueDate || '';
+      if (da !== db) return !da ? 1 : !db ? -1 : da < db ? -1 : 1;
+      return a.i - b.i;
+    }).map(function (w) { return w.x; });
+  }
+  var earlier = model.earlier || {};
+  return {
+    done: byDueDate(payments.done),
+    doneTotal: payments.doneTotal,
+    also: (model.happened || []).filter(function (e) { return e && !cited[e.evidenceSource + '|' + e.id]; }),
+    ahead: byDueDate(payments.ahead),
+    aheadTotal: payments.aheadTotal,
+    unplaced: (payments.unplaced || []).slice(),
+    earlierGapCount: earlier.gapCount > 0 ? earlier.gapCount : 0
+  };
+}
+
+/**
+ * P3-3: the detail's markup, or '' when there is nothing beneath the Pulse. Evidence wording only: a completion is
+ * recorded (or, with no ledger record, marked) as completed — never a bank payment or a payment date, since recordedAt
+ * is when Beynd recorded it. Contributions read as contributions, not spending; a debt payment never implies a balance;
+ * a release is money released from a goal or investment; a valuation is a recorded value, not a flow. Amounts in the
+ * right-hand column are exactly the items each section total counts.
+ */
+function geodeMonthDetailHtml(d) {
+  if (!d || !(d.done.length || d.also.length || d.ahead.length || d.unplaced.length || d.earlierGapCount)) return '';
+  function kindLabel(x) {
+    return x.kind === 'debt' ? 'Debt payment' : x.kind === 'goal_contribution' ? 'Goal contribution'
+      : x.kind === 'investment_contribution' ? 'Investment contribution' : '';
+  }
+  function meta(parts) {
+    var text = parts.filter(Boolean).join(' \u00b7 ');
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+  function row(title, detail, amount) {
+    return (
+      '<li data-geode-css="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:7px 0;border-top:1px solid var(--bd)">' +
+      '<div data-geode-css="min-width:0;overflow-wrap:anywhere">' +
+      '<div data-geode-css="font-size:12px;font-weight:600;color:var(--tx-1);line-height:1.4">' + escHtmlLite(title) + '</div>' +
+      '<div data-geode-css="font-size:10px;color:var(--tx-3);line-height:1.45">' + escHtmlLite(detail) + '</div>' +
+      '</div>' +
+      (amount == null ? '' : '<div data-geode-css="flex-shrink:0;font-size:12px;font-weight:600;color:var(--tx-1);white-space:nowrap">' + escHtmlLite(fm(amount)) + '</div>') +
+      '</li>'
+    );
+  }
+  function heading(label, total) {
+    return (
+      '<h3 data-geode-month-detail-heading="1" data-geode-css="display:flex;justify-content:space-between;gap:12px;margin:14px 0 2px;font-size:10px;font-weight:700;letter-spacing:1.1px;' +
+      'text-transform:uppercase;color:var(--tx-3)"><span>' + escHtmlLite(label) + '</span>' +
+      (total ? '<span data-geode-css="letter-spacing:0;text-transform:none;color:var(--tx-2)">' + escHtmlLite(total) + '</span>' : '') +
+      '</h3>'
+    );
+  }
+  function list(key, items) {
+    return '<ul data-geode-month-detail-list="' + key + '" data-geode-css="list-style:none;margin:0;padding:0">' + items.join('') + '</ul>';
+  }
+  function note(text) {
+    return '<p data-geode-css="margin:4px 0 0;font-size:11px;color:var(--tx-3);line-height:1.45">' + escHtmlLite(text) + '</p>';
+  }
+  function forMonth(e) {
+    return e.occurrenceInMonth ? '' : 'for ' + (geodeMonthPulseMonthName(e.occurrenceYm) || 'another month');
+  }
+  function byBeynd(e) {
+    return e.recordedBy === 'system' ? 'recorded by Beynd' : '';
+  }
+  function alsoRow(e) {
+    var day = geodeMonthPulseDay(e.eventDate);
+    if (e.type === 'release') {
+      return row(fm(e.amount) + ' released from ' + (e.entityName || (e.domain === 'investment' ? 'an investment' : 'a goal')), meta(['release', day]), null);
+    }
+    if (e.type === 'valuation') {
+      return row((e.entityName || 'Investment') + ' value recorded at ' + fm(e.value), meta(['valuation', day]), null);
+    }
+    if (e.type === 'contribution_recorded') {
+      return row(e.paymentName || e.entityName || 'Contribution',
+        meta([fm(e.amount) + ' contribution recorded' + (e.entityName ? ' to ' + e.entityName : ''), forMonth(e), byBeynd(e)]), null);
+    }
+    return row(e.paymentName || (e.domain === 'debt' ? 'Debt payment' : 'Payment'),
+      meta([fm(e.amount) + (e.domain === 'debt' ? ' debt payment' : '') + ' recorded as completed', forMonth(e), byBeynd(e)]), null);
+  }
+  function doneRow(x) {
+    return row(x.name || kindLabel(x) || 'Payment', meta([kindLabel(x), x.evidence === 'ledger' ? 'recorded as completed' : 'marked as completed',
+      x.state === 'completed_month_unknown' ? 'completion month not recorded' : x.dueDate ? 'due ' + geodeMonthPulseDay(x.dueDate) : '']), x.amount);
+  }
+  function aheadRow(x) {
+    var allocation = x.nature === 'allocation';
+    var day = geodeMonthPulseDay(x.dueDate);
+    var when = x.state === 'undated' ? (allocation ? 'no date recorded' : 'no due date recorded')
+      : x.state === 'outstanding_from_earlier' ? 'from ' + (geodeMonthPulseMonthName(x.dueYm) || 'an earlier month') + ' \u00b7 no outcome recorded'
+      : x.state === 'due_no_outcome_recorded' ? (allocation ? 'planned for ' : 'due ') + day + ' \u00b7 no outcome recorded'
+      : (allocation ? 'planned for ' : 'scheduled \u00b7 due ') + day;
+    return row(x.name || kindLabel(x) || 'Payment', meta([kindLabel(x), when]), x.amount);
+  }
+
+  var h = '';
+  if (d.done.length || d.also.length || d.ahead.length) {
+    h += heading('Happened', d.done.length ? fm(d.doneTotal) + ' completed' : '');
+    if (d.done.length) h += list('done', d.done.map(doneRow));
+    else if (!d.also.length) h += note('Nothing recorded as completed yet.');
+    if (d.also.length) {
+      if (d.done.length || d.ahead.length) {
+        h += '<div data-geode-css="margin:10px 0 2px;font-size:10px;color:var(--tx-3)">' + escHtmlLite('Also recorded this month \u2014 not counted in these totals') + '</div>';
+      }
+      h += list('also', d.also.map(alsoRow));
+    }
+  }
+  if (d.ahead.length) {
+    h += heading('Still ahead', fm(d.aheadTotal) + ' still ahead');
+    h += list('ahead', d.ahead.map(aheadRow));
+  } else if (d.done.length) {
+    h += heading('Still ahead', '');
+    h += note('Nothing still ahead.');
+  }
+  if (d.unplaced.length) {
+    h += heading('Completed, month unknown', '');
+    h += note('Not counted in this month\u2019s figures.');
+    h += list('unplaced', d.unplaced.map(function (x) {
+      return row(x.name || kindLabel(x) || 'Payment', meta([kindLabel(x), fm(x.amount) + ' \u00b7 completed, month unknown']), null);
+    }));
+  }
+  if (d.earlierGapCount) {
+    h += '<div data-geode-css="margin-top:12px">' + note(d.earlierGapCount === 1
+      ? 'Earlier months have 1 expected item with no recorded outcome.'
+      : 'Earlier months have ' + d.earlierGapCount + ' expected items with no recorded outcome.') + '</div>';
+  }
+  return h;
 }
 
 /**
@@ -38359,8 +38535,7 @@ function geodeMonthPulseView(model) {
 function geodeMonthPulseHtml(view, opts) {
   if (!view) return '';
   opts = opts || {};
-  var months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-  var month = months[Number(view.ym.slice(5, 7)) - 1] || '';
+  var month = geodeMonthPulseMonthName(view.ym);
   var over = view.planRemainder < 0;
   var h =
     '<section class="geode-month-pulse" data-geode-month-pulse="1" aria-label="' +
@@ -38411,6 +38586,16 @@ function geodeMonthPulseHtml(view, opts) {
       '<div data-geode-month-pulse-attention="1" data-geode-css="margin-top:10px;font-size:11px;color:var(--notice);line-height:1.5">' +
       notes.map(function (n) { return '<div>' + escHtmlLite(n) + '</div>'; }).join('') +
       '</div>';
+  }
+  var detail = geodeMonthDetailHtml(view.detail);
+  if (detail) {
+    h +=
+      '<details data-geode-month-detail="1" data-geode-css="margin-top:10px">' +
+      '<summary data-geode-css="font-size:11px;font-weight:600;color:rgba(155,127,232,0.88);cursor:pointer;line-height:1.45">' +
+      escHtmlLite('See what\u2019s happened and what\u2019s ahead') +
+      '</summary>' +
+      detail +
+      '</details>';
   }
   if (over) {
     h +=

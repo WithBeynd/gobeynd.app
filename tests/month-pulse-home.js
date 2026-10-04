@@ -186,6 +186,10 @@ function textOf(html) {
   return html.replace(/<[^>]*>/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
     .replace(/\s+/g, ' ').trim();
 }
+/** The glance alone: the Pulse without its P3-3 detail disclosure (tests/living-month-detail.js covers the detail). */
+function glanceOf(html) {
+  return html.replace(/<details data-geode-month-detail="1"[\s\S]*<\/details>/, '');
+}
 /** Visible text of the element carrying the data-geode-month-pulse-<part> marker ('' when absent). */
 function partOf(html, part) {
   const open = html.indexOf('data-geode-month-pulse-' + part + '="1"');
@@ -420,7 +424,7 @@ function checksFor(src) {
 
   [html, m] = ready('K', FIXTURES['K.unplaced']());
   check('K.text', 'Unplaced completed one-off: named once as an item with no known month; never in a total, never completed this month, not in Monthly Left',
-    [partOf(html, 'attention'), partOf(html, 'commitments'), partOf(html, 'remainder'), textOf(html).indexOf('\u00a330') < 0, m.payments.unplaced.length, m.payments.doneTotal],
+    [partOf(html, 'attention'), partOf(html, 'commitments'), partOf(html, 'remainder'), textOf(glanceOf(html)).indexOf('\u00a330') < 0, m.payments.unplaced.length, m.payments.doneTotal],
     [UNPLACED_ONE, 'Nothing completed yet \u00b7 \u00a340 still ahead', '\u00a32,960 left if the month goes to plan', true, 1, 0]);
   [html, m] = ready('K.two', FIXTURES['K.unplaced-two']());
   check('K.two.text', 'Two unplaced beside a completed row: plural line; the completed total is the counted row only',
@@ -478,7 +482,7 @@ function checksFor(src) {
   });
   const synth = view(parse(synthetic('ready')));
   check('contract.figures', 'A synthetic model whose totals match no item amounts: the Pulse shows exactly its planRemainder, doneTotal and aheadTotal and its own classifications',
-    [partOf(synth, 'remainder'), partOf(synth, 'commitments'), partOf(synth, 'attention'), /999|\u00a3[1-6](?![\d,])/.test(textOf(synth))],
+    [partOf(synth, 'remainder'), partOf(synth, 'commitments'), partOf(synth, 'attention'), /999|\u00a3[1-6](?![\d,])/.test(textOf(glanceOf(synth)))],
     ['\u00a3742 left if the month goes to plan', '\u00a31,120 completed \u00b7 \u00a3680 still ahead', DUE_ONE + ' ' + UNPLACED_ONE, false]);
   check('contract.stale', 'The same figures under any non-ready status show nothing',
     ['boundary_pending', 'schema_not_current', 'clock_month_mismatch', 'invalid_clock', 'invalid_state'].map(s => [ctx.geodeMonthPulseView(parse(synthetic(s))), view(parse(synthetic(s)))]),
