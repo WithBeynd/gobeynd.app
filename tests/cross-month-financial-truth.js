@@ -82,6 +82,10 @@ const PRODUCTION_FUNCTIONS = [
   'geodeNormalizeDebtPaymentEvents', 'geodeDebtPaymentEventSnapshot', 'geodeDebtPaymentOccurrenceYm',
   'geodeDebtPaymentActiveCompletion', 'geodeDebtPaymentEventId', 'geodeRecordDebtPaymentTransition',
   'geodeDebtPaymentYmValid', 'geodeDebtPaymentPointerTarget',
+  // bill settlement ledger (P2-4): evidence on the same payment paths; nothing financial reads it
+  'geodePaymentIsBill', 'geodeBillDueYm', 'geodeBillPaymentEventValid', 'geodeBillPaymentLedger', 'geodeNormalizeBillPaymentEvents',
+  'geodeBillPaymentActiveCompletion', 'geodeBillPaymentEventId', 'geodeBillPaymentEventSnapshot', 'geodeBillPaidOccurrenceYm',
+  'geodeBillCompletedAmount', 'geodeAppendBillCompletion', 'geodeRecordBillPaymentTransition', 'geodeSeedBillPaymentEvents',
   // contribution ledger (FA-3A): captured on the same payment paths; nothing reads it for balances yet
   'geodeNormalizeContributionEvents', 'geodeContributionYmValid', 'geodeContributionYmTrusted', 'geodeContributionEventValid', 'geodeContributionLedger',
   'geodeContributionActiveCompletions', 'geodeContributionActiveCompletion', 'geodeContributionEntityRef',
@@ -252,6 +256,8 @@ function __reload() {
   migratePaymentFlowFields();
   geodeNormalizeGoalInvestBaseFields();
   geodeNormalizeSavingsReleases(S);
+  geodeNormalizeBillPaymentEvents(S);
+  if (!_geodeRuntimeStale) geodeSeedBillPaymentEvents();
   var _geodeInvOpening = _geodeRuntimeStale ? [] : geodeInvestmentLegacyOpeningValues(S);
   if (!_geodeRuntimeStale) {
     if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);
@@ -851,6 +857,7 @@ function harnessFidelity() {
     const load = PROGRAM.structural.load;
     const order = ['geodeNoteFinancialBoot(d);', 'S._schemaVersion = geodePersistedSchemaVersion(p._schemaVersion);', 'geodeNormalizeContributionEvents(S);', 'geodeNormalizeContributionCarry(S);',
       'migratePaymentFlowFields();', 'geodeNormalizeGoalInvestBaseFields();', 'geodeNormalizeSavingsReleases(S);',
+      'geodeNormalizeBillPaymentEvents(S);', 'if (!_geodeRuntimeStale) geodeSeedBillPaymentEvents();',
       'var _geodeInvOpening = _geodeRuntimeStale ? [] : geodeInvestmentLegacyOpeningValues(S);', 'if (!_geodeRuntimeStale) {',
       'if (geodeSchema2Active(S)) geodeSchema2IntegrityReport(S);', RELEASE_GATE, INVESTMENT_GATE, 'syncRecurringPayments();',
       'geodeNormalizeDebtPaymentEvents(S);', 'geodeRecomputeBalancesFromPayments();'];
@@ -6353,6 +6360,298 @@ function p2DebtIdentity() {
   });
 }
 
+function p2BillSettlement() {
+  const bill = (app, name, amount, date, rec, status) => app.contribute({ name, amount, date, status: status || 'upcoming', rec: rec || 'yes' });
+  const billRow = (id, o) => Object.assign({ id, name: 'Rent', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes', lastPaidYM: '',
+    goalId: '', investId: '', debtId: '', payKind: 'bill', createdAt: 1 }, o);
+  /** [type, payment, due month, amount] per stored bill event, in order. */
+  const bev = (app, ids) => (app.state().billPaymentEvents || []).map(e => [e.eventType, (ids && ids[e.paymentId]) || e.paymentId, e.occurrenceYm, e.amount == null ? null : e.amount]);
+  /** A completion's evidence fields. */
+  const proof = e => [e.paymentId, e.amount, e.occurrenceYm, e.dueDateSnapshot, e.recurrenceSnapshot, e.paymentNameSnapshot, e.source, typeof e.recordedAt === 'number'];
+  const completions = app => (app.state().billPaymentEvents || []).filter(e => e.eventType === 'completion');
+  const active = (app, ids) => JSON.parse(app.run('JSON.stringify(geodeBillPaymentLedger(S.billPaymentEvents).active.map(function (e) { return [e.paymentId, e.occurrenceYm, e.amount]; }))'))
+    .map(a => [(ids && ids[a[0]]) || a[0], a[1], a[2]]);
+  const row = (app, id) => app.state().payments.filter(p => p.id === id)[0];
+  const card = () => ({ id: 'dC', name: 'Card', balance: 4000, apr: 20, minp: 50 });
+  const mutate = (app, fn, from, to) => app.run(`(function () {
+    var src = ${fn}.toString();
+    var out = src.replace(${JSON.stringify(from)}, ${JSON.stringify(to)});
+    if (out === src) throw new Error('mutation did not apply');
+    ${fn} = (0, eval)('(' + out + ')');
+  })()`);
+
+  scenario('P2-4 BILL SETTLEMENT — completion, undo, edits and deletion keep durable evidence', () => {
+    const a = new App(baseState(), '2026-06-05');
+    const rent = bill(a, 'Rent', 100, '2026-06-15');
+    a.at('2026-06-10'); a.toggle(rent);
+    const ev = completions(a);
+    invariant('P2.bill.complete', 'Completing a £100 monthly bill due 15 June on 10 June records one completion: its own payment id, £100, due month 2026-06 with the due date captured before the row advanced, monthly, named Rent, from mark_completed; the row still behaves as before (paid, lastPaidYM 2026-06, lastPaidAmount £100, next due 15 July)',
+      [ev.length, proof(ev[0]), [row(a, rent).status, row(a, rent).lastPaidYM, row(a, rent).lastPaidAmount, row(a, rent).date]],
+      [1, [rent, 100, '2026-06', '2026-06-15', 'monthly', 'Rent', 'mark_completed', true], ['paid', '2026-06', 100, '2026-07-15']]);
+
+    const first = JSON.stringify(a.state().billPaymentEvents);
+    a.render(); a.run('save();'); a.reload(); a.render(); a.reload();
+    invariant('P2.bill.reload', 'Render, save and two reloads keep that one event byte-identical: no duplicate', JSON.stringify(a.state().billPaymentEvents) === first, true);
+
+    const e = new App(baseState(), '2026-06-05');
+    const early = bill(e, 'Insurance', 40, '2026-07-01');
+    e.at('2026-06-28'); e.toggle(early);
+    invariant('P2.bill.early', 'A bill due 1 July completed on 28 June is the July occurrence (due date 2026-07-01), not June; the row keeps its own semantics (lastPaidYM 2026-06, next due 1 August)',
+      [bev(e), completions(e)[0].dueDateSnapshot, row(e, early).lastPaidYM, row(e, early).date], [[['completion', early, '2026-07', 40]], '2026-07-01', '2026-06', '2026-08-01']);
+
+    const u = new App(baseState(), '2026-06-05');
+    const r = bill(u, 'Rent', 100, '2026-06-15'), ph = bill(u, 'Phone', 25, '2026-06-20');
+    const ids = { [r]: 'rent', [ph]: 'phone' };
+    u.at('2026-06-21'); u.toggle(r); u.toggle(ph); u.toggle(r);
+    invariant('P2.bill.undo', 'Rent and Phone both completed, then Rent marked not completed: one reversal of Rent\'s June completion is appended (nothing deleted); Phone\'s settlement stays active',
+      [bev(u, ids), active(u, ids), u.state().billPaymentEvents.filter(x => x.eventType === 'reversal').map(x => [x.reversesEventId === completions(u)[0].id, x.source])],
+      [[['completion', 'rent', '2026-06', 100], ['completion', 'phone', '2026-06', 25], ['reversal', 'rent', '2026-06', null]], [['phone', '2026-06', 25]], [[true, 'mark_completed']]]);
+    u.toggle(r);
+    u.reload();
+    invariant('P2.bill.cycle', 'Complete → undo → complete leaves exactly one active Rent settlement for June (the second completion), beside the reversed first, also after reload; the row is due 15 July again',
+      [bev(u, ids).filter(x => x[1] === 'rent'), active(u, ids), row(u, r).date],
+      [[['completion', 'rent', '2026-06', 100], ['reversal', 'rent', '2026-06', null], ['completion', 'rent', '2026-06', 100]], [['phone', '2026-06', 25], ['rent', '2026-06', 100]], '2026-07-15']);
+
+    a.modalEdit(rent, { amount: '150' });
+    a.modalEdit(rent, { name: 'Rent (flat)' });
+    a.reload();
+    invariant('P2.bill.fa4c', 'FA-4C: after completing £100, the template edited to £150 and renamed: the completion stays £100 named Rent, no event is added, the row shows £150 with lastPaidAmount £100',
+      [completions(a).map(proof), a.state().billPaymentEvents.length, [row(a, rent).amount, row(a, rent).lastPaidAmount, row(a, rent).name]],
+      [[[rent, 100, '2026-06', '2026-06-15', 'monthly', 'Rent', 'mark_completed', true]], 1, [150, 100, 'Rent (flat)']]);
+
+    a.del(rent);
+    const afterDelete = [a.state().payments.length, a.state().billPaymentEvents.length];
+    a.reload();
+    invariant('P2.bill.delete', 'Deleting the Rent template removes the row but not its recorded settlement, also after reload', [afterDelete, bev(a)], [[0, 1], [['completion', rent, '2026-06', 100]]]);
+
+    const o = new App(baseState(), '2026-06-05');
+    const vet = bill(o, 'Vet', 80, '2026-06-20', 'no');
+    const gym = bill(o, 'Gym', 200, '2026-06-25', 'annual');
+    const leftBefore = o.snap().left;
+    o.at('2026-06-10'); o.toggle(vet); o.toggle(gym);
+    invariant('P2.bill.oneoff-annual', 'A one-off £80 due 20 June and an annual £200 due 25 June, completed on 10 June: each records its own due month (one_off, annual), the annual row moves to 25 June 2027 exactly as before, and Monthly Left is what the payment rows give (£2,720 both before and after)',
+      [completions(o).map(x => [x.paymentId, x.amount, x.occurrenceYm, x.dueDateSnapshot, x.recurrenceSnapshot]), row(o, gym).date, leftBefore, o.snap().left],
+      [[[vet, 80, '2026-06', '2026-06-20', 'one_off'], [gym, 200, '2026-06', '2026-06-25', 'annual']], '2027-06-25', 2720, 2720]);
+
+    const f = new App(baseState(), '2026-06-05');
+    const paidNow = bill(f, 'Water', 30, '2026-06-03', 'yes', 'paid');
+    const unpaidThenPaid = bill(f, 'Phone', 25, '2026-06-20');
+    f.modalEdit(unpaidThenPaid, { status: 'paid' });
+    f.modalEdit(paidNow, { status: 'upcoming' });
+    invariant('P2.bill.form', 'The payment form records the same evidence: a monthly bill saved paid (due 3 June) and an upcoming bill edited to paid each record their form date\'s month; editing the first back to upcoming reverses it',
+      [bev(f, { [paidNow]: 'water', [unpaidThenPaid]: 'phone' }), f.state().billPaymentEvents.map(x => x.source)],
+      [[['completion', 'water', '2026-06', 30], ['completion', 'phone', '2026-06', 25], ['reversal', 'water', '2026-06', null]], ['payment_form', 'payment_form', 'payment_form']]);
+
+    const l = new App(baseState({ debts: [card()] }), '2026-06-05');
+    const g = l.contribute({ name: 'Holiday', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes', goalId: 'gH' });
+    const i = l.contribute({ name: 'ISA', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes', investId: 'iA' });
+    const d = l.contribute({ intent: 'set', name: 'Card', amount: 50, date: '2026-06-15', status: 'upcoming', rec: 'yes', debtId: 'dC' });
+    l.at('2026-06-15'); l.toggle(g); l.toggle(i); l.toggle(d);
+    invariant('P2.bill.scope', 'Goal, investment and debt rows completed record no bill evidence (their own ledgers record them as before)',
+      [l.state().billPaymentEvents.length, l.events().length, l.state().debtPaymentEvents.length], [0, 2, 1]);
+
+    invariant('P2.bill.modal', 'P1-CLOSE: a £30 monthly bill saved paid with Save pressed twice is one row and one settlement — as one press, also after reload',
+      p1Double(baseState(), p1PayOpen(p1PayForm({ name: 'Gym', amount: 30, date: '2026-06-10', status: 'paid', rec: 'yes' })), 'savePay("")',
+        app => [app.state().payments.length, bev(app).map(x => [x[0], x[2], x[3]])]),
+      p1Thrice([1, [['completion', '2026-06', 30]]]));
+  });
+
+  MODES.forEach(mode => scenario('P2-4 BILL MONTHS — £100 monthly bill through June, July and August [' + mode + ']', () => {
+    const app = new App(baseState(), '2026-06-05');
+    const rent = bill(app, 'Rent', 100, '2026-06-15');
+    app.at('2026-06-10'); app.toggle(rent);
+    const june = bev(app, { [rent]: 'rent' });
+    app.advance('2026-07-02', mode);
+    const july = [bev(app, { [rent]: 'rent' }), row(app, rent).status, row(app, rent).date, app.snap().left];
+    app.at('2026-07-12'); app.toggle(rent);
+    const julyDone = bev(app, { [rent]: 'rent' });
+    app.advance('2026-08-02', mode);
+    invariant('P2.bill.months.' + mode, 'June: one June settlement. July: the row comes back upcoming for 15 July and the June settlement remains (Monthly Left £2,900 from the row); completing July adds a distinct July settlement. August: June and July remain, the row is upcoming for 15 August, and nothing is recorded or inferred for August',
+      [june, july, julyDone, bev(app, { [rent]: 'rent' }), active(app, { [rent]: 'rent' }), row(app, rent).status, row(app, rent).date],
+      [[['completion', 'rent', '2026-06', 100]], [[['completion', 'rent', '2026-06', 100]], 'upcoming', '2026-07-15', 2900],
+        [['completion', 'rent', '2026-06', 100], ['completion', 'rent', '2026-07', 100]],
+        [['completion', 'rent', '2026-06', 100], ['completion', 'rent', '2026-07', 100]], [['rent', '2026-06', 100], ['rent', '2026-07', 100]], 'upcoming', '2026-08-15']);
+  }));
+
+  scenario('P2-4 BILL SMART IMPORT — an imported completed bill records the same evidence', () => {
+    const app = new App(baseState(), '2026-06-20');
+    const rent = bill(app, 'Rent', 100, '2026-06-15');
+    app.smartImport([{ name: 'Plumber', amount: 90, date: '2026-06-10' }, { name: 'Holiday', amount: 60, date: '2026-06-11', link: 'goal:gH' },
+      { name: 'Later', amount: 20, date: '2026-06-25' }, { name: 'Rent', amount: 100, date: '2026-06-15', mergeId: rent }]);
+    app.reload();
+    const plumber = app.state().payments.filter(p => p.name === 'Plumber')[0].id;
+    invariant('P2.bill.import', 'Smart Import: a paid Plumber £90 added as new records a one-off settlement for June 2026 dated with its transaction date; a merge into the upcoming Rent row that completes it records Rent\'s June settlement; a goal-linked import and an upcoming (future) import record no bill evidence — also after reload',
+      [completions(app).map(e => [e.paymentId === plumber ? 'plumber' : e.paymentId === rent ? 'rent' : e.paymentId, e.amount, e.occurrenceYm, e.dueDateSnapshot, e.recurrenceSnapshot, e.source]),
+        app.state().billPaymentEvents.length],
+      [[['plumber', 90, '2026-06', '2026-06-10', 'one_off', 'smart_import'], ['rent', 100, '2026-06', '2026-06-15', 'monthly', 'smart_import']], 2]);
+  });
+
+  scenario('P2-4 BILL SEED — load seeds only the settlement a paid bill row proves', () => {
+    const provable = billRow('s1', { amount: 150, date: '2026-07-15', status: 'paid', lastPaidYM: '2026-06', lastPaidDueDate: '2026-06-15', lastPaidAmount: 100 });
+    const ambiguous = [
+      billRow('a1', { date: '2026-07-15', status: 'paid', lastPaidYM: '2026-06' }),
+      billRow('a2', {}),
+      billRow('a3', { rec: 'no', date: '2026-06-01', status: 'paid' }),
+      billRow('a4', { date: '2026-10-15', status: 'paid', lastPaidYM: '2026-09', lastPaidDueDate: '2026-09-15', lastPaidAmount: 100 }),
+      billRow('a5', { date: '2026-07-15', status: 'paid', lastPaidYM: 'June', lastPaidDueDate: '2026-06-15' }),
+      billRow('a6', { date: '2026-07-15', status: 'paid', lastPaidYM: '2026-06', lastPaidDueDate: 'soon' }),
+      billRow('a7', { date: '2026-07-15', status: 'paid', lastPaidYM: '2026-06', lastPaidDueDate: '2026-06-15', debtId: 'dC', payKind: 'debt' })
+    ];
+    const seeded = new App(baseState({ debts: [card()], payments: [provable].concat(ambiguous) }), '2026-06-20');
+    invariant('P2.bill.seed', 'A paid monthly bill with a trusted lastPaidYM 2026-06 and the due date it settled (15 June) seeds exactly one settlement: June, £100 (its lastPaidAmount, not the £150 template), source migration; nothing else is reconstructed',
+      completions(seeded).map(proof), [['s1', 100, '2026-06', '2026-06-15', 'monthly', 'Rent', 'migration', true]]);
+    invariant('P2.bill.seed.ambiguous', 'Rows that do not prove a due period seed nothing: paid without lastPaidDueDate, unpaid, a paid one-off, a future lastPaidYM, a malformed lastPaidYM, a malformed due date, and a debt-linked row',
+      seeded.state().billPaymentEvents.filter(e => e.paymentId !== 's1').length, 0);
+    const once = JSON.stringify(seeded.state().billPaymentEvents);
+    seeded.reload(); seeded.reload(); seeded.run('save();'); seeded.reload();
+    const sameAfterReloads = JSON.stringify(seeded.state().billPaymentEvents) === once;
+    seeded.advance('2026-07-02', 'reload'); seeded.reload();
+    invariant('P2.bill.seed.idempotent', 'Three reloads and a save keep the seeded event byte-identical; the July load resets the row and seeds nothing more; the June settlement remains',
+      [sameAfterReloads, bev(seeded), row(seeded, 's1').status], [true, [['completion', 's1', '2026-06', 100]], 'upcoming']);
+
+    const july = new App(baseState({ payments: [provable] }), '2026-07-02');
+    const annual = new App(baseState({ payments: [billRow('y1', { name: 'TV licence', amount: 170, rec: 'annual', date: '2027-03-10', status: 'paid', lastPaidYM: '2026-03', lastPaidDueDate: '2026-03-10', lastPaidAmount: 170 })] }), '2026-06-20');
+    const witnessed = new App(baseState({ payments: [provable], billPaymentEvents: [
+      { id: 'bpe_x_c1', eventType: 'completion', paymentId: 's1', amount: 100, occurrenceYm: '2026-06', dueDateSnapshot: '2026-06-15', recordedAt: 1, source: 'mark_completed' },
+      { id: 'bpe_x_r1', eventType: 'reversal', paymentId: 's1', occurrenceYm: '2026-06', reversesEventId: 'bpe_x_c1', recordedAt: 2, source: 'mark_completed' }] }), '2026-06-20');
+    invariant('P2.bill.seed.cases', 'First loaded in July, the paid June row seeds June before recurrence resets it; a paid annual bill seeds its March occurrence once; a payment the ledger has already seen (reversed June) is not seeded again',
+      [bev(july), row(july, 's1').status, bev(annual), bev(witnessed)],
+      [[['completion', 's1', '2026-06', 100]], 'upcoming', [['completion', 'y1', '2026-03', 170]], [['completion', 's1', '2026-06', 100], ['reversal', 's1', '2026-06', null]]]);
+
+    const ledger = new App(baseState(), '2026-06-20');
+    const list = [
+      { id: 'c1', eventType: 'completion', paymentId: 'p', amount: 10, occurrenceYm: '2026-06', recordedAt: 1 },
+      { id: 'c2', eventType: 'completion', paymentId: 'p', amount: 10, occurrenceYm: '2026-06', recordedAt: 2 },
+      { id: 'c3', eventType: 'completion', paymentId: 'p', amount: 10, occurrenceYm: '2026-06', recordedAt: 3 },
+      { id: 'r1', eventType: 'reversal', paymentId: 'p', occurrenceYm: '2026-07', reversesEventId: 'c1', recordedAt: 4 },
+      { id: 'r2', eventType: 'reversal', paymentId: 'p', occurrenceYm: '2026-06', reversesEventId: 'c1', recordedAt: 5 },
+      { id: 'r3', eventType: 'reversal', paymentId: 'p', occurrenceYm: '2026-06', reversesEventId: 'c1', recordedAt: 6 },
+      {}, { id: 'z', eventType: 'completion', paymentId: 'p', amount: 0, occurrenceYm: '2026-08', recordedAt: 7 },
+      { id: 'c1', eventType: 'completion', paymentId: 'q', amount: 5, occurrenceYm: '2026-06', recordedAt: 8 }];
+    ledger.ctx.__list = JSON.stringify(list);
+    invariant('P2.bill.normalise', 'The ledger rules: a reversal counts only for its completion\'s payment and month, once; at most one active completion per payment and month (earliest); invalid, zero-amount and duplicate-id events are dropped',
+      JSON.parse(ledger.run('(function () { var l = geodeBillPaymentLedger(JSON.parse(__list)); return JSON.stringify([l.kept.map(function (e) { return e.id; }), l.active.map(function (e) { return e.id; })]); })()')),
+      [['c1', 'c2', 'r2'], ['c2']]);
+  });
+
+  scenario('P2-4 BILL AUTHORITY — the ledger never moves Monthly Left or a position', () => {
+    const app = new App(baseState({ debts: [card()] }), '2026-06-05');
+    const rent = bill(app, 'Rent', 100, '2026-06-15'), vet = bill(app, 'Vet', 80, '2026-06-20', 'no'), gym = bill(app, 'Gym', 200, '2026-06-25', 'annual');
+    const g = app.contribute({ name: 'Holiday', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes', goalId: 'gH' });
+    const i = app.contribute({ name: 'ISA', amount: 100, date: '2026-06-15', status: 'upcoming', rec: 'yes', investId: 'iA' });
+    const d = app.contribute({ intent: 'set', name: 'Card', amount: 50, date: '2026-06-15', status: 'upcoming', rec: 'yes', debtId: 'dC' });
+    app.at('2026-06-16'); [rent, gym, g, i, d].forEach(id => app.toggle(id));
+    const look = () => JSON.parse(app.run('geodeRecomputeBalancesFromPayments(); (function () { var s = JSON.parse(__snapshot()); return JSON.stringify([s.left, s.leftConfirmed, s.goal, s.inv, S.debts.map(function (x) { return x.balance; }), s.rows.map(function (r) { return r.countsInMonthlyLeft; })]); })()'));
+    const withLedger = look();
+    app.run('var __keepBills = S.billPaymentEvents; S.billPaymentEvents = [];');
+    const empty = look();
+    app.run('delete S.billPaymentEvents;');
+    const absent = look();
+    const forged = [];
+    app.state().payments.forEach(p => ['2026-05', '2026-06', '2026-07'].forEach((ym, n) => forged.push({ id: 'f_' + p.id + n, eventType: 'completion', paymentId: p.id, amount: 9999, occurrenceYm: ym, recordedAt: n })));
+    app.ctx.__forged = JSON.stringify(forged);
+    app.run('S.billPaymentEvents = JSON.parse(__forged);');
+    const flooded = look();
+    app.run('S.billPaymentEvents = __keepBills;');
+    invariant('P2.bill.monthly-left', 'Monthly Left (and its confirmed-only form) and each row\'s Monthly Left inclusion are identical with the recorded ledger, an empty ledger, no ledger key and a forged ledger settling every row in May–July at £9,999',
+      [empty, absent, flooded].map(x => [x[0], x[1], x[5]]), [0, 1, 2].map(() => [withLedger[0], withLedger[1], withLedger[5]]));
+    invariant('P2.bill.positions', 'Holiday, ISA and Card are the same under all four ledgers: the bill ledger cannot change a goal, investment or debt position',
+      [empty, absent, flooded].map(x => [x[2], x[3], x[4]]), [0, 1, 2].map(() => [withLedger[2], withLedger[3], withLedger[4]]));
+
+    const src = PROGRAM.src;
+    const bodies = [];
+    const decl = /\nfunction ([A-Za-z_$][\w$]*)\(/g;
+    let m;
+    while ((m = decl.exec(src))) {
+      const start = m.index + 1, firstLine = src.slice(start, src.indexOf('\n', start));
+      const opens = (firstLine.match(/\{/g) || []).length, closes = (firstLine.match(/\}/g) || []).length;
+      const end = opens > 0 && opens === closes && /\}\s*$/.test(firstLine) ? start + firstLine.length : src.indexOf('\n}', start);
+      bodies.push([m[1], src.slice(start, end)]);
+    }
+    const users = needle => [...new Set(bodies.filter(b => b[1].indexOf(needle) >= 0).map(b => b[0]))].sort();
+    invariant('P2.bill.readers', 'Functions that mention the bill ledger: only the ledger family and the backup whitelist; functions that call into it: the family, load (normalise + seed), togglePay, the payment form and Smart Import — no Monthly Left, recompute, goal, investment or debt function',
+      [users('billPaymentEvents'), users('BillPayment')],
+      [['geodeAppendBillCompletion', 'geodeBeyndBackupRestorableKeyWhitelist', 'geodeBillPaymentActiveCompletion', 'geodeBillPaymentEventId', 'geodeNormalizeBillPaymentEvents',
+        'geodeRecordBillPaymentTransition', 'geodeSeedBillPaymentEvents'],
+      ['geodeAppendBillCompletion', 'geodeBillPaymentActiveCompletion', 'geodeBillPaymentEventId', 'geodeBillPaymentEventSnapshot', 'geodeBillPaymentEventValid', 'geodeBillPaymentLedger',
+        'geodeNormalizeBillPaymentEvents', 'geodeRecordBillPaymentTransition', 'geodeSavePayApply', 'geodeSeedBillPaymentEvents', 'geodeSmartImportConfirm', 'load', 'togglePay']]);
+    invariant('P2.bill.schema', 'Schema stays 2 with the additive list; the backup whitelist carries it', [app.state()._schemaVersion, app.run('geodeBeyndBackupRestorableKeyWhitelist().indexOf("billPaymentEvents") >= 0')], [2, true]);
+  });
+
+  scenario('P2-4 BILL REGRESSION — P2-1 fence, P2-2 hold and P2-3 debt identity', () => {
+    const st = new App(baseState(), '2026-06-05');
+    const rent = bill(st, 'Rent', 100, '2026-06-15');
+    const body = JSON.parse(rawStore(st));
+    body.income = 3333;
+    body._rev = { seq: body._rev.seq + 3, id: 'rev_bill_other', by: 'v1.0.77', at: 9 };
+    const foreign = JSON.stringify(body);
+    foreignStore(st, foreign);
+    st.at('2026-06-10'); st.toggle(rent);
+    const refused = [rawStore(st) === foreign, (JSON.parse(rawStore(st)).billPaymentEvents || []).length, staleState(st), relWarnings(st)];
+    st.run('__reload();');
+    invariant('P2.bill.stale', 'A bill completed in a tab another window has overtaken is refused by the P2-1 fence: the other window\'s text stays stored with no bill evidence; after reload the page adopts it (income £3,333, Rent upcoming, no settlement)',
+      [refused, st.state().income, row(st, rent).status, bev(st)], [[true, 0, ['foreign', 'foreign'], ['stale:foreign']], 3333, 'upcoming', []]);
+
+    const f = p1rFixture('P2');
+    const held = JSON.parse(JSON.stringify(f.state));
+    held.payments.push(billRow('bR', { date: '2026-09-15', status: 'paid', lastPaidYM: '2026-08', lastPaidDueDate: '2026-08-15', lastPaidAmount: 100 }),
+      billRow('bP', { name: 'Phone', amount: 25, date: '2026-08-20' }));
+    const page = p1rPage(held, '2026-09-02', P1R_PREVIOUS);
+    const atLoad = [bev(page), row(page, 'bR').status, row(page, 'bP').date];
+    page.toggle('bP');
+    const afterToggle = bev(page);
+    page.advance('2026-10-02', 'reload'); page.advance('2026-11-02', 'reload');
+    const months = bev(page);
+    p1rReady(page); page.reload(); page.reload();
+    invariant('P2.bill.hold', 'v1.0.76 data first loaded in September with the boundary held: the paid August Rent row is held paid and seeds only its August settlement; completing the held Phone (still due 20 August) records August, not September; October and November held loads add nothing; the ready load resets the rows and keeps exactly those two settlements',
+      [atLoad, afterToggle, months, bev(page), [row(page, 'bR').status, row(page, 'bP').status]],
+      [[[['completion', 'bR', '2026-08', 100]], 'paid', '2026-08-20'], [['completion', 'bR', '2026-08', 100], ['completion', 'bP', '2026-08', 25]],
+        [['completion', 'bR', '2026-08', 100], ['completion', 'bP', '2026-08', 25]], [['completion', 'bR', '2026-08', 100], ['completion', 'bP', '2026-08', 25]], ['upcoming', 'upcoming']]);
+
+    const dbt = new App(baseState({ debts: [card()] }), '2026-06-05');
+    const m50 = dbt.contribute({ intent: 'set', name: 'Card monthly', amount: 50, date: '2026-06-15', status: 'upcoming', rec: 'yes', debtId: 'dC' });
+    const o100 = dbt.contribute({ intent: 'set', name: 'Card extra', amount: 100, date: '2026-06-20', status: 'upcoming', rec: 'no', debtId: 'dC' });
+    const water = bill(dbt, 'Water', 30, '2026-06-15');
+    dbt.at('2026-06-20'); dbt.toggle(m50); dbt.toggle(water); dbt.merge();
+    invariant('P2.bill.debt', 'P2-3 unchanged beside bills: the £50 monthly and £100 one-off card payments stay two rows; completing the monthly writes one debt event and no bill event; completing the Water bill writes one bill event and no debt event; Card stays £4,000',
+      [m50 !== o100, dbt.state().payments.filter(p => p.debtId === 'dC').map(p => [p.rec, p.amount]).sort(), dbt.state().debtPaymentEvents.map(e => e.paymentId === m50),
+        bev(dbt).map(e => e[1] === water), dbt.state().debts[0].balance],
+      [true, [['no', 100], ['yes', 50]], [true], [true], 4000]);
+  });
+
+  scenario('P2-4 BILL MUTATIONS — each guard is what produces its result', () => {
+    const toggled = () => { const app = new App(baseState(), '2026-06-05'); const id = bill(app, 'Rent', 100, '2026-06-15'); app.at('2026-06-10'); return [app, id]; };
+
+    const [a, ar] = toggled();
+    mutate(a, 'togglePay', "geodeRecordBillPaymentTransition(_bpeBefore, p, 'mark_completed');", '');
+    a.toggle(ar);
+    invariant('P2.bill.mut.record', 'Without the togglePay call, completing Rent records nothing — that call is the evidence source', a.state().billPaymentEvents.length, 0);
+
+    const [b, br] = toggled();
+    mutate(b, 'geodeRecordBillPaymentTransition', "source === 'mark_completed' && before ? before.date : after.date", 'after.date');
+    b.toggle(br);
+    invariant('P2.bill.mut.due', 'Reading the due date after togglePay advanced the row records July for a June completion — capturing it before the advance is what keeps June', bev(b).map(e => e[2]), ['2026-07']);
+
+    const [c, cr] = toggled();
+    mutate(c, 'geodeRecordBillPaymentTransition', 'if (!before.bill) return;', 'return;');
+    c.toggle(cr); c.toggle(cr);
+    invariant('P2.bill.mut.reverse', 'Without the reversal branch, undo leaves the June settlement active — the reversal is what withdraws it', active(c).length, 1);
+
+    const future = billRow('a4', { date: '2026-10-15', status: 'paid', lastPaidYM: '2026-09', lastPaidDueDate: '2026-09-15', lastPaidAmount: 100 });
+    const d = new App(baseState({ payments: [future] }), '2026-06-20', undefined, { boot: false });
+    mutate(d, 'geodeSeedBillPaymentEvents', "!geodeContributionYmTrusted(String(p.lastPaidYM || ''))", '!geodeContributionYmValid(String(p.lastPaidYM || \'\'))');
+    d.reload();
+    invariant('P2.bill.mut.seed', 'Accepting an untrusted (future) lastPaidYM seeds a September settlement that never happened — the trust check is what refuses it', bev(d), [['completion', 'a4', '2026-09', 100]]);
+
+    const e = new App(baseState(), '2026-06-05');
+    const er = bill(e, 'Rent', 100, '2026-06-15');
+    mutate(e, 'geodeAppendBillCompletion', 'if (existing) return existing;', '');
+    e.at('2026-06-10'); e.toggle(er);
+    e.call('geodeRecordBillPaymentTransition', [{ id: er, status: 'upcoming', date: '2026-06-15', lastPaidDueDate: '', bill: true }, JSON.parse(e.run('JSON.stringify(S.payments[0])')), 'mark_completed']);
+    invariant('P2.bill.mut.once', 'Without the one-active check, recording the same June completion again appends a second completion — the check is what keeps one', completions(e).length, 2);
+  });
+}
+
 function p2RevisionFence() {
   const UNFENCED_LOG = '? [geode] unfenced financial write observed; this write proceeds';
   const pageOn = (raw, clock) => {
@@ -6510,7 +6809,7 @@ function main() {
   fa7dLinkedGoals();
   p1Close();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
-  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2DebtIdentity(); p2RevisionFence(); p1RelOldWriter();
+  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2DebtIdentity(); p2BillSettlement(); p2RevisionFence(); p1RelOldWriter();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');
