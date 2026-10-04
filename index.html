@@ -3710,11 +3710,11 @@ function geodeMicroConfirmPickMessage(kind, extras) {
   if (kind === 'import') {
     var nImp = Number(extras.added) || 0;
     if (nImp <= 0) return fb;
-    return pick(['Saved to your plan.', 'Added to your plan.', 'Recorded for this month.'], nImp);
+    return pick(['Saved to your plan.', 'Added to your plan.', 'Plan updated for this month.'], nImp);
   }
   if (kind === 'expense') {
     return pick(
-      ['Spending saved for this month.', 'Saved to your plan.', 'Recorded for this month.'],
+      ['Expense plan saved.', 'Saved to your plan.', 'Plan updated for this month.'],
       extras._seed
     );
   }
@@ -3725,18 +3725,18 @@ function geodeMicroConfirmPickMessage(kind, extras) {
       }
       return '';
     }
-    if (extras.goalId) return 'Recorded for this month.';
-    if (extras.investId) return 'Recorded for this month.';
+    // Completed goal and investment rows are announced by geodeEmitPaymentCompletionFeedback; only plans reach here.
+    if (extras.goalId || extras.investId) return 'Contribution scheduled.';
     return 'Saved to your plan.';
   }
   if (kind === 'goal_dep') {
     return 'Recorded for this month.';
   }
   if (kind === 'goal') {
-    return pick(['Saved to your plan.', 'Recorded for this month.'], extras._seed);
+    return pick(['Saved to your plan.', 'Goal updated in your plan.'], extras._seed);
   }
   if (kind === 'invest') {
-    return pick(['Saved to your plan.', 'Recorded for this month.'], extras._seed);
+    return pick(['Saved to your plan.', 'Investment updated in your plan.'], extras._seed);
   }
   if (kind === 'income') {
     return pick(['Saved to your plan.', 'Income updated for this month.'], extras._seed);
@@ -3784,7 +3784,7 @@ function geodeStageLProgressSignal() {
     var _nwProg = computeSnapshotFigures().netWorth;
     if (_nwProg < 0) return 'Your current position is driven by debt. Focus on reducing it.';
     if (_nwProg > 0) return 'You\u2019re building a positive financial position. Keep momentum.';
-    return 'Your position updates as you log spending and contributions.';
+    return 'Your position updates as you add contributions and balances.';
   }
   var trendHtml = getTrendSummary(true);
   if (trendHtml) {
@@ -7318,7 +7318,7 @@ function geodeCoachingLineForDelta(delta, linkKind) {
     };
   if (linkKind === 'goal')
     return {
-      line: 'Link payments when you want this to affect cash flow.',
+      line: 'Link a payment when you want this to count in your monthly plan.',
       why: 'Scheduled outflows reduce what is left this month, but they move money toward the goal you linked.'
     };
   if (delta <= -0.5)
@@ -12201,11 +12201,11 @@ function geodePlanBufferStepDisplay(step) {
     return {
       label: 'Add expenses to size your safety buffer',
       explainLine:
-        'Add monthly expenses first so Beynd can estimate a realistic buffer. A provisional slice from spare cash this month is ' +
+        'Add monthly expenses first so Beynd can estimate a realistic buffer. For now, your plan suggests ' +
         sug +
-        ' — not a fully sized target yet.',
+        ' this month. It isn\u2019t a fully sized target yet.',
       amountStr: sug,
-      amountCaption: 'Spare-cash slice (not a sized target yet)'
+      amountCaption: 'From your plan (not a sized target yet)'
     };
   }
   if (st === 'BUFFER_IN_PROGRESS_ESTIMATED') {
@@ -12215,7 +12215,7 @@ function geodePlanBufferStepDisplay(step) {
         'Based on your monthly expenses (~' +
         fm(bufTarget) +
         (hasUserBufTarget ? ' buffer target' : ' for about 3 months') +
-        '). You\u2019ve already started building this buffer. Suggested from spare cash this month: ' +
+        '). You\u2019ve already started building this buffer. Suggested by your plan this month: ' +
         sug +
         '.',
       amountStr: sug,
@@ -12229,7 +12229,7 @@ function geodePlanBufferStepDisplay(step) {
         'Based on your monthly expenses (~' +
         fm(bufTarget) +
         (hasUserBufTarget ? ' buffer target' : ' for about 3 months') +
-        '). Suggested from spare cash this month: ' +
+        '). Suggested by your plan this month: ' +
         sug +
         '.',
       amountStr: sug,
@@ -12240,7 +12240,7 @@ function geodePlanBufferStepDisplay(step) {
     return {
       label: step.label,
       explainLine:
-        'Your buffer target is ' + fm(bufTarget) + '. Suggested from spare cash this month: ' + sug + '.',
+        'Your buffer target is ' + fm(bufTarget) + '. Suggested by your plan this month: ' + sug + '.',
       amountStr: null,
       amountCaption: 'toward your buffer target'
     };
@@ -12358,7 +12358,7 @@ function geodeBufferActionCopy(state) {
     out.planPartialHeadline = scheduled ? 'Your buffer is still building' : 'Your buffer is a layer of stability worth building';
     out.mainSub = scheduled
       ? 'Your scheduled contribution counts toward this step.'
-      : 'Estimated from your spending. Keep the momentum.';
+      : 'Estimated from your planned expenses. Keep the momentum.';
     out.modalHeading = scheduled ? 'Add to buffer' : 'Add emergency buffer';
   } else if (readiness === 'BUFFER_ESTIMATABLE') {
     out.cardSub = 'Based on your monthly expenses.';
@@ -12581,7 +12581,7 @@ function geodePlanInvestStepDisplay(step) {
       explainLine:
         'You already have portfolio activity. Prioritise essentials, buffer, and high-cost debt before increasing this slice.',
       amountStr: amountStr,
-      amountCaption: amountStr ? null : 'Already investing. Use spare cash carefully'
+      amountCaption: amountStr ? null : 'Already investing. Use plan room carefully'
     };
   }
   return {
@@ -16286,7 +16286,7 @@ function getCoreNudges(state) {
         variants: [
           'Continue building your estimated buffer — you\u2019ve already started.',
           'You\u2019ve already started building this buffer — keep the momentum.',
-          'Estimated from your spending — add an emergency goal when you want a fixed target.'
+          'Estimated from your planned expenses. Add an emergency goal when you want a fixed target.'
         ]
       });
     } else if (br === 'BUFFER_ESTIMATABLE') {
@@ -16294,19 +16294,19 @@ function getCoreNudges(state) {
       var est3 = moE * 3;
       var safetyMsg2 =
         ctx === 'tight'
-          ? 'No emergency goal on file yet — rough buffer from spending is about ' +
+          ? 'No emergency goal yet. Based on your planned expenses, a rough buffer is about ' +
             fm(est3) +
             ' (about 3× monthly expenses).'
-          : 'Rough buffer from spending is about ' +
+          : 'Based on your planned expenses, a rough buffer is about ' +
             fm(est3) +
-            ' (about 3× monthly expenses) — add a goal when you want a fixed target.';
+            ' (about 3× monthly expenses). Add a goal when you want a fixed target.';
       add({
         title: 'Safety buffer',
         message: safetyMsg2,
         type: ctx === 'tight' ? 'warning' : 'neutral',
         topic: 'safety',
         variants: [
-          'Estimated from your spending — add an emergency goal when you want a fixed target.',
+          'Estimated from your planned expenses. Add an emergency goal when you want a fixed target.',
           'This is an expense-based estimate, not a goal you have created yet.',
           'A small buffer reduces the chance of needing new debt after unexpected costs.'
         ]
@@ -16326,7 +16326,7 @@ function getCoreNudges(state) {
       msg = g.name + ' is at risk of missing its date without a small top-up soon.';
     }
     if (g.isPrimary && ctx === 'tight') {
-      msg = g.name + ' still matters — once cash flow is steadier, even small adds help.';
+      msg = g.name + ' still matters. Once your plan has a bit more room, even small adds help.';
     }
     add({
       title: g.isPrimary ? 'Priority goal' : 'Goals',
@@ -16353,7 +16353,7 @@ function getCoreNudges(state) {
           topic: 'cash_in_motion',
           variants: [
             'Your money is moving with intention — that builds real progress.',
-            'Directed spare cash often beats cash that is still open to decide.',
+            'Money with a job to do tends to go further than money still waiting on a decision.',
             'You\u2019re steering cash on purpose — consistency turns that into momentum.'
           ]
         });
@@ -16496,7 +16496,7 @@ function getIntentAwareNudges(state) {
       nudge: {
         title: 'Priority under pressure',
         message:
-          'You are funding a non-essential goal while cash is tight — stabilising your budget first may make progress easier to sustain.',
+          'You\u2019re funding a non-essential goal while your plan is tight. Steadying the basics first may make progress easier to keep up.',
         type: 'warning',
         topic: 'goal_budget_tension'
       }
@@ -16511,16 +16511,16 @@ function getIntentAwareNudges(state) {
       nudge: {
         title: 'Priority goal waiting',
         message:
-          'You still have room this month, but your focus goal "' +
+          'Your plan still has room this month, but your focus goal "' +
           pnm +
           '" has not been funded recently.',
         type: 'opportunity',
         topic: 'priority_goal_gap',
         goalStatusWhy: gapWhy,
         variants: [
-          'You still have room this month, but your focus goal "' + pnm + '" has not been funded recently.',
-          'There is spare capacity this month, while your focus goal "' + pnm + '" has not seen a contribution lately.',
-          'You have room in your plan this month, but "' + pnm + '" — your focus goal — has not received funds in recent updates.'
+          'Your plan still has room this month, but your focus goal "' + pnm + '" has not been funded recently.',
+          'Your plan has some room this month, and your focus goal "' + pnm + '" has not had a contribution lately.',
+          'There\u2019s room in your plan this month, but your focus goal "' + pnm + '" has not had any funds lately.'
         ]
       }
     });
@@ -16529,15 +16529,15 @@ function getIntentAwareNudges(state) {
     candidates.push({
       topic: 'income_allocation_gap',
       nudge: {
-        title: 'New room in your budget',
+        title: 'New room in your plan',
         message:
-          'You have created more room this month, but it is not yet being directed toward debt, goals, or investing.',
+          'Your plan has more room this month, but it isn\u2019t going toward debt, goals, or investing yet.',
         type: 'opportunity',
         topic: 'income_allocation_gap',
         variants: [
-          'You have created more room this month, but it is not yet being directed toward debt, goals, or investing.',
-          'Your income has increased this month, but spare capacity is not yet flowing toward debt, goals, or investing.',
-          'You have more slack after income changed, but it is not yet allocated to debt, goals, or investing.'
+          'Your plan has more room this month, but it isn\u2019t going toward debt, goals, or investing yet.',
+          'Your planned income went up, but the extra room isn\u2019t going toward debt, goals, or investing yet.',
+          'Your plan has more room since your income changed, but it isn\u2019t set aside for debt, goals, or investing yet.'
         ]
       }
     });
@@ -18096,7 +18096,7 @@ function geodeChooseHomePrimary(pool, latest, latestKind, pressure) {
       message: 'Keep essential spending low while income is paused.',
       type: 'neutral',
       topic: 'misc',
-      explain: 'With no income on file, Beynd highlights pressure and essentials rather than spare-cash allocation.'
+      explain: 'With no income on file, Beynd highlights pressure and essentials rather than splitting plan room.'
     };
   }
   if (pressure === 'strong') {
@@ -18203,7 +18203,7 @@ function geodeMaybeAppendNudgeWit(msg, src, pressure) {
   var daySeed = new Date().getDate() + (t.length || 0);
   if (daySeed % 4 !== 0) return msg;
   var line = '';
-  if (t === 'opportunity' || t === 'invest_gap') line = ' Spare cash is nicer with a plan.';
+  if (t === 'opportunity' || t === 'invest_gap') line = ' Room in a plan works best with a job to do.';
   else if (t === 'debt') line = ' Steady beats dramatic.';
   else if (t === 'safety') line = ' Your buffer is small, but it\u2019s trying.';
   return msg + line;
@@ -23894,7 +23894,7 @@ function geodePlanPageStepTitle(step, prog) {
     if (ph === 'done') return 'Investing';
     if (ph === 'partial') return 'Keep investing';
     if (stInv === 'NONE' || stInv === 'NOT_STARTED') return 'Start investing';
-    return 'Invest spare cash';
+    return 'Invest what your plan leaves';
   }
   return String((step && step.label) || '').trim();
 }
@@ -23911,7 +23911,7 @@ function geodePlanPageOneLineExplain(step) {
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return n.slice(0, 130) || 'Suggested from your spare cash this month.';
+  return n.slice(0, 130) || 'Suggested by your plan this month.';
 }
 
 /** Plan tab: resolve worst-debt row for a high-interest reduction step (display-only). */
@@ -24478,7 +24478,7 @@ function geodePlanPageInvestPriorityBodyHtml(step, invDisp, prog) {
     }
   } else {
     bLine =
-      'This is optional spare-cash guidance, not a commitment.' +
+      'This is optional guidance from your plan, not a commitment.' +
       (invName ? ' \u00b7 ' + invName : '') +
       '.';
   }
@@ -24526,7 +24526,7 @@ function geodePlanPageInvestPriorityBodyHtml(step, invDisp, prog) {
     '<div class="detail-copy">' +
     escHtmlLite(
       geodeHomeInsightShortLine(
-        dText || 'After basics, investing puts spare cash to work.',
+        dText || 'After the basics, investing puts what your plan leaves to work.',
         115
       )
     ) +
@@ -24665,7 +24665,7 @@ function geodePlanPageNonDebtExplainHtml(step, bufDisp, invDisp, prog) {
   if (!rawParts.length) {
     return (
       '<div class="detail-note detail-note--soft">' +
-      escHtmlLite('Suggested from spare cash this month.') +
+      escHtmlLite('Suggested by your plan this month.') +
       '</div>'
     );
   }
@@ -24893,7 +24893,7 @@ function geodePlanPageStatusSectionHtml(optSkipNegDup) {
   if (totalS <= 0) {
     headline = 'Little to allocate this month';
     col = '#34d5a0';
-    why = 'No large spare-cash amounts to allocate right now \u2014 the order below shows where things go when cash appears.';
+    why = 'Your plan doesn\u2019t leave much to split right now. The order below shows where things go once there\u2019s room.';
   } else if (meaningfulCount > 0 && doneCount === meaningfulCount) {
     headline = 'Plan complete for this month';
     col = '#34d5a0';
@@ -25008,8 +25008,8 @@ function geodeOverBudgetPlanBlockHtml(left) {
   h += '<div class="overbudget-amount">' +
     escHtmlLite('\u2212' + fm(over)) + '</div>';
   h += '<div class="overbudget-copy">' +
-    escHtmlLite('Based on what\u2019s entered, scheduled payments and expenses exceed income by ' + fm(over) + ' this month. ' +
-    'Goals and debt steps will show once the picture is back in balance.') + '</div>';
+    escHtmlLite('Based on what\u2019s entered, your planned payments and expenses come to ' + fm(over) + ' more than your planned income this month. ' +
+    'Goals and debt steps will show once the plan is back in balance.') + '</div>';
   h += '</div>';
 
   // Spending breakdown — show top categories by monthly total
@@ -25017,7 +25017,7 @@ function geodeOverBudgetPlanBlockHtml(left) {
     var flexCats = geodeAskBeyndFlexibleSpendingCategories(S, 5);
     if (flexCats.length > 0) {
       h += '<div class="overbudget-section">';
-      h += '<div class="detail-kicker">Your spending breakdown</div>';
+      h += '<div class="detail-kicker">Your planned expenses</div>';
       h += '<div class="overbudget-breakdown">';
       var totalExpense = 0;
       var fi;
@@ -25332,7 +25332,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
       whyShort =
         String(step.label || '').indexOf('Reduce high') === 0
           ? 'Based on what you entered, this debt is where Beynd sees the strongest interest drag right now.'
-          : 'Based on what you entered, Beynd is steering spare cash toward this balance in your debt-focused plan.';
+          : 'Based on what you entered, your debt-focused plan points its spare room at this balance.';
     }
   } else if (detailBuffer) {
     var bufWhyPlain = geodePlanPagePlainStepText(step.why);
@@ -25359,7 +25359,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     }
   } else if (detailInvest) {
     whyShort =
-      'Beynd shows this after earlier plan steps because debt, buffer, and goal needs are ordered ahead in this month\u2019s sequence. This is a planning prompt to review spare cash, not a recommendation to buy an investment.';
+      'Beynd shows this after earlier plan steps because debt, buffer, and goal needs are ordered ahead in this month\u2019s sequence. This is a prompt to review what your plan leaves, not a recommendation to buy an investment.';
   } else {
     whyShort = whySrc
       ? geodeHomeInsightShortLine(whySrc, 200)
@@ -25594,7 +25594,7 @@ function geodePlanStepDetailPageHtml(plan, ix) {
     var invSchedDet = invBasisDet.scheduled;
     var invSchedOnly = invSchedDet > 0 && invPaidDet <= 0;
     var invImpactNote =
-      'This is optional spare-cash guidance. Beynd uses what you entered, not a forecast.';
+      'This is optional guidance from your plan. Beynd uses what you entered, not a forecast.';
     if (invSugDet > 0 || invBasisDet.committed > 0) {
       if (invSugDet > 0) {
         h +=
@@ -26411,10 +26411,10 @@ function geodePlanPageHowPlanWorksSectionHtml() {
     k === 'debt'
       ? 'Debt-focused style surfaces APR 5%+ debt before goals and new investing; APR above 10% still leads.'
       : k === 'growth'
-        ? 'Growth style tilts spare cash toward goals and investing once basics are covered.'
-        : 'Balanced style spreads spare cash across debt paydown, buffer, goals, and investing.';
+        ? 'Growth style tilts what your plan leaves toward goals and investing once basics are covered.'
+        : 'Balanced style spreads what your plan leaves across debt paydown, buffer, goals, and investing.';
   var sliceShort =
-    'Rough split for leftover cash with this style: debt ~' +
+    'Rough split of what your plan leaves with this style: debt ~' +
     pct(cfg.debtRatio) +
     '%, buffer ~' +
     pct(cfg.emergencyCapRatio) +
@@ -27204,8 +27204,8 @@ function geodePlanDetailSummaryContinuityLine(step, prog, opts) {
     }
   }
   if (isInvest) {
-    if (suggested <= 0) return 'Optional when spare cash appears this month.';
-    return 'Optional spare-cash guidance for this month.';
+    if (suggested <= 0) return 'Optional once your plan has room this month.';
+    return 'Optional guidance from your plan this month.';
   }
   if (isBuffer) return 'Buffer room for this month.';
   if (isGoal) return 'Goal progress from this month\u2019s plan room.';
@@ -38141,10 +38141,11 @@ function rHome() {
       var col = g.col || '#9b7fe8';
       h +=
         '<div data-geode-css="background:var(--bg-surface);border:1px solid var(--bd);border-radius:18px;padding:16px;margin-bottom:8px;cursor:pointer" onclick="goTab(\'goals\')">';
-      if (dLeft !== null) {
+      var _fgDateLb = geodeGoalTargetDateLabel(dLeft, Number(g.amount) > 0 && gEffH >= Number(g.amount), false);
+      if (_fgDateLb) {
         h +=
           '<div data-geode-css="display:inline-flex;align-items:center;background:rgba(155,127,232,0.12);border:1px solid rgba(155,127,232,0.28);border-radius:20px;padding:4px 10px;font-size:11px;font-weight:600;color:var(--tx-2);letter-spacing:0.02em;margin-bottom:7px">' +
-          (dLeft > 0 ? dLeft + ' days left' : dLeft === 0 ? 'Due today' : 'Overdue') +
+          _fgDateLb +
           '</div>';
       }
       h +=
@@ -38328,7 +38329,7 @@ function rPlan() {
       h += geodePlanPageStyleSectionHtml();
       h +=
         '<div data-geode-css="padding:14px;border-radius:14px;background:rgba(255,255,255,0.03);border:1px solid var(--bd);font-size:12px;color:rgba(237,234,255,0.85);line-height:1.45">';
-      h += escHtmlLite('Add monthly income in Settings to see how Beynd would allocate spare cash.');
+      h += escHtmlLite('Add monthly income in Settings to see how Beynd would split what your plan leaves.');
       h += '</div>';
       h += geodePlanPageAlignmentSectionHtml();
       h += '</div>';
@@ -38362,7 +38363,7 @@ function rPlan() {
       h += geodePlanPageStyleSectionHtml();
       h +=
         '<div data-geode-css="padding:14px;border-radius:14px;background:rgba(255,255,255,0.03);border:1px solid var(--bd);font-size:12px;color:rgba(237,234,255,0.88);line-height:1.45">';
-      h += escHtmlLite('Not enough spare cash or data yet to build plan steps this month.');
+      h += escHtmlLite('Not enough room in your plan or data yet to build steps this month.');
       h += '</div>';
       h += geodePlanPageAlignmentSectionHtml();
       h += '</div>';
@@ -38660,6 +38661,15 @@ function drawChart() {
 }
 
 // ── GOALS ─────────────────────────────────────────
+/** Display-only target date label. A reached goal never shows a passed-date warning. */
+function geodeGoalTargetDateLabel(dLeft, reached, short) {
+  if (dLeft === null || dLeft === undefined || isNaN(dLeft)) return '';
+  if (dLeft > 0) return dLeft + (short ? ' days' : ' days left');
+  if (reached) return '';
+  if (dLeft === 0) return short ? 'Today' : 'Due today';
+  return 'Target date passed';
+}
+
 function rGoals(_target) {
   var c = _target || document.getElementById('content');
   var tT = S.goals.reduce(function(s,g){ return s+Number(g.amount); },0);
@@ -38690,7 +38700,9 @@ function rGoals(_target) {
     var el=document.createElement('div'); el.className='card'; el.style.borderLeft='3px solid '+col; el.style.marginBottom='10px';
     var ih='<div data-geode-css="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">';
     ih+='<div data-geode-css="min-width:0;flex:1"><div data-geode-css="font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px"><span class="ic ic-row" data-geode-css="color:'+(g.col||'#9b7fe8')+'">' + geodeSvg(GOAL_ICONS[g.cat] || 'wallet') + '</span><span data-geode-css="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + g.name + '</span></div>';
-    if (g.targetDate) ih+='<div data-geode-css="font-size:9px;color:'+(dLeft!==null&&dLeft<30?'#f5c234':'rgba(189,183,220,0.62)')+';margin-top:2px;display:flex;align-items:center;gap:4px"><span class="ic" data-geode-css="width:12px;height:12px;flex-shrink:0">' + geodeSvg('calendar') + '</span><span>'+fd(g.targetDate)+(dLeft!==null?' ('+(dLeft>0?dLeft+' days':dLeft===0?'Today':'Overdue')+')':'')+'</span></div>';
+    var _gReached = Number(g.amount) > 0 && _effectiveSaved >= Number(g.amount);
+    var _gDateLb = geodeGoalTargetDateLabel(dLeft, _gReached, true);
+    if (g.targetDate) ih+='<div data-geode-css="font-size:9px;color:'+(!_gReached&&dLeft!==null&&dLeft<30?'#f5c234':'rgba(189,183,220,0.62)')+';margin-top:2px;display:flex;align-items:center;gap:4px"><span class="ic" data-geode-css="width:12px;height:12px;flex-shrink:0">' + geodeSvg('calendar') + '</span><span>'+fd(g.targetDate)+(_gDateLb?' ('+_gDateLb+')':'')+'</span></div>';
     ih += geodeGoalPaceBannerHtml(g);
     ih+='</div><div data-geode-css="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;max-width:48%"><button class="btn-sm" onclick="setPrimaryGoal(\''+g.id+'\')">'+(g.isPrimary?'Primary':'Set as focus')+'</button><button class="btn-sm" onclick="openGoalModal(\''+g.id+'\')">Edit</button><button class="btn-del" onclick="delGoal(\''+g.id+'\')">Remove</button></div></div>';
     ih+='<div class="prog" data-geode-css="height:6px;margin-bottom:7px"><div class="prog-fill" data-geode-css="width:'+p.toFixed(0)+'%;background:'+col+'"></div></div>';
@@ -39109,7 +39121,7 @@ function rMoneyOverview(el) {
       '<div data-geode-css="font-size:10px;color:var(--tx-3);margin-top:1px">' + S.expenses.length + ' categor' + (S.expenses.length===1?'y':'ies') + '</div>';
   } else {
     spendVal    = null;
-    spendDetail = '<div data-geode-css="font-size:12px;color:var(--tx-3)">No spending logged</div>';
+    spendDetail = '<div data-geode-css="font-size:12px;color:var(--tx-3)">No expenses planned yet</div>';
   }
 
   // Debts row
@@ -39326,7 +39338,7 @@ function rMoney() {
     '">' +
     fm(left) +
     '</div>' +
-    (left < 0 ? '<div data-geode-css="font-size:10px;color:var(--danger);margin-top:3px">Below plan this month</div>' : '') +
+    (left < 0 ? '<div data-geode-css="font-size:10px;color:var(--danger);margin-top:3px">Your plan runs over this month</div>' : '') +
     geodeLeftThisMonthTileHintHtml() +
     '</div></div>';
   h +=
@@ -40306,7 +40318,7 @@ function rPayments(el) {
   h+='<div id="plist" data-geode-css="margin-top:8px"></div>';
   el.innerHTML=h;
   var list=document.getElementById('plist');
-  if(!sorted.length){list.innerHTML='<div class="empty">No contributions yet. Schedule debt, goals, investments, or bills to see cash left after planned outflows.</div>';return;}
+  if(!sorted.length){list.innerHTML='<div class="empty">No contributions yet. Schedule debt, goals, investments, or bills to see what your plan leaves after payments.</div>';return;}
   var SC={upcoming:'#f5c234',paid:'#34d5a0',overdue:'#f07070'};
   for(var i=0;i<sorted.length;i++){
     var p=sorted[i], st=geodePaymentEffectiveStatus(p), col=SC[st]||'#706a90';
@@ -41505,7 +41517,7 @@ function geodeExpModalImpactRefresh() {
   var hasChange = Math.abs(delta) >= eps;
   var line1 = hasChange ? 'Left this month: ' + fm(baseLeft) + ' → ' + fm(newLeft) : '';
   var sentence = !hasChange
-    ? 'This does not change your monthly cash total meaningfully.'
+    ? 'This doesn\u2019t really change what your plan leaves this month.'
     : delta < 0
       ? 'This lowers left this month on your plan.'
       : 'This raises left this month on your plan.';
@@ -41532,7 +41544,7 @@ function geodeGoalModalImpactRefresh() {
       '<div data-geode-css="margin-top:8px;font-size:11px;color:rgba(237,234,255,0.85);line-height:1.35">Add a target date for pace needed</div>';
   }
 
-  host.innerHTML = geodeRenderModalImpactBlock('', 'Does not affect monthly cash flow until you contribute.', '') + paceLine;
+  host.innerHTML = geodeRenderModalImpactBlock('', 'Doesn\u2019t change your monthly plan until you schedule a contribution.', '') + paceLine;
 }
 
 function geodeInvModalImpactRefresh() {
@@ -41548,7 +41560,7 @@ function geodeInvModalImpactRefresh() {
   var coachWhy =
     bal === null
       ? 'Use Contributions when you want an outflow to affect left this month.'
-      : 'Consistent contributions are what typically move monthly cash flow.';
+      : 'Regular contributions are what show up in your monthly plan.';
 
   host.innerHTML = geodeRenderModalImpactBlock('', coachSentence, coachWhy);
 }
@@ -41879,7 +41891,7 @@ function rExpenses(el) {
   h+='<div id="elist" data-geode-css="margin-top:4px"></div>';
   el.innerHTML=h;
   var list=document.getElementById('elist');
-  if(!activeExpenses.length){list.innerHTML='<div class="empty" data-geode-css="padding:20px 0">No spending logged. Add a few categories to see where money goes.</div>';return;}
+  if(!activeExpenses.length){list.innerHTML='<div class="empty" data-geode-css="padding:20px 0">No expenses planned yet. Add a few categories to plan where your money goes.</div>';return;}
   activeExpenses.forEach(function(e){
     var icn=EXP_ICONS[e.cat]||'package', col={food:'#f5c234',transport:'#34d5a0',utilities:'#c4abff',entertainment:'#e87ca0',health:'#f07070',shopping:'#60a5fa',subs:'#34d5a0',other:'#706a90'}[e.cat]||'#706a90';
     var _eYM = e.date ? String(e.date).slice(0,7) : '';
@@ -42760,7 +42772,7 @@ function setRegion(r) {
   save(); closeModal(); rMe(); render();
 }
 function openPlanStrategyModal() {
-  var opts = [['debt','Debt-focused','Tilts spare cash toward paying down balances faster.'],['balanced','Balanced (recommended)','Even blend of debt, goals, and investing when budget allows.'],['growth','Growth-focused','Favours investing once basics are covered — still respects debt and safety steps.']];
+  var opts = [['debt','Debt-focused','Tilts what your plan leaves toward paying balances down faster.'],['balanced','Balanced (recommended)','Even blend of debt, goals, and investing when budget allows.'],['growth','Growth-focused','Favours investing once basics are covered, and still respects debt and safety steps.']];
   var cur = S.planStrategy || 'balanced';
   var html = mh('Plan strategy') + '<div data-geode-css="font-size:11px;color:var(--tx-3);line-height:1.5;margin:-6px 0 14px">Only changes how suggested amounts are split between debt, goals, and investing. It does not change your raw numbers or emergency rules.</div>';
   html += '<div data-geode-css="display:grid;grid-template-columns:1fr;gap:8px">';
