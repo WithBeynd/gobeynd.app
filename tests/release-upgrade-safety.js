@@ -303,7 +303,7 @@ async function versions() {
   group = 'VERSIONS — page runtime and worker cache move together';
   const worker = loadWorker({ caches: new FakeCaches(), net: fakeNetwork({}) });
   const cacheVersion = worker.value('CACHE_VERSION');
-  check('ver.values', 'index.html BEYND_RUNTIME_VERSION and service-worker.js CACHE_VERSION are v1.0.78 (P2-5: schema 3 waits for this shell)', [RUNTIME, cacheVersion], ['v1.0.78', 'v1.0.78']);
+  check('ver.values', 'index.html BEYND_RUNTIME_VERSION and service-worker.js CACHE_VERSION are v1.0.79 (P3-REL: Phase 3 living month, schema stays 3)', [RUNTIME, cacheVersion], ['v1.0.79', 'v1.0.79']);
   check('ver.lockstep', 'They match, so the worker accepts exactly this page and names its cache after it', [RUNTIME === cacheVersion, worker.value('CACHE_NAME')], [true, 'beynd-cache-' + RUNTIME]);
   check('ver.bumped', 'Both differ from the deployed ' + PREVIOUS + ', so every browser installs this release; the older worker modelled here really is ' + PREVIOUS,
     [RUNTIME !== PREVIOUS, cacheVersion !== PREVIOUS, loadWorker({ source: OLD_SW, caches: new FakeCaches(), net: fakeNetwork({}) }).value('CACHE_NAME')], [true, true, 'beynd-cache-' + PREVIOUS]);
@@ -813,7 +813,7 @@ async function gate() {
 
 async function cacheOrder() {
   group = 'P2-2 CACHE ORDER — a runtime deletes only Beynd caches older than itself';
-  const newer = 'beynd-cache-v1.0.79';
+  const newer = 'beynd-cache-v1.0.80';
   const unknown = 'beynd-cache-preview';
   log.length = 0;
   const caches = new FakeCaches();

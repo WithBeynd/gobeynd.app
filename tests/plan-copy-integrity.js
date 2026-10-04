@@ -419,7 +419,7 @@ function invariants() {
     check('V.identical', 'Monthly Left, plans, payments, debts, goals, investments, ledgers, baseline, P3-4 changes, the plan, its order, the main action, Reality guidance, Ask and the evidence readers are byte-identical to P3-6R (' + BEFORE_REF + ')',
       FINANCIAL.filter(n => cm.extractFunction(OLD, n).text !== fnText(n)), []);
     const version = s => [(s.match(/\nvar BEYND_RUNTIME_VERSION = '([^']+)';/) || [])[1], (s.match(/\nvar GEODE_SCHEMA_VERSION = (\d+);/) || [])[1]];
-    check('V.version', 'No runtime or schema bump', version(SRC), version(OLD));
+    check('V.version', 'No schema bump; the runtime moves only with the P3-REL release (v1.0.79)', version(SRC), ['v1.0.79', version(OLD)[1]]);
     const states = [CALM(), MLNEG(), CALM(RC(120)), CALM(goalAt({ targetDate: '2026-09-30', saved: 2000, baseSaved: 2000 }))];
     check('V.copyOnly', 'Rendering every copy surface writes nothing to the plan (figures identical before and after)',
       states.map(s => { const p = page(s); const b = measure(p); expImpact(p, 100); overBudget(p); goalsList(p); render(p, 'rPayments', ['plist']); nudges(p, 'core'); nudges(p, 'intent'); return canon(measure(p)) === canon(b); }), [true, true, true, true]);

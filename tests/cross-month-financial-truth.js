@@ -6363,9 +6363,9 @@ function p2BoundaryHold() {
     invariant('P2.hold.disabled', 'With only the investment check forced off the schema-3 transition still holds the boundary (P2-5: one hold rule, geodeBoundaryTransitionOutstanding); with that rule forced off, the September load resets the row and the ISA falls to £5,000 — the hold is what keeps £5,200',
       [[isa(partial), paid(partial)], [isa(broken), paid(broken)]], [[5200, ['paid']], [5000, ['upcoming']]]);
 
-    const order = JSON.parse(loaded.run('JSON.stringify(["beynd-cache-v1.0.70","beynd-cache-v1.0.76","beynd-cache-v1.0.77","beynd-cache-v1.0.78","beynd-cache-v1.0.79","beynd-cache-preview","other-app"].map(geodeBeyndCacheOrder))'));
-    invariant('P2.hold.cache-order', 'Cache names order against v1.0.78: older, current, newer, unknown, and non-Beynd',
-      order, ['older', 'older', 'older', 'current', 'newer', 'unknown', 'other']);
+    const order = JSON.parse(loaded.run('JSON.stringify(["beynd-cache-v1.0.70","beynd-cache-v1.0.76","beynd-cache-v1.0.77","beynd-cache-v1.0.78","beynd-cache-v1.0.79","beynd-cache-v1.0.80","beynd-cache-preview","other-app"].map(geodeBeyndCacheOrder))'));
+    invariant('P2.hold.cache-order', 'Cache names order against v1.0.79: older, current, newer, unknown, and non-Beynd',
+      order, ['older', 'older', 'older', 'older', 'current', 'newer', 'unknown', 'other']);
   });
 }
 
@@ -6822,7 +6822,7 @@ function p2RevisionFence() {
     invariant('P2.write.stamp', 'Tab A\'s save advances seq, mints a new id, names this runtime and stores state and revision in one text',
       [newer !== parent, revA.seq, typeof revA.id === 'string' && revA.id.indexOf('rev_') === 0, revA.by, typeof revA.at === 'number',
         tabA.run('_geodeKnownRaw === __store'), JSON.parse(newer).payments.length],
-      [true, JSON.parse(parent)._rev.seq + 1, true, 'v1.0.78', true, true, JSON.parse(parent).payments.length + 1]);
+      [true, JSON.parse(parent)._rev.seq + 1, true, 'v1.0.79', true, true, JSON.parse(parent).payments.length + 1]);
 
     foreignStore(tabB, newer);
     tabB.run('S.lastSeenAt = 1; persistGeodeToLocalStorage();');
@@ -7294,7 +7294,7 @@ function p2Expectations() {
       [Object.keys(goalGap).sort(), goalGap.id, goalGap.targetId, goalGap.recurrence, goalGap.dueDay, goalGap.templateNameSnapshot, goalGap.targetNameSnapshot, goalGap.seenYm,
         goalGap.capturedBy, goalGap.source, typeof goalGap.capturedAt],
       [['capturedAt', 'capturedBy', 'domain', 'dueDay', 'expectedAmount', 'fromYm', 'id', 'paymentId', 'recurrence', 'seenYm', 'source', 'targetId', 'targetNameSnapshot',
-        'templateNameSnapshot', 'toYm'], 'gap_' + ids.goal + '_2026-07', 'gH', 'monthly', 15, 'goal monthly', 'Holiday', '2026-06', 'v1.0.78', 'month_boundary', 'number']);
+        'templateNameSnapshot', 'toYm'], 'gap_' + ids.goal + '_2026-07', 'gH', 'monthly', 15, 'goal monthly', 'Holiday', '2026-06', 'v1.0.79', 'month_boundary', 'number']);
     invariant('P2.exp.base.ledgers', 'The settlement ledgers are untouched by the boundary: nothing appended, altered or duplicated',
       same(ledgers(app), settled), true);
     invariant('P2.exp.base.rows', 'Every row rolled as before: upcoming, due 15 August',
