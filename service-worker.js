@@ -54,16 +54,33 @@ self.addEventListener('install', function (event) {
   );
 });
 
-// Activate — remove older Beynd caches, take control, then reload every open window onto this release's shell, so
-// no page keeps running an older app after this one takes over. A cache that cannot be deleted is never read here
-// (lookups use CACHE_NAME only), and the page's shell check keeps schema changes waiting until it is gone.
+/** Numeric [major, minor, patch] for a v1.2.3 token, or null when the token cannot be ordered. */
+function runtimeVersionParts(v) {
+  var m = /^v(\d+)\.(\d+)\.(\d+)$/.exec(String(v || ''));
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/** True only when a Beynd cache is demonstrably older than this release. Newer and unorderable caches stay. */
+function cacheOlderThanThisRelease(key) {
+  if (String(key || '').indexOf(CACHE_PREFIX) !== 0 || key === CACHE_NAME) return false;
+  var mine = runtimeVersionParts(CACHE_VERSION);
+  var theirs = runtimeVersionParts(String(key).slice(CACHE_PREFIX.length));
+  if (!mine || !theirs) return false;
+  for (var i = 0; i < 3; i++) {
+    if (theirs[i] !== mine[i]) return theirs[i] < mine[i];
+  }
+  return false;
+}
+
+// Activate — remove Beynd caches older than this release, take control, then reload every open window onto this
+// release's shell, so no page keeps running an older app after this one takes over. A newer Beynd cache, and a Beynd
+// cache whose version cannot be ordered, are left in place. A cache that cannot be deleted is never read here
+// (lookups use CACHE_NAME only), and the page's shell check keeps schema changes waiting until older copies are gone.
 self.addEventListener('activate', function (event) {
   event.waitUntil(
     caches.keys().then(function (keys) {
       return Promise.all(
-        keys.filter(function (key) {
-          return key.indexOf(CACHE_PREFIX) === 0 && key !== CACHE_NAME;
-        }).map(function (key) {
+        keys.filter(cacheOlderThanThisRelease).map(function (key) {
           return caches.delete(key).catch(function () { return false; });
         })
       );

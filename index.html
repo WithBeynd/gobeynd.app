@@ -757,6 +757,8 @@ canvas{display:block}
 .geode-stale-gate{position:fixed;inset:0;z-index:100000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:24px;background:var(--bg-base,#05050f);color:var(--tx-1);text-align:center}
 .geode-stale-gate__text{max-width:min(88vw,380px);margin:0;font-size:15px;line-height:1.5}
 .geode-stale-gate .btn{width:min(88vw,380px);box-sizing:border-box}
+.geode-boundary-hold{position:fixed;left:0;right:0;bottom:0;z-index:99990;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;padding:12px 16px;background:var(--bg-elev,#16162a);color:var(--tx-1);font-size:14px;line-height:1.45;text-align:center}
+.geode-boundary-hold__text{margin:0;max-width:min(88vw,420px)}
 .update-banner__button{margin-left:10px;background:transparent;border:none;color:var(--gem);cursor:pointer;font-weight:700;font-family:var(--font-sans);pointer-events:auto;white-space:nowrap}
 
 /* Stage EEE inline-style cleanup utilities */
@@ -1611,6 +1613,10 @@ var _geodeKnownRaw = null;
 var _geodeKnownRev = null;
 /** P2-1: revision ids only. Kept off uid() so financial event ids stay on their own sequence. */
 var _geodeRevN = 0;
+/** P2-2: how many times this page has held a month boundary while the investment transition is outstanding. */
+var _geodeBoundaryHoldAttempts = 0;
+var _geodeBoundaryHoldNotice = false;
+var _geodeBoundaryHoldReady = false;
 /** geode_shell: this runtime's version once geodeShellCleanup removed every older Beynd cache in this browser. */
 var GEODE_SHELL_KEY = 'geode_shell';
 var GEODE_CACHE_PREFIX = 'beynd-cache-';
@@ -1830,25 +1836,53 @@ function geodeShellReadiness() {
   }
 }
 
-/** Deletes every Beynd cache but this runtime's; records geode_shell only after every deletion succeeded. Never touches KEY. */
+/** v1.2.3 from a runtime token or a beynd-cache name's version, or null when it cannot be ordered. */
+function geodeRuntimeVersionParts(v) {
+  var m = /^v(\d+)\.(\d+)\.(\d+)$/.exec(String(v || ''));
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/**
+ * P2-2: how a cache name relates to this runtime. 'older' may be deleted. 'newer' and 'unknown' are kept.
+ * 'unknown' is a Beynd cache whose version cannot be ordered. 'other' is not a Beynd cache.
+ */
+function geodeBeyndCacheOrder(name) {
+  var current = GEODE_CACHE_PREFIX + BEYND_RUNTIME_VERSION;
+  if (name === current) return 'current';
+  if (String(name || '').indexOf(GEODE_CACHE_PREFIX) !== 0) return 'other';
+  var mine = geodeRuntimeVersionParts(BEYND_RUNTIME_VERSION);
+  var theirs = geodeRuntimeVersionParts(String(name).slice(GEODE_CACHE_PREFIX.length));
+  if (!mine || !theirs) return 'unknown';
+  for (var i = 0; i < 3; i++) {
+    if (theirs[i] !== mine[i]) return theirs[i] < mine[i] ? 'older' : 'newer';
+  }
+  return 'current';
+}
+
+/**
+ * Deletes Beynd caches that are demonstrably older than this runtime. A newer cache, and a Beynd cache whose
+ * version cannot be ordered, stay. geode_shell is recorded only when every Beynd cache left is this runtime's or
+ * newer — an unorderable cache might still be an older copy, so readiness stays pending. Never touches KEY.
+ */
 function geodeShellCleanup() {
   if (geodeShellReadiness() === 'absent') return Promise.resolve(false);
-  var current = GEODE_CACHE_PREFIX + BEYND_RUNTIME_VERSION;
   try {
     return caches
       .keys()
       .then(function (keys) {
-        return Promise.all(
-          keys
-            .filter(function (k) {
-              return k.indexOf(GEODE_CACHE_PREFIX) === 0 && k !== current;
-            })
-            .map(function (k) {
-              return caches.delete(k);
-            })
-        );
+        var older = [];
+        var unknown = false;
+        (keys || []).forEach(function (k) {
+          var order = geodeBeyndCacheOrder(k);
+          if (order === 'older') older.push(k);
+          else if (order === 'unknown') unknown = true;
+        });
+        return Promise.all(older.map(function (k) { return caches.delete(k); })).then(function () {
+          return unknown;
+        });
       })
-      .then(function () {
+      .then(function (unknown) {
+        if (unknown) return false;
         localStorage.setItem(GEODE_SHELL_KEY, BEYND_RUNTIME_VERSION);
         return true;
       })
@@ -9932,8 +9966,141 @@ function geodeAnnualPaymentNextOccurrenceDue(p, ym, state) {
  * completion or carry the row held.
  * FA-4B: annual rows too, once geodeAnnualPaymentNextOccurrenceDue.
  */
+/** P2-2: the sentence shown when a month boundary has been held and this device still has not finished the update. */
+function geodeBoundaryHoldMessage() {
+  return 'Beynd hasn\'t finished updating on this device. Reload to finish.';
+}
+
+/**
+ * P2-2: schema 2 is loaded, at least one investment still has no valuation for the FA-7B transition to anchor,
+ * and shell readiness is pending. A stale runtime is not this hold — that follows the reload gate.
+ * An investment that already has a valuation is not outstanding, even if geode_shell later looks wrong.
+ */
+function geodeInvestmentTransitionOutstanding() {
+  if (_geodeRuntimeStale || !S || !geodeSchema2Active(S) || geodeShellReadiness() !== 'pending') return false;
+  var list = S.investments || [];
+  for (var i = 0; i < list.length; i++) {
+    var inv = list[i];
+    if (inv && inv.id != null && !geodeInvestmentLatestValuation(inv)) return true;
+  }
+  return false;
+}
+
+/**
+ * P2-2: true when syncRecurringPayments would move a recurring row, expense or one-off across the month boundary.
+ * Used only to decide the hold. It does not mutate.
+ */
+function geodeRecurrenceWouldMutateBoundary() {
+  var ym = currentYM();
+  var schema2 = geodeSchema2Active(S);
+  var carried = null;
+  if (schema2) {
+    carried = Object.create(null);
+    geodeContributionCarryActive(S).forEach(function (c) { if (c && c.paymentId) carried[c.paymentId] = true; });
+  }
+  var payments = S.payments || [];
+  var i;
+  for (i = 0; i < payments.length; i++) {
+    var p = payments[i];
+    if (!p) continue;
+    if (p.status === 'paid' && (p.rec === 'yes' || geodeAnnualPaymentNextOccurrenceDue(p, ym, S))) {
+      if (schema2 ? geodeSchema2RecurringResetDue(S, p, ym, carried) : p.lastPaidYM && p.lastPaidYM !== ym &&
+          (geodeContributionYmTrusted(p.lastPaidYM) || !geodePaymentBalanceEffect(S, p))) return true;
+    }
+    if (p.rec === 'yes' && p.status !== 'paid' && p.date) {
+      try {
+        if (geodeIsoDateAddMonths(p.date, 0) && geodeIsoDateMonthsBehind(p.date) > 0) return true;
+      } catch (ePay) {}
+    }
+  }
+  var expenses = S.expenses || [];
+  for (i = 0; i < expenses.length; i++) {
+    var e = expenses[i];
+    if (!e || !e.date) continue;
+    if (geodeExpenseIsExpiredOneOff(e, ym)) return true;
+    if (geodeExpenseIsOneOff(e) || (e.rec !== 'yes' && e.rec !== 'annual')) continue;
+    try {
+      if (e.rec === 'yes' && geodeIsoDateAddMonths(e.date, 0) && geodeIsoDateMonthsBehind(e.date) > 0) return true;
+      if (e.rec === 'annual') {
+        var d = new Date(e.date + 'T12:00:00');
+        var n = new Date();
+        if (!isNaN(d.getTime()) && d < new Date(n.getFullYear(), n.getMonth(), 1)) return true;
+      }
+    } catch (eExp) {}
+  }
+  return false;
+}
+
+/** A paid row still carrying an unanchored investment's legacy figure, whose paid month is already behind the clock. */
+function geodeBoundaryEvidenceLocked(p) {
+  if (!p || p.status !== 'paid' || !geodeInvestmentTransitionOutstanding()) return false;
+  var ym = currentYM();
+  if (!p.lastPaidYM || String(p.lastPaidYM) >= ym) return false;
+  var eff = geodePaymentBalanceEffect(S, p);
+  return !!(eff && eff.investment && eff.investment.id != null && !geodeInvestmentLatestValuation(eff.investment));
+}
+
+function geodeShowBoundaryHoldNotice() {
+  _geodeBoundaryHoldNotice = true;
+  try {
+    if (typeof document === 'undefined' || !document.body || document.getElementById('geode-boundary-hold') || document.getElementById('geode-stale-gate')) return;
+    var bar = document.createElement('div');
+    bar.id = 'geode-boundary-hold';
+    bar.className = 'geode-boundary-hold';
+    bar.setAttribute('role', 'status');
+    var msg = document.createElement('p');
+    msg.className = 'geode-boundary-hold__text';
+    msg.textContent = geodeBoundaryHoldMessage();
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-p';
+    btn.textContent = 'Reload';
+    btn.addEventListener('click', function () { location.reload(); });
+    bar.appendChild(msg);
+    bar.appendChild(btn);
+    document.body.appendChild(bar);
+  } catch (e) {}
+}
+
+function geodeNoteBoundaryHold() {
+  if (!_geodeBoundaryHoldReady) {
+    _geodeBoundaryHoldReady = true;
+    try {
+      var stored = parseInt(sessionStorage.getItem('geode_boundary_hold_attempts') || '0', 10);
+      if (stored > _geodeBoundaryHoldAttempts) _geodeBoundaryHoldAttempts = stored;
+    } catch (e) {}
+  }
+  _geodeBoundaryHoldAttempts += 1;
+  try { sessionStorage.setItem('geode_boundary_hold_attempts', String(_geodeBoundaryHoldAttempts)); } catch (e2) {}
+  if (_geodeBoundaryHoldAttempts >= 2) geodeShowBoundaryHoldNotice();
+}
+
+function geodeClearBoundaryHold() {
+  _geodeBoundaryHoldAttempts = 0;
+  _geodeBoundaryHoldNotice = false;
+  _geodeBoundaryHoldReady = true;
+  try { sessionStorage.removeItem('geode_boundary_hold_attempts'); } catch (e) {}
+  try {
+    var el = document.getElementById('geode-boundary-hold');
+    if (el && el.remove) el.remove();
+  } catch (e2) {}
+}
+
+function geodeRefuseBoundaryEvidenceEdit() {
+  toast(geodeBoundaryHoldMessage(), 'warn');
+  return false;
+}
+
 function syncRecurringPayments() {
   if (!S) return;
+  // Hold every boundary mutation while the investment transition is outstanding. Holding only investment rows
+  // would leave a half-rolled month. Same-month recurrence still runs: the preview is false when nothing would cross.
+  if (geodeInvestmentTransitionOutstanding() && geodeRecurrenceWouldMutateBoundary()) {
+    if (!geodeFinancialWriteAllowed()) return;
+    geodeNoteBoundaryHold();
+    return;
+  }
+  geodeClearBoundaryHold();
   var ym = currentYM();
   var changed = false;
   var schema2 = geodeSchema2Active(S);
@@ -40327,6 +40494,11 @@ function geodeDupExpResolve(choice) {
 }
 function savePay(id) {
   if (!geodeModalCommitOpen()) return;
+  var _boundaryRow = id ? (S.payments || []).filter(function (x) { return x.id === id; })[0] : null;
+  if (_boundaryRow && geodeBoundaryEvidenceLocked(_boundaryRow)) {
+    geodeRefuseBoundaryEvidenceEdit();
+    return;
+  }
   var nm = ((document.getElementById('pn') || {}).value || '').trim(),
     am = (document.getElementById('pa') || {}).value;
   var dtPay = ((document.getElementById('pd') || {}).value || '').trim();
@@ -40698,6 +40870,7 @@ function geodeSavePayApply(id, nm, am, dtPay, st, rec, dt, gid, invid, debtid, p
 function togglePay(id){
   var p=S.payments.filter(function(x){return x.id===id;})[0];
   if(!p)return;
+  if (geodeBoundaryEvidenceLocked(p)) { geodeRefuseBoundaryEvidenceEdit(); return; }
   if (p.status !== 'paid' && (p.goalId || p.investId) && !(toNum(p.amount) > 0)) {
     toast('This contribution needs an amount above \u00a30 before it can be marked complete. Nothing has been changed.', 'warn');
     return;
@@ -40755,6 +40928,8 @@ function togglePay(id){
   }
 }
 function delPay(id){
+  var _boundaryDel = (S.payments || []).filter(function (p) { return p.id === id; })[0];
+  if (_boundaryDel && geodeBoundaryEvidenceLocked(_boundaryDel)) { geodeRefuseBoundaryEvidenceEdit(); return; }
   geodeInvalidateDecisionCaches();
   geodeRecordContributionDeletion(S.payments.filter(function (p) { return p.id === id; })[0], 'delete_payment');
   S.payments = S.payments.filter(function (p) {

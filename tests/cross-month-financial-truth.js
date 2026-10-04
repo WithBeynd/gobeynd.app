@@ -103,7 +103,10 @@ const PRODUCTION_FUNCTIONS = [
   'geodeStoredSchemaVersion', 'geodeMarkRuntimeStale', 'geodeFinancialRevValid', 'geodeFinancialRevFromRaw',
   'geodeClassifyFinancialRevision', 'geodeFinancialRevId', 'geodeStampFinancialRev', 'geodeFinancialJsonToStore', 'geodeAcceptFinancialWrite',
   'geodeNoteFinancialBoot', 'geodeFinancialWriteAllowed',
-  'geodeOnForeignFinancialWrite', 'geodeShellReadiness', 'persistGeodeToLocalStorage',
+  'geodeOnForeignFinancialWrite', 'geodeShellReadiness', 'geodeRuntimeVersionParts', 'geodeBeyndCacheOrder', 'persistGeodeToLocalStorage',
+  'geodeBoundaryHoldMessage', 'geodeInvestmentTransitionOutstanding', 'geodeRecurrenceWouldMutateBoundary',
+  'geodeBoundaryEvidenceLocked', 'geodeShowBoundaryHoldNotice', 'geodeNoteBoundaryHold', 'geodeClearBoundaryHold',
+  'geodeRefuseBoundaryEvidenceEdit',
   // carry lifecycle and contribution input integrity (FA-3C-B): payment actions resolve the carry a row still holds
   'geodeContributionCarryFor', 'geodeContributionCarryForRow', 'geodeResolveContributionCarry', 'geodeContributionCarryFollowRow',
   'geodeContributionSaveRefusal',
@@ -118,7 +121,8 @@ const PRODUCTION_FUNCTIONS = [
 
 /** Production top-level constants the extracted base functions read. */
 const BASE_CONSTANTS = ['GEODE_SCHEMA_VERSION', 'BEYND_RUNTIME_VERSION', '_geodeRuntimeStale', '_geodeFinancialKeySeen',
-  '_geodeKnownRaw', '_geodeKnownRev', '_geodeRevN', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
+  '_geodeKnownRaw', '_geodeKnownRev', '_geodeRevN', '_geodeBoundaryHoldAttempts', '_geodeBoundaryHoldNotice',
+  '_geodeBoundaryHoldReady', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'];
 
 /**
  * Read-only structural checks: the reload and render shims below must mirror these production bodies, and the
@@ -239,6 +243,7 @@ function geodePlanReadinessState() { return 'active'; }
 /** Mirrors load(): the subset of its boot sequence that touches payments, goals, investments and releases. */
 function __reload() {
   _geodeRuntimeStale = ''; _geodeFinancialKeySeen = false; __staleGate = ''; // a reload is a new page
+  _geodeBoundaryHoldAttempts = 0; _geodeBoundaryHoldNotice = false; _geodeBoundaryHoldReady = false;
   geodeNoteFinancialBoot(__store);
   S = JSON.parse(__store);
   S._schemaVersion = geodePersistedSchemaVersion(S._schemaVersion);
@@ -3525,14 +3530,14 @@ function fa3caLifecycle() {
       bodies.push([m[1], src.slice(start, end)]);
     }
     const users = needle => [...new Set(bodies.filter(b => b[1].indexOf(needle) >= 0).map(b => b[0]))].sort();
-    invariant('FA3CA.boundary', 'Functions that mention: the transition carry helper — itself and the transition (its only caller); the schema2_transition source — the validator and the helper; carry state — the carry functions, the resolution writer, FA-3B seeding (carried payments are seen), the transition, the C4b reset rule and the backup whitelist; carry functions — the carry family, the FA-3C-B lifecycle helpers and the contribution recorder, deletion and rollover safety net that call them, the goal parts, the authority validator, the C4b reset rule and recurring sync (which carried payments it may reset), FA-3B seeding and load (normaliser only); schema-2 goal helpers — each other, the recompute (goal Saved) and saveGoal (Saved So Far)',
+    invariant('FA3CA.boundary', 'Functions that mention: the transition carry helper — itself and the transition (its only caller); the schema2_transition source — the validator and the helper; carry state — the carry functions, the resolution writer, FA-3B seeding (carried payments are seen), the transition, the C4b reset rule and the backup whitelist; carry functions — the carry family, the FA-3C-B lifecycle helpers and the contribution recorder, deletion and rollover safety net that call them, the goal parts, the authority validator, the C4b reset rule, recurring sync (which carried payments it may reset) and the P2-2 boundary preview that reads the same carry map before deciding whether to hold that sync, FA-3B seeding and load (normaliser only); schema-2 goal helpers — each other, the recompute (goal Saved) and saveGoal (Saved So Far)',
       [users('geodeSchema2TransitionCarryRecords('), users("'schema2_transition'"), users('contributionCarry'), users('ContributionCarry'), users('geodeLegacyCarryCandidate('), users('geodeSchema2Goal')],
       [['geodeSchema2Transition', 'geodeSchema2TransitionCarryRecords'], ['geodeContributionCarryValid', 'geodeSchema2TransitionCarryRecords'],
         ['geodeBeyndBackupRestorableKeyWhitelist', 'geodeContributionCarryActive', 'geodeNormalizeContributionCarry', 'geodeResolveContributionCarry', 'geodeSchema2RecurringResetDue',
           'geodeSchema2Transition', 'geodeSchema2TransitionCarryRecords', 'geodeSeedLegacyContributionEvents'],
         ['geodeContributionCarryActive', 'geodeContributionCarryFollowRow', 'geodeContributionCarryFor', 'geodeContributionCarryForRow', 'geodeContributionCarryLedger',
           'geodeContributionCarryResolutionValid', 'geodeContributionCarryValid', 'geodeContributionSaveRefusal', 'geodeEnsureContributionCompletion', 'geodeNormalizeContributionCarry',
-          'geodeRecordContributionDeletion', 'geodeRecordContributionTransition', 'geodeResolveContributionCarry', 'geodeSchema2AuthorityProblems', 'geodeSchema2GoalParts',
+          'geodeRecordContributionDeletion', 'geodeRecordContributionTransition', 'geodeRecurrenceWouldMutateBoundary', 'geodeResolveContributionCarry', 'geodeSchema2AuthorityProblems', 'geodeSchema2GoalParts',
           'geodeSchema2RecurringResetDue', 'geodeSchema2TransitionCarryRecords', 'geodeSeedLegacyContributionEvents', 'load', 'syncRecurringPayments'],
         ['geodeLegacyCarryCandidate', 'geodeSchema2TransitionCarryRecords'],
         ['geodeRecomputeBalancesFromPayments', 'geodeSchema2GoalCorrectionBase', 'geodeSchema2GoalParts', 'geodeSchema2GoalPosition', 'saveGoal']]);
@@ -6055,10 +6060,10 @@ function p1RelPending() {
     held.reload(); held.advance('2026-09-02', 'reload'); held.run('save();');
     const stuck = [look(held), p1rVals(stored(held).investments)];
     p1rReady(held); held.reload(); held.run('save();');
-    invariant('P1REL.pending.cleanup-fails', 'Cleanup that keeps failing (Cache API error) leaves geode_shell at v1.0.76: two more loads, one in September, and a save store no anchor; investments stay on legacy authority (ISA £5,000 in September: legacy rollover, as v1.0.76 shows it); once cleanup succeeds the next load anchors that figure once',
+    invariant('P1REL.pending.cleanup-fails', 'Cleanup that keeps failing (Cache API error) leaves geode_shell at v1.0.76: two more loads, one in September, and a save store no anchor. The September boundary is held, so the paid August ISA row is not reset and the ISA stays £5,200; once cleanup succeeds the next load anchors that £5,200 once',
       [stuck, look(held), p1rVals(stored(held).investments)],
-      [[['pending', { iA: 5000, iG: 2100, iP: 10000 }, legacy], legacy], ['ready', { iA: 5000, iG: 2100, iP: 10000 }, [['iA', [[5000, 'legacy_transition']]], ['iG', [[2100, 'legacy_transition']]], ['iP', [[10000, 'legacy_transition']]]]],
-        [['iA', [[5000, 'legacy_transition']]], ['iG', [[2100, 'legacy_transition']]], ['iP', [[10000, 'legacy_transition']]]]]);
+      [[['pending', { iA: 5200, iG: 2100, iP: 10000 }, legacy], legacy], ['ready', { iA: 5200, iG: 2100, iP: 10000 }, [['iA', [[5200, 'legacy_transition']]], ['iG', [[2100, 'legacy_transition']]], ['iP', [[10000, 'legacy_transition']]]]],
+        [['iA', [[5200, 'legacy_transition']]], ['iG', [[2100, 'legacy_transition']]], ['iP', [[10000, 'legacy_transition']]]]]);
 
     const p2 = p1rFixture('P2');
     const acting = p1rPage(p2.state, p2.clock, P1R_PREVIOUS);
@@ -6089,13 +6094,13 @@ function p1RelPending() {
   scenario('P1-REL NEW MONTH — the first load of this runtime is also the first load of a new month, shell pending', () => {
     const f = p1rFixture('P2');
     const app = p1rPage(f.state, '2026-09-02', P1R_PREVIOUS);
-    const pending = [p1rLook(app).slice(0, 3), app.state().payments.map(p => p.status)];
+    const pending = [p1rLook(app).slice(0, 3), app.state().payments.map(p => p.status), stored(app).payments.map(p => p.status)];
     p1rReady(app); app.reload();
     const ready = p1rLook(app).slice(0, 3);
     app.advance('2026-10-02', 'reload');
-    current('P1REL.new-month', 'P2 (August monthly £200 completed, shown £5,200) first opened by this runtime on 2 September with the shell pending: the automatic transition is held, legacy rollover resets the row and shows £5,000 — what v1.0.76 shows on that load; the next ready load anchors that £5,000 and nothing reconstructs the £200, so the FA-7B rescue of D1 reaches this user a month late (the deferred-write refinement is Phase 2)',
-      [f.shownNextMonth.inv, pending, ready, p1rShown(app).inv],
-      [{ iA: 5000 }, [['pending', { inv: { iA: 5000 }, goal: { gH: 1000 } }, [['iA', null]]], ['upcoming']], ['ready', { inv: { iA: 5000 }, goal: { gH: 1000 } }, [['iA', [[5000, 'legacy_transition']]]]], { iA: 5000 }]);
+    invariant('P1REL.new-month', 'P2 (August monthly £200 completed, shown £5,200) first opened by this runtime on 2 September with the shell pending: recurrence would reset the paid row, but the boundary is held, so the row stays paid and the ISA stays £5,200 in memory and storage; the next ready load anchors £5,200 once; October recurrence then advances and the figure stays £5,200',
+      [pending, ready, p1rShown(app).inv],
+      [[['pending', { inv: { iA: 5200 }, goal: { gH: 1000 } }, [['iA', null]]], ['paid'], ['paid']], ['ready', { inv: { iA: 5200 }, goal: { gH: 1000 } }, [['iA', [[5200, 'legacy_transition']]]]], { iA: 5200 }]);
   });
 }
 
@@ -6120,6 +6125,91 @@ function p1RelIdempotence() {
       [lost, retried, JSON.parse(forged), settled, anchor(other.state().investments), app.snap().inv.iA, anchor(stored(app).investments)],
       [[[[once]], [[]]], [[once]], [true, true], [[[once]], [[once]], 6000], [[once]], 6100, [[once]]]);
     invariant('P1REL.idempotent.anchor', 'That anchor is val_legacy_iA at £6,000 (legacy_transition)', once.slice(0, 3), ['val_legacy_iA', 6000, 'legacy_transition']);
+  });
+}
+
+function p2BoundaryHold() {
+  const HOLD = 'Beynd hasn\'t finished updating on this device. Reload to finish.';
+  scenario('P2-2 BOUNDARY HOLD — recurrence waits while the investment transition is outstanding', () => {
+    const f = p1rFixture('P2');
+    const isa = app => app.snap().inv.iA;
+    const paid = app => app.state().payments.map(p => p.status);
+
+    const loaded = p1rPage(f.state, '2026-09-02', P1R_PREVIOUS);
+    invariant('P2.hold.load', 'A new September load with the shell pending keeps the August ISA row paid and the ISA at £5,200 in memory and storage; boot\'s load and render are two holds, so the reload notice is up',
+      [isa(loaded), paid(loaded), stored(loaded).payments.map(p => p.status), p1rVals(loaded.state().investments), loaded.run('_geodeBoundaryHoldNotice'), loaded.run('_geodeBoundaryHoldAttempts'), loaded.run('geodeBoundaryHoldMessage()')],
+      [5200, ['paid'], ['paid'], [['iA', null]], true, 2, HOLD]);
+
+    const live = p1rPage(f.state, f.clock, P1R_PREVIOUS);
+    live.advance('2026-09-02', 'render');
+    invariant('P2.hold.render', 'A page opened in August and still pending, rendered on 2 September without a reload, does not reset the row or drop the ISA',
+      [isa(live), paid(live), stored(live).payments.map(p => p.status), live.run('[_geodeBoundaryHoldNotice, _geodeBoundaryHoldAttempts]')],
+      [5200, ['paid'], ['paid'], [false, 1]]);
+
+    const ready = p1rPage(f.state, '2026-09-02', true);
+    ready.reload();
+    invariant('P2.hold.ready', 'With the shell already ready, the September load anchors £5,200 once and recurrence then advances the row; a reload does not add a second anchor',
+      [isa(ready), paid(ready), p1rVals(ready.state().investments), p1rVals(stored(ready).investments)],
+      [5200, ['upcoming'], [['iA', [[5200, 'legacy_transition']]]], [['iA', [[5200, 'legacy_transition']]]]]);
+
+    const anchored = p1rPage(f.state, f.clock, true);
+    anchored.run('__otherStorage.setItem(GEODE_SHELL_KEY, ' + JSON.stringify(P1R_PREVIOUS) + ');');
+    anchored.advance('2026-09-02', 'reload');
+    invariant('P2.hold.anchored', 'An ISA that already has its anchor is not held just because geode_shell is put back to v1.0.76: September recurrence runs and the position stays £5,200',
+      [anchored.run('geodeShellReadiness()'), isa(anchored), paid(anchored), p1rVals(anchored.state().investments), anchored.run('_geodeBoundaryHoldNotice')],
+      ['pending', 5200, ['upcoming'], [['iA', [[5200, 'legacy_transition']]]], false]);
+
+    const manual = p1rPage(f.state, '2026-09-02', P1R_PREVIOUS);
+    manual.run('__toasts = [];');
+    manual.toggle('id1');
+    const refused = [paid(manual), isa(manual), JSON.parse(manual.run('JSON.stringify(__toasts)'))];
+    manual.saveInvestment('iA', 'ISA', 6000);
+    const entered = [isa(manual), p1rVals(manual.state().investments), p1rVals(stored(manual).investments)];
+    p1rReady(manual); manual.reload();
+    invariant('P2.hold.manual', 'While the boundary is held, toggling the August ISA row is refused and the £5,200 stays; entering £6,000 stores a manual valuation. The next ready load keeps that £6,000 and does not add a legacy anchor beside it',
+      [refused, entered, isa(manual), p1rVals(manual.state().investments)],
+      [[['paid'], 5200, [HOLD]], [6000, [['iA', [[6000, 'manual']]]], [['iA', [[6000, 'manual']]]]], 6000, [['iA', [[6000, 'manual']]]]]);
+
+    const months = p1rPage(f.state, '2026-09-02', P1R_PREVIOUS);
+    months.advance('2026-10-02', 'reload');
+    months.advance('2026-11-02', 'reload');
+    const still = [isa(months), paid(months), p1rVals(months.state().investments)];
+    p1rReady(months); months.reload(); months.reload();
+    invariant('P2.hold.months', 'September, October and November all pending do not drop the ISA; the first ready load anchors £5,200 once and the next reload does not anchor again',
+      [still, isa(months), p1rVals(months.state().investments), p1rVals(stored(months).investments)],
+      [[5200, ['paid'], [['iA', null]]], 5200, [['iA', [[5200, 'legacy_transition']]]], [['iA', [[5200, 'legacy_transition']]]]]);
+
+    const once = p1rPage(f.state, f.clock, P1R_PREVIOUS);
+    once.at('2026-09-02');
+    once.run('syncRecurringPayments();');
+    const first = once.run('[_geodeBoundaryHoldNotice, _geodeBoundaryHoldAttempts]');
+    once.run('syncRecurringPayments();');
+    invariant('P2.hold.notice', 'The first held processing leaves no notice; the second makes the reload notice available. The ISA is still £5,200',
+      [first, once.run('[_geodeBoundaryHoldNotice, _geodeBoundaryHoldAttempts]'), isa(once)],
+      [[false, 1], [true, 2], 5200]);
+
+    const stale = p1rPage(f.state, '2026-09-02', P1R_PREVIOUS);
+    const body = JSON.parse(rawStore(stale));
+    body.income = 1111;
+    body._rev = { seq: body._rev.seq + 4, id: 'rev_boundary_other', by: 'v1.0.77', at: 9 };
+    const foreign = JSON.stringify(body);
+    const attempts = stale.run('_geodeBoundaryHoldAttempts');
+    stale.run('_geodeBoundaryHoldNotice = false;');
+    foreignStore(stale, foreign);
+    stale.render();
+    invariant('P2.hold.stale', 'A fenced foreign write is refused by the P2-1 fence and is not counted as another boundary hold; storage stays on that foreign text and the page is foreign-stale',
+      [rawStore(stale) === foreign, staleState(stale), stale.run('[_geodeBoundaryHoldNotice, _geodeBoundaryHoldAttempts]'), attempts, paid(stale), relWarnings(stale)],
+      [true, ['foreign', 'foreign'], [false, attempts], attempts, ['paid'], ['stale:foreign']]);
+
+    const broken = p1rPage(f.state, f.clock, P1R_PREVIOUS);
+    broken.run('geodeInvestmentTransitionOutstanding = function () { return false; };');
+    broken.advance('2026-09-02', 'reload');
+    invariant('P2.hold.disabled', 'With the outstanding-transition check forced off, the September load resets the row and the ISA falls to £5,000 — the hold is what keeps £5,200',
+      [isa(broken), paid(broken)], [5000, ['upcoming']]);
+
+    const order = JSON.parse(loaded.run('JSON.stringify(["beynd-cache-v1.0.70","beynd-cache-v1.0.76","beynd-cache-v1.0.77","beynd-cache-v1.0.78","beynd-cache-preview","other-app"].map(geodeBeyndCacheOrder))'));
+    invariant('P2.hold.cache-order', 'Cache names order against v1.0.77: older, current, newer, unknown, and non-Beynd',
+      order, ['older', 'older', 'current', 'newer', 'unknown', 'other']);
   });
 }
 
@@ -6280,7 +6370,7 @@ function main() {
   fa7dLinkedGoals();
   p1Close();
   releaseSafetyFidelity(); releaseSafetyBoot(); releaseSafetyWrites(); releaseSafetyListener(); releaseSafetyGate(); releaseSafetyTabs();
-  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2RevisionFence(); p1RelOldWriter();
+  p1RelFixtures(); p1RelPending(); p1RelIdempotence(); p2BoundaryHold(); p2RevisionFence(); p1RelOldWriter();
   migrationFixtures();
 
   console.log('Beynd cross-month financial truth harness');

@@ -222,7 +222,7 @@ function loadPage(caches, storage) {
   if (caches) sandbox.caches = caches;
   const ctx = vm.createContext(sandbox);
   const code = ['BEYND_RUNTIME_VERSION', 'GEODE_SHELL_KEY', 'GEODE_CACHE_PREFIX'].map(extractConstant).join('\n') + '\n' +
-    ['geodeShellReadiness', 'geodeShellCleanup'].map(extractFunction).join('\n');
+    ['geodeShellReadiness', 'geodeRuntimeVersionParts', 'geodeBeyndCacheOrder', 'geodeShellCleanup'].map(extractFunction).join('\n');
   new vm.Script(code, { filename: 'index-release-safety.js' }).runInContext(ctx);
   return { readiness: () => vm.runInContext('geodeShellReadiness()', ctx), cleanup: () => Promise.resolve(vm.runInContext('geodeShellCleanup()', ctx)) };
 }
@@ -687,11 +687,47 @@ async function gate() {
   check('gate.css', 'The gate covers the whole screen above everything', /\.geode-stale-gate\{position:fixed;inset:0;z-index:100000;/.test(INDEX), true);
 }
 
+async function cacheOrder() {
+  group = 'P2-2 CACHE ORDER — a runtime deletes only Beynd caches older than itself';
+  const newer = 'beynd-cache-v1.0.78';
+  const unknown = 'beynd-cache-preview';
+  log.length = 0;
+  const caches = new FakeCaches();
+  caches.seed('beynd-cache-' + PREVIOUS, OLD_FILES);
+  caches.seed('beynd-cache-v1.0.70', OLD_FILES);
+  caches.seed(newer, { '/index.html': 'newer shell' });
+  caches.seed(unknown, { '/index.html': 'unorderable' });
+  caches.seed(CURRENT_CACHE, { '/index.html': INDEX });
+  caches.seed('other-app', { '/x': 'x' });
+  const outcome = await loadWorker({ caches, net: fakeNetwork({}), windows: [] }).activate();
+  check('cache.activate', 'Activation deletes v1.0.76 and v1.0.70, and keeps this release, a newer Beynd cache, an unorderable Beynd cache and a non-Beynd cache',
+    [outcome, caches.names().slice().sort()], ['resolved', [CURRENT_CACHE, newer, 'other-app', unknown].sort()]);
+
+  const pageCaches = new FakeCaches();
+  pageCaches.seed('beynd-cache-' + PREVIOUS, OLD_FILES);
+  pageCaches.seed(newer, { '/index.html': 'newer shell' });
+  pageCaches.seed(CURRENT_CACHE, { '/index.html': INDEX });
+  const store = fakeStorage({ geode_v6: '{"income":1}' });
+  const page = loadPage(pageCaches, store);
+  const ok = await page.cleanup();
+  check('cache.cleanup.newer', 'Page cleanup deletes the older cache, keeps the newer one, and still records readiness: a newer cache is not an older copy',
+    [ok, pageCaches.names().slice().sort(), page.readiness(), store.m.geode_v6], [true, [CURRENT_CACHE, newer].sort(), 'ready', '{"income":1}']);
+
+  const oddCaches = new FakeCaches();
+  oddCaches.seed(unknown, { '/index.html': 'unorderable' });
+  oddCaches.seed('beynd-cache-' + PREVIOUS, OLD_FILES);
+  const oddStore = fakeStorage({ geode_v6: '{"income":1}' });
+  const odd = loadPage(oddCaches, oddStore);
+  const held = await odd.cleanup();
+  check('cache.cleanup.unknown', 'An unorderable Beynd cache is kept and geode_shell is not recorded, so readiness stays pending',
+    [held, oddCaches.names().slice().sort(), odd.readiness(), oddStore.m.geode_shell], [false, [unknown], 'pending', undefined]);
+}
+
 async function main() {
   try {
     if (!RUNTIME) throw new Error('index.html has no BEYND_RUNTIME_VERSION line');
     await versions(); await install(); await installFailure(); await activate(); await activationStall(); await lookups(); await navigation();
-    await shellReadiness(); await cleanupFailure(); await investmentGate(); await mixedVersions(); await gate();
+    await shellReadiness(); await cleanupFailure(); await investmentGate(); await mixedVersions(); await gate(); await cacheOrder();
   } catch (e) {
     results.push({ group, id: 'error', text: 'harness error', ok: false, detail: String(e && e.stack || e) });
   }
